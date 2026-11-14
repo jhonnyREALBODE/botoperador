@@ -242,7 +242,25 @@ _ALIAS_TOKENS = {"sao": "san", "santo": "san", "saint": "san", "st": "san", "san
                  "gatos": "cats", "bufalos": "buffaloes", "cometas": "comets", "foguetes": "rockets",
                  "titas": "titans", "spartanos": "spartans", "vikings": "vikings", "herois": "heroes",
                  "aguias-reais": "eagles", "gaivotas": "gulls", "golfinhos": "dolphins", "abelhas": "bees",
-                 "vespas": "hornets", "magos": "wizards", "selvagens": "savages", "dragoes-azuis": "dragons"}
+                 "vespas": "hornets", "magos": "wizards", "selvagens": "savages", "dragoes-azuis": "dragons",
+                 # cidades que a 1aWin escreve em português (caso 'Saragoça' = 'Zaragoza')
+                 "saragoca": "zaragoza", "corunha": "coruna", "bilbau": "bilbao", "sevilha": "sevilla",
+                 "milao": "milano", "milan": "milano", "turim": "torino", "turin": "torino", "florenca": "firenze",
+                 "florence": "firenze", "veneza": "venezia", "venice": "venezia", "napoles": "napoli",
+                 "naples": "napoli", "genova": "genoa", "munique": "munchen", "munich": "munchen",
+                 "colonia": "koln", "cologne": "koln", "varsovia": "warszawa", "warsaw": "warszawa",
+                 "cracovia": "krakow", "praga": "praha", "prague": "praha", "viena": "wien", "vienna": "wien",
+                 "belgrado": "beograd", "belgrade": "beograd", "atenas": "athens", "athina": "athens",
+                 "moscou": "moskva", "moscovo": "moskva", "moscow": "moskva", "estocolmo": "stockholm",
+                 "copenhague": "kobenhavn", "copenhaga": "kobenhavn", "copenhagen": "kobenhavn",
+                 "bruxelas": "brussels", "bruxelles": "brussels", "antuerpia": "antwerp", "antwerpen": "antwerp",
+                 "istambul": "istanbul", "londres": "london", "lisboa": "lisbon", "genebra": "geneve",
+                 "geneva": "geneve", "zurique": "zurich", "basileia": "basel", "berlim": "berlin",
+                 "hamburgo": "hamburg", "estrasburgo": "strasbourg", "marselha": "marseille", "lyon": "lyon",
+                 "tessalonica": "thessaloniki", "salonica": "thessaloniki", "liubliana": "ljubljana",
+                 "zagrebe": "zagreb", "sofia": "sofia", "bucareste": "bucuresti", "bucharest": "bucuresti",
+                 "kaunas": "kaunas", "vilnius": "vilnius", "riga": "riga", "tallinn": "tallinn",
+                 "jerusalem": "jerusalem", "telavive": "tel aviv"}
 _MARCA_IDENTIDADE = [
     (re.compile(r"\b(w|f|women|woman|fem|feminino|feminina|femenino|womens|ladies|damen)\b"), "fem"),
     (re.compile(r"\b(u\d{2}|sub\s?\d{2}|youth|junior|juniors|juvenil|base)\b"), "base"),

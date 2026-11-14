@@ -729,3 +729,9 @@ def test_apelido_traduzido_leuven_14_11():
     assert P.linha_confronto("Ursos Stella Artois Leuven\n40\n57\nKangoeroes Basket Mechelen",
                              ["Leuven Bears", "Kangoeroes Basket Mechelen"])
     assert not P._nome_bate("Los Angeles Lakers", "Los Angeles Clippers")  # estrito continua
+
+
+def test_cidade_em_portugues_e_patrocinador_14_11():
+    """1aWin: 'Divina Seguros Joventut x Saragoça' para 'Club Joventut Badalona x Zaragoza'."""
+    assert P._nome_bate("Zaragoza", "Saragoça")
+    assert P.linha_confronto("Divina Seguros Joventut\n43\nSaragoça\n46", ["Club Joventut Badalona", "Zaragoza"])
