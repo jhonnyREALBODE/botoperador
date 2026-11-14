@@ -74,6 +74,15 @@ if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
     }
     mks.appendChild(m);
   }
+  if (ESTADO.troca_linha) {  // redesenho ao vivo: o 1º botão 'Abaixo De 214.5' vira 'Abaixo De 216.5' com a mesma odd
+    setTimeout(() => { for (const b of document.querySelectorAll('._btn_q1')) { const n = b.querySelector('._name_1hbh7_36');
+      if (n && n.textContent === 'Abaixo De 214.5') { n.textContent = 'Abaixo De 216.5'; const nb = b.cloneNode(true); nb.removeAttribute('data-mid');
+        const novo = document.createElement('button'); novo.type = 'button'; novo.className = '_btn_q1';
+        novo.innerHTML = '<span class="_name_1hbh7_36">Abaixo De 214.5</span><span class="_cf_17if8_2">2.10</span>';
+        novo.onclick = () => { sel = {jogo: j.t1 + ' - ' + j.t2, mk: 'Totais (inc OT)', rot: 'Abaixo De 214.5', odd: '2.10'}; renderCupom(); };
+        b.onclick = () => { sel = {jogo: j.t1 + ' - ' + j.t2, mk: 'Totais (inc OT)', rot: 'Abaixo De 216.5', odd: '2.10'}; renderCupom(); };
+        b.parentElement.appendChild(novo); break; } } }, ESTADO.troca_linha);
+  }
   if (ESTADO.sujo) { sel = {jogo: 'Outro - Jogo', mk: 'Totais (inc OT)', rot: 'Acima De 150.5', odd: '1.90'}; renderCupom(); }
   if (ESTADO.cupom_preso) { sel = {jogo: 'Outro - Jogo', morto: true}; renderCupom(); }
 }

@@ -1883,6 +1883,25 @@ class Casa:
         except Exception:
             return False
 
+    def _carimbo_vivo(self, el, perna):
+        """O botão carimbado ainda é a MESMA seleção? (a 1aWin redesenha ao vivo e o nó
+        carimbado pode passar a mostrar outra linha — caso Ratiopharm 14/11 15:21)."""
+        try:
+            if perna.get("_aid"):  # PS: o id do botão é a identidade
+                aid = el.evaluate("e => (e.closest('a[id]') || e.querySelector('a[id]') || {id: ''}).id")
+                a, b = (aid or "").split("|"), perna["_aid"].split("|")
+                return len(a) >= 6 and a[:4] == b[:4] and abs(float(a[5]) - float(b[5])) < 1e-6 \
+                    and _coexiste(perna["odd"], el.inner_text())
+            tx = _sem_acento(el.inner_text())
+            if not (_coexiste(perna["odd"], tx) and _coexiste(perna["linha"], tx, usar_abs=True)):
+                return False
+            if perna["tipo"] == "total":
+                quer = r"\b(acima|mais|over)\b" if perna["lado"] == "acima" else r"\b(abaixo|menos|under)\b"
+                return bool(re.search(quer, tx, re.I))
+            return True
+        except Exception:
+            return False
+
     def _clicar_mid(self, mid, odd):
         loc = self.page.locator('[data-mid="%s"]' % mid)
         if not loc.count():
@@ -1986,7 +2005,7 @@ class Casa:
         if mid:
             try:
                 loc = self.page.locator('[data-mid="%s"]' % mid)
-                if loc.count() and _coexiste(perna["odd"], loc.first.inner_text()):
+                if loc.count() and self._carimbo_vivo(loc.first, perna):
                     clicou = self._clicar_mid(mid, _odd_txt(loc.first.inner_text(), perna["odd"]))
             except Exception:
                 clicou = False

@@ -428,3 +428,19 @@ def test_caca_ps_em_lista_enorme_dentro_do_prazo(casas):
     r = cps.executar(cps.cacar, ["Atenas Cordoba", "San Lorenzo de Almagro"])
     assert r["ok"], r
     assert time.time() - t0 < 25
+
+
+def test_carimbo_que_virou_outra_linha_nao_e_clicado(casas):
+    """Caso 14/11 15:21 (Ratiopharm): o botão carimbado passou a mostrar outra linha com a
+    mesma odd; o programa clicou e o cupom veio 'sem a linha 174.5'. Agora relê por identidade."""
+    servidor.ESTADO["troca_linha"] = 1500
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
+    limpar_cupons(casas)
+    l1, _ = ler(casas)
+    o1 = [x for x in l1["ofertas"] if x["linha"] == 214.5 and x["lado"] == "abaixo"][0]
+    time.sleep(2.0)  # o redesenho acontece entre a leitura e o clique
+    r = c1.executar(c1.montar, dict(o1, stake=26.57), TIMES)
+    assert r["ok"], r
+    assert "214.5" in c1.executar(c1.itens_cupom)[0]
+    c1.executar(c1.desfazer, o1)
