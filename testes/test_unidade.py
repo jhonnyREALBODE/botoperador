@@ -715,3 +715,9 @@ def test_feminino_sem_marca_na_ps_14_11():
     assert not P._nome_bate("Oklahoma (f)", "Oklahoma City Thunder")
     assert P.ordenar_ligas([{"nome": "EUA. NCAA", "url": "a"}, {"nome": "Portugal. Women. Division", "url": "b"}],
                            "", fem=True)[0]["url"] == "b"
+
+
+def test_tolerancia_005_exata_passa():
+    """14/11 16:05: 1.95 -> 2.0 (diferença 0,05 exata) reprovou por arredondamento."""
+    assert abs(2.0 - 1.95) > 0.05            # o computador acha que passou de 0,05…
+    assert abs(2.0 - 1.95) <= P.TOL_ODD_CUPOM + 1e-9   # …mas é 0,05: dentro da tolerância

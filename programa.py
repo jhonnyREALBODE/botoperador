@@ -1887,7 +1887,7 @@ class Casa:
         for o in ofs:
             if o["tipo"] != perna["tipo"] or o["periodo"] != perna["periodo"]:
                 continue
-            if abs(o["linha"] - perna["linha"]) > 0.001 or abs(o["odd"] - perna["odd"]) > TOL_ODD_IDENTIDADE:
+            if abs(o["linha"] - perna["linha"]) > 0.001 or abs(o["odd"] - perna["odd"]) > TOL_ODD_IDENTIDADE + 1e-9:
                 continue
             if o["tipo"] == "total" and o["lado"] != perna["lado"]:
                 continue
@@ -1975,7 +1975,8 @@ class Casa:
         if not _coexiste(perna["linha"], it, usar_abs=True):
             return False, "cupom sem a linha %s" % _fmt_linha(perna["linha"])
         odds = [v for v in _numeros(it) if 1.01 <= v <= 30 and abs(v - abs(perna["linha"])) > 1e-9]
-        if not any(abs(v - perna["odd"]) <= TOL_ODD_CUPOM for v in odds):
+        # +1e-9: 2.0 - 1.95 = 0.0500000000000004 no computador — 0,05 exato é DENTRO da tolerância
+        if not any(abs(v - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9 for v in odds):
             return False, "odd do cupom difere de %s (lidas: %s)" % (perna["odd"], ", ".join(map(str, odds[:4])) or "nenhuma")
         if perna["tipo"] == "total":
             quer = r"\b(acima|mais|over)\b" if perna["lado"] == "acima" else r"\b(abaixo|menos|under)\b"
@@ -2061,7 +2062,8 @@ class Casa:
             self.dump("falha")
             return r
         ok, mot = False, "cupom não recebeu a seleção"
-        fim = time.time() + 4
+        # a PS demora mais para jogar linha alternativa/quarto no boletim (spinner) — caso 14/11 16:05
+        fim = time.time() + (7 if self.nome == CASA_PS else 4)
         while time.time() < fim:
             self.page.wait_for_timeout(250)
             self.mostrar_boletim()
@@ -2072,6 +2074,15 @@ class Casa:
                 ok, mot = self.conferir_cupom(perna)
                 if ok or "Evento exclu" in mot:
                     break
+        if not ok and mot == "cupom não recebeu a seleção" and perna.get("_aid"):
+            try:  # PS: travou o mercado (cadeado) no instante do clique?
+                travado = self._eval("""(aid) => { const a = document.getElementById(aid);
+                    return !!(a && a.parentElement && a.parentElement.querySelector(':scope > .style-lock:not(.lock-hidden)')); }""",
+                                     perna["_aid"])
+                if travado:
+                    mot = "a PS travou o mercado (cadeado) no instante do clique"
+            except Exception:
+                pass
         if not ok:
             r["motivo"] = mot
             r["foto"] = self.foto("falha")
