@@ -1,0 +1,61 @@
+BOT OPERADOR DE MIDDLES — 1aWin x PS3838 (basquete)
+===================================================
+
+O QUE ELE FAZ
+- Lê, a cada ~1 s, a conversa do ANALISTA no Grok.
+- Sinal fresco: caça o jogo nas duas casas (PS primeiro), lê as escadas ao vivo,
+  acha o par sozinho (janela >= 1,0 e custo <= 4%), calcula as stakes
+  (PS cravada em €5, 1aWin com retorno igual) e monta os dois cupons em paralelo.
+- MODO TESTE (padrão): monta, fotografa e desfaz. NUNCA confirma.
+- Sem par: fica monitorando o jogo (relê a cada 10 s) sem limite, até achar par
+  ou chegar sinal novo.
+- Sinais antigos da conversa (de antes de abrir o programa) só montam com o
+  clique MONTAR no painel.
+
+PRIMEIRA VEZ (uma coisa por vez)
+1) Instale o Python (python.org) marcando "Add Python to PATH".
+2) Rode 0-INSTALAR.bat (instala o Playwright). Espere terminar.
+3) Abra o config.json no Bloco de Notas e cole em "url_grok" o endereço da
+   conversa do ANALISTA (a conversa precisa estar no navegador, mesma conta).
+   Se quiser usar o Brave/Chrome em vez do navegador do Playwright, coloque o
+   caminho do .exe em "navegador_exe" (use barras duplas: C:\\Program Files\\...).
+4) Rode 1-LOGIN.bat: abrem 3 janelas (Grok, 1aWin, PS3838). Logue à mão em
+   cada uma e aperte ENTER na tela preta. Os logins ficam em dados/perfil-*.
+   NÃO logue essas contas no seu navegador do dia a dia (derruba a sessão).
+5) Rode 2-INICIAR.bat. O painel abre em http://127.0.0.1:8000
+
+ATUALIZAR O PROGRAMA
+- Feche o programa e os navegadores dele -> substitua só o programa.py ->
+  rode 2-INICIAR.bat. NUNCA sobrescreva config.json nem a pasta dados/.
+- Se o painel mostrar coisa velha: pode ser um python.exe antigo segurando a
+  porta 8000. Feche no Gerenciador de Tarefas e rode de novo.
+
+O PAINEL
+- Calculadora do motor: o melhor par da última leitura (ou o "quase"), stakes,
+  janela, custo, os 3 cenários em R$ e o veredito VALE A PENA / Não vale agora.
+- Bilhetes: cada rodada com o motivo de cada perna e as fotos.
+- Botão Calibrar agora: monta (em teste) o "acima" da linha principal em até
+  3 jogos ao vivo, fotografa e desfaz. Serve para provar os cliques sem sinal.
+
+PARÂMETROS (config.json)
+- janela_min 1,0 | custo_max 4,0 | perna_ps_eur 5,0 (0 = volta ao total fixo)
+- total_operacao 600 (só se perna_ps_eur = 0) | cambio_brl_eur 6,20
+- monitor_intervalo_s 10
+- Restrição temporária (ordem de 13/11 23:26): só totais de jogo/q1/q2/q3,
+  handicap desligado. Para religar, acrescente no config.json:
+      "so_totais": false,
+      "totais_periodos": null
+- O programa imprime no log os PARÂMETROS EFETIVOS na subida. Confira lá.
+
+MODO REAL
+- Só depois de UMA rodada de teste limpa via sinal (par achado por sinal fresco,
+  montado e desmontado nas duas casas, boletins vazios nas fotos).
+- Exige as duas coisas: "modo_teste": false no config.json E digitar ARMAR na
+  subida. Qualquer outra coisa = continua em teste.
+
+QUANDO DER PROBLEMA, MANDE
+- log-programa.txt e os arquivos de dados/prints/ (fotos + .html/.txt da
+  página na hora da falha).
+
+TESTES (para quem mexe no código)
+- pip install pytest  ->  python -m pytest testes

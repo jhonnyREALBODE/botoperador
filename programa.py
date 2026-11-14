@@ -1247,19 +1247,22 @@ class Casa:
             .filter(c => !Array.from(document.querySelectorAll(sc)).some(o => o !== c && o.contains(c)))
             .map(c => c.innerText).join('\\n')""", self.sel_cupom)
 
-    def _clicar_no_cupom(self, rx):
-        alvos = self.page.evaluate("""([sc, src]) => {
+    def _clicar_no_cupom(self, rx, por_classe=False):
+        """Clica controles DENTRO do cupom pelo texto. por_classe=True (só para limpar)
+        aceita também ícones de remover/fechar sem texto."""
+        alvos = self.page.evaluate("""([sc, src, pc]) => {
+            document.querySelectorAll('[data-alvo-cupom]').forEach(e => e.removeAttribute('data-alvo-cupom'));
             const rx = new RegExp(src, 'i'); const out = [];
             let n = 0;
             for (const c of document.querySelectorAll(sc)) for (const e of c.querySelectorAll('button,a,[role=button],span,div,i')) {
                 const t = (e.innerText || e.getAttribute('aria-label') || e.getAttribute('title') || '').trim();
                 const cls = (e.className && e.className.baseVal === undefined ? e.className : '') + '';
-                if ((rx.test(t) || /(^|\\s|-)(remove|delete|close|cancel)/i.test(cls)) && e.children.length <= 1) {
+                if ((rx.test(t) || (pc && /(^|\\s|-)(remove|delete|close|cancel)/i.test(cls))) && e.children.length <= 1) {
                     n++; e.setAttribute('data-alvo-cupom', String(n)); out.push(String(n));
                 }
             }
             return out;
-        }""", [self.sel_cupom, rx])
+        }""", [self.sel_cupom, rx, por_classe])
         clicou = 0
         for a in alvos:
             try:
@@ -1303,12 +1306,12 @@ class Casa:
                 if self._clicar_no_cupom(r"^(remover tudo|remove all|limpar tudo|clear all|apagar tudo)$"):
                     self._modal_ok()
                 else:
-                    self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|remove|delete)$")
+                    self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|remove|delete)$", True)
                 if self.esperar_cupom_vazio(2.5):
                     return True
             return False
         for _ in range(5):
-            self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|cancelar|remove|delete|cancel|limpar tudo|remover tudo)$")
+            self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|cancelar|remove|delete|cancel|limpar tudo|remover tudo)$", True)
             self._modal_ok_rapido()
             if self.esperar_cupom_vazio(1.5):
                 return True

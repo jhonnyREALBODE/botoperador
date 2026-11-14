@@ -1,0 +1,16 @@
+{
+  "janela_min": 1.0,
+  "custo_max": 4.0,
+  "perna_ps_eur": 5.0,
+  "total_operacao": 600.0,
+  "cambio_brl_eur": 6.20,
+  "monitor_intervalo_s": 10,
+  "modo_teste": true,
+  "url_grok": "",
+  "url_1awin": "https://1wcwlx.life",
+  "url_ps3838": "https://www.ps3838.com",
+  "caminho_lista_1awin": "/betting/live/basketball-23",
+  "caminho_lista_ps": "/pt/sports/basketball",
+  "navegador_exe": "",
+  "porta": 8000
+}

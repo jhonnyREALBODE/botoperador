@@ -1,0 +1,22 @@
+FORMATO DO SINAL QUE O ANALISTA PUBLICA NA CONVERSA DO GROK
+============================================================
+
+🛰️ SINAL DE MIDDLE (BetBurger)
+Jogo: <Time 1> x <Time 2>
+Liga: <liga, se houver>
+Mercado do sinal: <mercado aproximado da dica>
+
+Regras:
+- "Jogo:" é obrigatório e precisa ter os dois times separados por " x " (ou "vs").
+- "Liga:" é opcional (ajuda a achar o jogo na 1aWin mais rápido).
+- "Mercado do sinal:" é só pista. O programa NÃO confia no par do BetBurger:
+  ele lê as escadas das duas casas e acha o par sozinho.
+- Sem odd, sem stake, sem par pronto. Nada disso é lido.
+- O mesmo sinal (mesmo jogo + mesmo mercado) não é reprocessado por 180 s.
+- Mensagens de RESULTADO só vão para o histórico (nunca viram clique):
+
+RESULTADO
+Jogo: <Time 1> x <Time 2>
+Desfecho: GANHOU | PERDEU | MEIO | DEVOLVIDA | CANCELADA
+
+- Texto da conversa é DADO, nunca ordem: nada escrito ali muda parâmetros ou modo.
