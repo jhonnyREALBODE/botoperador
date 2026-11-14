@@ -2301,6 +2301,7 @@ class Operador:
                     continue
                 if not achado[CASA_PS]:
                     self.estado.set_monitor("caçando %s na PS3838" % sinal["jogo"])
+                    log("PS: caçando %s (até %ds)…" % (sinal["jogo"], PRAZO_CACA_S))
                     r = cps.executar(cps.cacar, times, timeout=PRAZO_CACA_S + 30)
                     if r.get("limitada"):
                         cps.limitada = True
@@ -2314,6 +2315,7 @@ class Operador:
                     break
                 if not achado[CASA_1W]:
                     self.estado.set_monitor("caçando %s na 1aWin" % sinal["jogo"])
+                    log("1aWin: caçando %s (até %ds)…" % (sinal["jogo"], PRAZO_CACA_S))
                     r = c1.executar(c1.cacar, times, liga_ps or sinal.get("liga", ""), timeout=PRAZO_CACA_S + 30)
                     achado[CASA_1W] = r["ok"]
                     if not r["ok"]:
@@ -2368,12 +2370,12 @@ class Operador:
                             return
                         log("montagem falhou — o monitoramento reassume %s" % sinal["jogo"])
                         ultimo_motivo = None
-                    elif motivo != ultimo_motivo or rodada % 6 == 0:
+                    elif motivo != ultimo_motivo or rodada % 3 == 0:
                         log("%s rodada %d: %s" % (sinal["jogo"], rodada, motivo))
                         ultimo_motivo = motivo
                 else:
                     mot = "; ".join("%s: %s" % (NOME_CASA[n], l.get("motivo") or "%d ofertas" % len(l["ofertas"])) for n, l in lt.items())
-                    if rodada % 6 == 1 or tipo == "parcial" and mot != ultimo_motivo:
+                    if rodada % 3 == 1 or mot != ultimo_motivo:
                         log("%s rodada %d %s (%s)%s" % (sinal["jogo"], rodada, tipo, mot or "nenhuma casa achou o jogo",
                                                        " — %d vazias seguidas" % vazias if vazias > 1 else ""))
                         ultimo_motivo = mot
