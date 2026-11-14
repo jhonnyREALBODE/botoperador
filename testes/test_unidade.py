@@ -643,3 +643,14 @@ def test_memoria_de_url_nao_confunde_jogo_por_basket():
     P.memorizar_url("ps3838", ["Fryshuset Basketbollklubb", "Ockelbo Basket"], "https://x/pt/a/matchup/1")
     assert P.url_memorizada("ps3838", ["Joensuun Kataja Basket", "KTP Basket Kotka"]) is None
     assert P._e_liga_virtual("Replays. NBA")
+
+
+@pytest.mark.parametrize("a,b,esperado", [
+    ("Iceland Women", "Islândia (f)", True),          # 14/11 14:33: seleção com nome em PT na 1aWin
+    ("Switzerland Women", "Suíça (f)", True),
+    ("Iceland Women", "Islândia", False),             # masculino x feminino continua diferente
+    ("Países Baixos (f)", "Netherlands Women", True),
+    ("CP Esgueira", "Esgueira", True),
+])
+def test_selecoes_pt_en(a, b, esperado):
+    assert P._nome_bate(a, b) is esperado

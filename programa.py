@@ -256,8 +256,15 @@ def _generico(t):
     return t in _GENERICOS or t.startswith(("basket", "basquet", "koszyk", "kosark"))
 
 
+def _norm_paises(n):
+    """Seleções: 'Islândia (f)' = 'Iceland Women' — país em PT vira EN antes de comparar."""
+    for pt, en in _PAISES_ORDEM():
+        n = re.sub(r"\b" + pt + r"\b", en, n)
+    return n
+
+
 def _tokens(s):
-    toks = [_ALIAS_TOKENS.get(t, t) for t in _norm(s).split()]
+    toks = [_ALIAS_TOKENS.get(t, t) for t in _norm_paises(_norm(s)).split()]
     return [t for t in toks if (len(t) >= 4 or t == "san") and not _generico(t)]
 
 
@@ -290,7 +297,7 @@ def _nome_bate(a, b):
         return False
     if _marcas(a) != _marcas(b):
         return False
-    na, nb = _norm(a), _norm(b)
+    na, nb = _norm_paises(_norm(a)), _norm_paises(_norm(b))
     if na == nb:
         return True
     ta = [t for t in _tokens(a) if t != "san"] or _tokens(a)
@@ -1104,7 +1111,25 @@ _PAISES = {"brasil": "brazil", "argentina": "argentina", "espanha": "spain", "it
            "emirados arabes": "uae", "egito": "egypt", "indonesia": "indonesia", "taiwan": "chinese taipei",
            "mundo": "world", "europa": "europe", "internacional": "international", "inglaterra": "england",
            "reino unido": "uk", "colombia": "colombia", "peru": "peru", "canada": "canada", "islandia": "iceland",
-           "estonia": "estonia", "letonia": "latvia", "georgia": "georgia", "cazaquistao": "kazakhstan"}
+           "estonia": "estonia", "letonia": "latvia", "georgia": "georgia", "cazaquistao": "kazakhstan",
+           "irlanda": "ireland", "escocia": "scotland", "pais de gales": "wales", "eslovaquia": "slovakia",
+           "montenegro": "montenegro", "bosnia": "bosnia", "macedonia do norte": "north macedonia",
+           "macedonia": "macedonia", "albania": "albania", "bielorrussia": "belarus", "luxemburgo": "luxembourg",
+           "chipre": "cyprus", "malta": "malta", "armenia": "armenia", "azerbaijao": "azerbaijan",
+           "nova zelandia": "new zealand", "africa do sul": "south africa", "marrocos": "morocco",
+           "tunisia": "tunisia", "argelia": "algeria", "nigeria": "nigeria", "angola": "angola",
+           "senegal": "senegal", "cuba": "cuba", "porto rico": "puerto rico", "republica dominicana": "dominican republic",
+           "libano": "lebanon", "jordania": "jordan", "ira": "iran", "iraque": "iraq", "india": "india",
+           "tailandia": "thailand", "vietna": "vietnam", "malasia": "malaysia", "singapura": "singapore"}
+
+
+_PAISES_CACHE = []
+
+
+def _PAISES_ORDEM():
+    if not _PAISES_CACHE:
+        _PAISES_CACHE.extend(sorted(_PAISES.items(), key=lambda x: -len(x[0])))
+    return _PAISES_CACHE
 
 
 def _liga_norm(s):
@@ -2036,10 +2061,19 @@ class Casa:
             self.ir(self.url_lista())
         except Exception as e:
             return {"ok": False, "motivo": "lista da PS não abriu: %s" % str(e)[:100]}
+        # a lista de basquete mistura ao vivo + o dia todo (centenas) e só desenha o que está na
+        # tela: primeiro AO VIVO -> Basquetebol no menu da esquerda (caso Portimonense 14/11)
+        self._ps_so_ao_vivo()
+        rolagem = 0
         while time.time() < prazo:
             if self.esta_limitada():
                 return {"ok": False, "limitada": True, "motivo": "PS limitada (Excesso de requisições)"}
             alvo = self._marcar_linha_jogo(times, prefer_href="/matchup/")
+            if not alvo:  # rola a lista para a PS desenhar o resto
+                fim = self._eval("() => { const y = window.scrollY; window.scrollBy(0, 1400); return window.scrollY === y; }")
+                rolagem += 1
+                if fim:
+                    self._eval("() => window.scrollTo(0, 0)")
             if alvo:
                 try:
                     self.clicar_firme(self.page.locator('[data-alvo-jogo="1"]').first)
@@ -2054,6 +2088,19 @@ class Casa:
                     pass
             self.page.wait_for_timeout(500)
         return {"ok": False, "motivo": "PS: jogo não encontrado na lista em %ds" % PRAZO_CACA_S}
+
+    def _ps_so_ao_vivo(self):
+        """Clica 'Basquetebol' na seção AO VIVO do menu da esquerda (se existir)."""
+        try:
+            loc = self.page.locator('.SportLiveTabContentComponent .sp4 .SportMenuItemInfoComponent, '
+                                    '.SportLiveTabContentComponent .sp4').first
+            if loc.count() and loc.is_visible():
+                self.clicar_firme(loc)
+                self.page.wait_for_timeout(1200)
+                return True
+        except Exception:
+            pass
+        return False
 
     def _achou_ps(self, r, times, t0, via):
         url = self.page.url
