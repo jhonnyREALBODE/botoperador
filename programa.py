@@ -1043,6 +1043,13 @@ def linha_confronto(texto, times, max_linhas=60):
             a, b = partes
             if (_nome_bate(a, times[0]) and _nome_bate(b, times[1])) or (_nome_bate(a, times[1]) and _nome_bate(b, times[0])):
                 return [a, b]
+    # times em linhas separadas e próximas (cabeçalho do evento em blocos)
+    curtas = [l for l in linhas if 3 <= len(l) <= 60]
+    for i, l in enumerate(curtas):
+        for j in range(i + 1, min(i + 4, len(curtas))):
+            a, b = l, curtas[j]
+            if (_nome_bate(a, times[0]) and _nome_bate(b, times[1])) or (_nome_bate(a, times[1]) and _nome_bate(b, times[0])):
+                return [a, b]
     return None
 
 
@@ -1215,6 +1222,25 @@ class Casa:
                 f.write(self.texto())
         except Exception:
             pass
+
+    def dump_diag(self, tag, itens=None):
+        """Raio-x para ajustar a leitura à casa real: foto + HTML + texto + o que a
+        enumeração viu. No máximo 1 por tipo a cada 5 min (não enche o disco)."""
+        chave = "_diag_" + tag
+        if time.time() - getattr(self, chave, 0) < 300:
+            return
+        setattr(self, chave, time.time())
+        self.dump(tag)
+        self.foto(tag)
+        try:
+            if itens is None:
+                itens = self.enumerar()
+            base = os.path.join(PRINTS, "%s_%s_%s_itens.json" % (datetime.now().strftime("%Y%m%d-%H%M%S"), self.nome, tag))
+            with open(base, "w", encoding="utf-8") as f:
+                json.dump({"url": self.page.url, "n_itens": len(itens), "itens": itens[:200]}, f, ensure_ascii=False, indent=1)
+            log("%s: raio-x salvo em dados/prints (%s, %d botões com odd vistos)" % (self.rotulo, tag, len(itens)))
+        except Exception as e:
+            log("%s: raio-x falhou: %s" % (self.rotulo, str(e)[:120]))
 
     def esta_limitada(self, texto=None):
         return bool(_RX_LIMITE.search(texto if texto is not None else self.texto()))
@@ -1421,6 +1447,7 @@ class Casa:
         if self.nome == CASA_PS:
             if not ps_e_o_jogo(tx, times):
                 r["motivo"] = "a página da PS não é o matchup deste jogo"
+                self.dump_diag("ps_nao_e_jogo")
                 return r
             self.expandir()
             itens = self.enumerar()
@@ -1433,6 +1460,7 @@ class Casa:
         else:
             if not linha_confronto(tx, times):
                 r["motivo"] = "a página da 1aWin não é a deste jogo"
+                self.dump_diag("1w_nao_e_jogo")
                 return r
             q = quarto_atual(tx)
             ofs = []
@@ -1450,6 +1478,8 @@ class Casa:
                     self._clicar_aba(a)
                     self.expandir()
                     ofs += ofertas_de_enumeracao(self.enumerar(), self.nome, times, q, aba=a)
+        if not ofs:
+            self.dump_diag("sem_ofertas", itens if self.nome == CASA_PS else None)
         r.update(ok=True, ofertas=ofs, quarto=q, motivo="" if ofs else "nenhuma oferta de linha legível")
         self.limitada = False
         return r
@@ -1492,6 +1522,25 @@ class Casa:
                 return o
         return None
 
+    def clicar_firme(self, loc):
+        """Clique que insiste: elemento piscando com odds ao vivo ('not stable')
+        -> clique forçado -> clique por JS."""
+        try:
+            loc.click(timeout=2500)
+            return True
+        except Exception:
+            pass
+        try:
+            loc.click(timeout=2500, force=True)
+            return True
+        except Exception:
+            pass
+        try:
+            loc.evaluate("e => e.click()")
+            return True
+        except Exception:
+            return False
+
     def _clicar_mid(self, mid, odd):
         loc = self.page.locator('[data-mid="%s"]' % mid)
         if not loc.count():
@@ -1506,10 +1555,8 @@ class Casa:
                 let best = null;
                 for (let n = w.currentNode; n; n = w.nextNode()) if ((n.textContent||'').trim() === odd) best = n;
                 return best || e; }""", odd)
-            sub.as_element().click(timeout=3000)
-        else:
-            el.click(timeout=3000)
-        return True
+            return self.clicar_firme(sub.as_element())
+        return self.clicar_firme(el)
 
     def conferir_cupom(self, perna):
         """Lê o cupom e confere seleção, linha e odd (tol 0,05)."""
@@ -1690,7 +1737,7 @@ class Casa:
             alvo = self._marcar_linha_jogo(times, prefer_href="/matchup/")
             if alvo:
                 try:
-                    self.page.locator('[data-alvo-jogo="1"]').first.click(timeout=3000)
+                    self.clicar_firme(self.page.locator('[data-alvo-jogo="1"]').first)
                 except Exception:
                     pass
                 r = self._sondar(teste, 8)
@@ -1739,7 +1786,9 @@ class Casa:
         if not bons:
             return None
         bons.sort(key=lambda c: (0 if prefer_href and prefer_href in c["href"] else 1, c["n"], len(c["t"])))
-        self._eval("""(i) => { const e = document.querySelector('[data-cand-jogo="' + i + '"]');
+        self._eval("""(i) => { let e = document.querySelector('[data-cand-jogo="' + i + '"]');
+            const a = e && e.closest('a[href]');
+            if (a && a.innerText.length < 400) e = a;
             if (e) e.setAttribute('data-alvo-jogo', '1');
             document.querySelectorAll('[data-cand-jogo]').forEach(x => x.removeAttribute('data-cand-jogo')); }""", bons[0]["i"])
         return bons[0]
@@ -1771,8 +1820,8 @@ class Casa:
             return {"ok": False, "motivo": "lista da 1aWin não abriu: %s" % str(e)[:100]}
         self.page.wait_for_timeout(800)
         # o jogo pode já estar visível na lista
-        if self._marcar_linha_jogo(times):
-            self.page.locator('[data-alvo-jogo="1"]').first.click(timeout=3000)
+        if self._marcar_linha_jogo(times, prefer_href="/match"):
+            self.clicar_firme(self.page.locator('[data-alvo-jogo="1"]').first)
             r = self._sondar(teste, 8)
             if r:
                 return self._achou_1w(r, times, t0, "lista", None)
@@ -1788,11 +1837,11 @@ class Casa:
                 self.ir(lg["url"])
             except Exception:
                 continue
-            achou = self._sondar(lambda: self._marcar_linha_jogo(times), 3.0)
+            achou = self._sondar(lambda: self._marcar_linha_jogo(times, prefer_href="/match"), 3.0)
             if not achou:
                 continue
             try:
-                self.page.locator('[data-alvo-jogo="1"]').first.click(timeout=3000)
+                self.clicar_firme(self.page.locator('[data-alvo-jogo="1"]').first)
             except Exception:
                 continue
             r = self._sondar(teste, 8)
@@ -2237,7 +2286,7 @@ def _calib_listar_jogos(c):
             achou = False
             for t in linhas:
                 partes = [p.strip() for p in re.split(r"\n|\s+(?:—|–|vs\.?|x)\s+", t) if len(p.strip()) >= 3 and not re.match(r"^[\d\s.:'’,-]+$", p.strip())]
-                if len(partes) >= 2:
+                if len(partes) >= 2 and not any(_mesmo_jogo(partes[:2], t) for _, t in jogos):
                     jogos.append((lg["url"], partes[:2]))
                     achou = True
                     break
@@ -2253,8 +2302,8 @@ def _calib_casa(c, url_liga, times):
     r = c.cacar(times) if url_liga is None else None
     if url_liga is not None:
         c.ir(url_liga)
-        if c._sondar(lambda: c._marcar_linha_jogo(times), 4):
-            c.page.locator('[data-alvo-jogo="1"]').first.click(timeout=3000)
+        if c._sondar(lambda: c._marcar_linha_jogo(times, prefer_href="/match"), 4):
+            c.clicar_firme(c.page.locator('[data-alvo-jogo="1"]').first)
             c._sondar(lambda: c._e_jogo_1w(times), 8)
     elif not r or not r.get("ok"):
         return {"ok": False, "motivo": (r or {}).get("motivo", "jogo não achado")}
