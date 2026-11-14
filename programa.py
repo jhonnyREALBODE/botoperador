@@ -288,24 +288,28 @@ def _sigla_bate(a, b):
     return False
 
 
-def pistas_nome(nome):
+def pistas_nome(nome, tam=5):
     """Pedaços curtos (5 letras) das palavras próprias do time, em EN e PT (seleções), para o
     filtro rápido dentro da página. Lista vazia = sem filtro (nome só com sigla/genérico)."""
     out = set()
     n = _norm(nome)
     for t in _tokens(nome):
         if len(t) >= 4:
-            out.add(t[:5])
+            out.add(t[:tam])
             for k, v in _ALIAS_TOKENS.items():  # 'lorenzo' também procura 'lourenco'
                 if v == t and len(k) >= 4:
-                    out.add(k[:5])
+                    out.add(k[:tam])
+    if tam <= 3:  # frouxo: também as siglas/palavras curtas ('Co Basketbol', 'LA')
+        for w in n.split():
+            if 2 <= len(w) <= 4 and not _generico(w):
+                out.add(w[:tam])
     inv = {en: pt for pt, en in _PAISES.items()}
     for en, pt in inv.items():
         if re.search(r"\b" + en + r"\b", _norm_paises(n)):
-            out.add(pt.split()[0][:5])
+            out.add(pt.split()[0][:tam])
     for pt in _PAISES:
         if re.search(r"\b" + pt + r"\b", n):
-            out.add(pt.split()[0][:5])
+            out.add(pt.split()[0][:tam])
     return sorted(out)
 
 
@@ -404,6 +408,7 @@ def periodo_de_texto(txt):
 
 _RX_RELOGIO = re.compile(r"\b([1-4])\s*[º°ªo]?\s*(?:quarto|quarter|q)\b\s*[-–:]?\s*(\d{1,2})\s*['’`´]", re.I)
 _RX_RELOGIO2 = re.compile(r"\bq([1-4])\s*[-–:]?\s*(\d{1,2})\s*['’`´]", re.I)
+_RX_RELOGIO_H = re.compile(r"\bh([12])\s*[-–:]?\s*(\d{1,2})\s*['’`´]", re.I)  # PS: 'H2 15'' (NCAA)
 _RX_RELOGIO_TEMPO = re.compile(r"\b([12])\s*[º°ªo]?\s*(?:tempo|half|metade)\b\s*[-–:]?\s*(\d{1,2})\s*['’`´]", re.I)
 _RX_INTERVALO = re.compile(r"\b(intervalo|half ?time|halftime)\b", re.I)
 
@@ -414,7 +419,7 @@ def quarto_atual(texto_pagina):
     m = _RX_RELOGIO.search(t) or _RX_RELOGIO2.search(t)
     if m:
         return int(m.group(1))
-    m = _RX_RELOGIO_TEMPO.search(t)  # jogo em tempos (NCAA): 2º tempo = 1º tempo encerrado
+    m = _RX_RELOGIO_TEMPO.search(t) or _RX_RELOGIO_H.search(t)  # jogo em tempos (NCAA): 2º tempo = 1º tempo encerrado
     if m:
         return 1 if m.group(1) == "1" else 3
     if _RX_INTERVALO.search(t):
@@ -2128,7 +2133,17 @@ class Casa:
                 except Exception:
                     pass
             self.page.wait_for_timeout(500)
-        return {"ok": False, "motivo": "PS: jogo não encontrado na lista em %ds" % PRAZO_CACA_S}
+        try:  # raio-x: todos os jogos que estavam na lista da PS (decide se o jogo estava lá)
+            jogos = self._eval("""() => Array.from(document.querySelectorAll('[data-home-team]'))
+                .map(e => (e.getAttribute('data-home-team') || '').trim() + ' x ' + (e.getAttribute('data-away-team') || '').trim())""") or []
+            jogos = sorted(set(jogos))
+            _gravar_json(os.path.join(PRINTS, "%s_ps_caca_falhou.json" % datetime.now().strftime("%Y%m%d-%H%M%S")),
+                         {"procurado": times, "url": self.page.url, "jogos_na_lista": jogos})
+            self.foto("caca_falhou")
+        except Exception:
+            jogos = []
+        return {"ok": False, "motivo": "PS: jogo não encontrado na lista em %ds (%d jogos na lista; raio-x em dados/prints)" % (
+            PRAZO_CACA_S, len(jogos))}
 
     def _ps_buscar(self, times):
         """Digita o nome do 1º time na busca da PS ('Pesquise por ligas e nomes de equipes')."""
@@ -2176,7 +2191,7 @@ class Casa:
         # a cada 3 voltas, busca completa sem filtro (nome muito diferente entre as casas)
         self._voltas_caca = getattr(self, "_voltas_caca", 0) + 1
         if self._voltas_caca % 3 == 0:
-            p1, p2 = [], []
+            p1, p2 = pistas_nome(times[0], 3), pistas_nome(times[1], 3)  # filtro frouxo (3 letras), nunca sem filtro
         else:
             p1, p2 = pistas_nome(times[0]), pistas_nome(times[1])
         cands = self._eval(r"""([pref, p1, p2]) => {

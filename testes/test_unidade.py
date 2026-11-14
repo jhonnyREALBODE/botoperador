@@ -672,3 +672,13 @@ def test_selecoes_pt_en(a, b, esperado):
 ])
 def test_nomes_clubes_e_cidades(a, b, esperado):
     assert P._nome_bate(a, b) is esperado
+
+
+def test_relogio_ps_ncaa_h2():
+    assert P.quarto_atual("45-35\nH2 15'") == 3 and "t1" in P.periodos_encerrados(3)
+    assert P.quarto_atual("H1 3'") == 1
+
+
+def test_pistas_nunca_vazias_no_filtro_frouxo():
+    assert P.pistas_nome("Co Basketbol", 3) == ["co"]
+    assert "geo" in P.pistas_nome("George Mason", 3)
