@@ -213,8 +213,12 @@ def _coexiste(valor, txt, usar_abs=False):
     return False
 
 
+_LETRAS = str.maketrans({"ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ø": "o", "Ø": "O", "ß": "ss",
+                         "æ": "ae", "Æ": "AE", "ı": "i", "œ": "oe", "þ": "th", "ð": "d"})
+
+
 def _sem_acento(s):
-    s = unicodedata.normalize("NFKD", s or "")
+    s = unicodedata.normalize("NFKD", (s or "").translate(_LETRAS))
     return "".join(c for c in s if not unicodedata.combining(c))
 
 
@@ -1083,9 +1087,19 @@ def _liga_norm(s):
     return n
 
 
+_ROMANOS = {"i": "1", "ii": "2", "iii": "3", "iv": "4"}
+
+
 def _divisao(s):
-    m = re.search(r"\b(\d)\b|\b(ii|iii)\b|\bb\b", _norm(s))
-    return m.group(0) if m else ""
+    """'1. Liga' = '1ª Liga' = '1st League' = 'I Liga' -> '1'; 'Liga B' -> 'b'."""
+    n = _norm(s)
+    m = re.search(r"\b(\d)(?:st|nd|rd|th|a|o)?\b", n)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b(i|ii|iii|iv)\b", n)
+    if m:
+        return _ROMANOS[m.group(1)]
+    return "b" if re.search(r"\bb\b", n) else ""
 
 
 def liga_parecida(a, b):
@@ -1180,6 +1194,14 @@ def trocar_origem(url, base):
     if not u.netloc or not b.netloc or u.netloc == b.netloc:
         return url
     return "%s://%s%s%s" % (b.scheme, b.netloc, u.path, ("?" + u.query) if u.query else "")
+
+
+_RX_VIRTUAL = re.compile(r"(cyber|e-?basket|ebasketball|\b2k\b|nba ?2k|virtual|simulad|simulated|esport|e-sport|"
+                         r"fifa|h2h gg|battle|\bgt league\b|\bvbl\b)", re.I)
+
+
+def _e_liga_virtual(txt):
+    return bool(_RX_VIRTUAL.search(_sem_acento(txt or "")))
 
 
 class FalhaCasa(Exception):
@@ -2065,6 +2087,10 @@ class Casa:
         if not ligas:
             return {"ok": False, "motivo": "1aWin: lista ao vivo de basquete veio vazia (feed vazio)"}
         ordem = ordenar_ligas(ligas, liga_dica)
+        notas = {lg["url"]: (liga_parecida(liga_dica, lg["nome"]) if liga_dica else 0.0) for lg in ordem}
+        log("1aWin: %d liga(s) de basquete; primeiras: %s" % (len(ordem), "; ".join(
+            "%s (%.2f)" % (lg["nome"], notas[lg["url"]]) for lg in ordem[:4])))
+        tentadas = []
         for lg in ordem:
             if time.time() >= prazo:
                 break
@@ -2072,7 +2098,10 @@ class Casa:
                 self.ir(lg["url"])
             except Exception:
                 continue
-            achou = self._sondar(lambda: self._marcar_linha_jogo(times, prefer_href="/match"), 3.0)
+            tentadas.append(lg["nome"])
+            # liga provável: espera a página da liga carregar de verdade (a 1aWin é lenta)
+            espera = 8.0 if notas.get(lg["url"], 0) >= 0.5 or len(tentadas) <= 2 else 3.0
+            achou = self._sondar(lambda: self._marcar_linha_jogo(times, prefer_href="/match"), espera)
             if not achou:
                 continue
             try:
@@ -2082,10 +2111,15 @@ class Casa:
             r = self._sondar(teste, 8)
             if r:
                 return self._achou_1w(r, times, t0, "liga %s" % lg["nome"], (lg, liga_dica))
-        return {"ok": False, "motivo": "1aWin: jogo não encontrado em %d liga(s) em %ds" % (len(ordem), PRAZO_CACA_S)}
+        _gravar_json(os.path.join(PRINTS, "%s_1awin_caca_falhou.json" % datetime.now().strftime("%Y%m%d-%H%M%S")),
+                     {"times": times, "liga_dica": liga_dica, "tentadas": tentadas,
+                      "ligas": [{"nome": lg["nome"], "nota": round(notas[lg["url"]], 2)} for lg in ordem]})
+        return {"ok": False, "motivo": "1aWin: jogo não encontrado (%d de %d liga(s) olhadas em %ds; lista em dados/prints)" % (
+            len(tentadas), len(ordem), PRAZO_CACA_S)}
 
     def _mapa_ligas(self):
-        """Mapa de URLs reais das ligas extraído da lista de basquete (dedupe)."""
+        """Mapa de URLs reais das ligas extraído da lista de basquete (dedupe).
+        Só basquete de verdade: cyber/e-basket/2K/virtual/simulado ficam fora."""
         caminho = self.cfg["caminho_lista_1awin"].rstrip("/")
         itens = self._eval("""(cam) => Array.from(document.querySelectorAll('a[href]'))
             .map(a => ({nome: (a.innerText||'').trim(), href: a.href}))
@@ -2093,7 +2127,7 @@ class Casa:
         vistos, out = set(), []
         for it in itens:
             nome = re.sub(r"\s*\d+\s*$", "", it["nome"].split("\n")[0]).strip()
-            if it["href"] in vistos or not nome:
+            if it["href"] in vistos or not nome or _e_liga_virtual(nome + " " + it["href"]):
                 continue
             vistos.add(it["href"])
             out.append({"nome": nome, "url": it["href"]})

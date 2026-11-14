@@ -606,3 +606,14 @@ def test_nomes_caso_oklahoma_feminino_14_11():
     assert P._nome_bate("Saint Mary's Gaels", "Saint Marys CA")
     assert not P.ps_e_o_jogo("NBA /\nLos Angeles Clippers -vs- Oklahoma City Thunder",
                              ["Oklahoma (f)", "Oral Roberts Golden Eagles (f)"])
+
+
+def test_liga_polonia_14_11_e_cyber_fora():
+    """1aWin não achou MOSiR Krosno x Noteć Inowrocław (PS: 'Poland - 1. Liga')."""
+    assert P._divisao("Poland - 1. Liga") == P._divisao("Polônia. 1ª Liga") == P._divisao("Polônia. I Liga") == "1"
+    assert P.liga_parecida("Poland - 1. Liga", "Polônia. 1ª Liga") > 0.63
+    assert P._nome_bate("Notes Inowroclaw", "Noteć Inowrocław")
+    for l in ["Cyber Basketball. NBA", "eBasketball. H2H GG League", "NBA 2K25", "Basquete virtual"]:
+        assert P._e_liga_virtual(l), l
+    for l in ["Polônia. 1ª Liga", "Turquia. TBL", "EUA. NBA", "Brasil. NBB"]:
+        assert not P._e_liga_virtual(l), l
