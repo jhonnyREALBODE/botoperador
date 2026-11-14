@@ -482,3 +482,21 @@ def test_modo_real_reconfere_no_instante_de_confirmar(casas, cfgc):
     assert not r["ok"] and "odd mudou" in r["motivo"]
     assert "Aposta aceita" not in cps.executar(cps.texto)
     limpar_cupons(casas)
+
+
+def test_aviso_de_odd_velho_nao_reprova(casas):
+    """14/11 16:10:31: 'Odds have changed from 1.689 to 1.909' (de OUTRA seleção) reprovou uma perna @2.06."""
+    _, cps = ir_jogo(casas)
+    recarregar(cps)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    def com_aviso_velho():
+        cps.clicar_firme(cps.page.locator('[data-mid="%s"]' % o["_mid"]).first)
+        cps.page.wait_for_timeout(400)
+        cps.page.evaluate("""() => { const d = document.createElement('div'); d.textContent = 'Odds have changed from 1.689 to 1.909';
+            document.getElementById('sels').prepend(d); }""")
+        return cps.conferir_cupom(o)
+    ok, mot = cps.executar(com_aviso_velho)
+    assert ok, mot
+    limpar_cupons(casas)

@@ -1879,11 +1879,30 @@ class Casa:
 
     # -------------------------------------------------- montagem (motor-leitor)
     def _achar_por_identidade(self, perna, times):
-        if perna.get("aba"):
+        """Relê com a MESMA enumeração e acha a seleção por identidade. Não reclica aba que já
+        está aberta (a 1aWin redesenha tudo) e tenta por até 3s enquanto a página assenta."""
+        if perna.get("aba") and not self._aba_ativa(perna["aba"]):
             self._clicar_aba(perna["aba"])
+        fim = time.time() + 3.0
+        while True:
+            o = self._identidade_uma_vez(perna, times)
+            if o or time.time() >= fim:
+                return o
+            self.page.wait_for_timeout(400)
+
+    def _aba_ativa(self, nome):
+        try:
+            return bool(self._eval("""(n) => Array.from(document.querySelectorAll('[role=tab], .tab, [class*="tabs" i] > *'))
+                .some(e => (e.innerText || '').trim() === n && (e.getAttribute('aria-selected') === 'true' ||
+                     /active|selected|checked/i.test(e.className + '')))""", nome))
+        except Exception:
+            return False
+
+    def _identidade_uma_vez(self, perna, times):
         self.expandir()
         itens = self.enumerar()
         ofs = ofertas_de_enumeracao(itens, self.nome, times, quarto_atual(self.texto()), aba=perna.get("aba", ""))
+        self._ultimas_ofs = ofs
         for o in ofs:
             if o["tipo"] != perna["tipo"] or o["periodo"] != perna["periodo"]:
                 continue
@@ -1924,9 +1943,11 @@ class Casa:
                 aid = el.evaluate("e => (e.closest('a[id]') || e.querySelector('a[id]') || {id: ''}).id")
                 a, b = (aid or "").split("|"), perna["_aid"].split("|")
                 return len(a) >= 6 and a[:4] == b[:4] and abs(float(a[5]) - float(b[5])) < 1e-6 \
-                    and _coexiste(perna["odd"], el.inner_text())
+                    and any(abs(v - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9 for v in _numeros(el.inner_text()) if 1.01 <= v <= 30)
             tx = _sem_acento(el.inner_text())
-            if not (_coexiste(perna["odd"], tx) and _coexiste(perna["linha"], tx, usar_abs=True)):
+            odds = [v for v in _numeros(tx) if 1.01 <= v <= 30 and abs(v - abs(perna["linha"])) > 1e-9]
+            odd_ok = any(abs(v - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9 for v in odds)
+            if not (odd_ok and _coexiste(perna["linha"], tx, usar_abs=True)):
                 return False
             if perna["tipo"] == "total":
                 quer = r"\b(acima|mais|over)\b" if perna["lado"] == "acima" else r"\b(abaixo|menos|under)\b"
@@ -1960,7 +1981,14 @@ class Casa:
         m = _RX_ODD_MUDOU.search(_sem_acento(tx))
         if m:
             linha = next((l for l in tx.splitlines() if _RX_ODD_MUDOU.search(_sem_acento(l))), m.group(0))
-            return False, "a casa avisou no cupom que a odd mudou (%s)" % linha.strip()[:80]
+            # "from A to B": aviso velho de outra seleção fica no boletim (caso 14/11 16:10:31,
+            # 'from 1.689 to 1.909' numa perna @2.06). Só reprova se a odd NOVA saiu da tolerância.
+            mm = re.search(r"(\d+[.,]\d+)\D+(\d+[.,]\d+)", linha)
+            antiga, nova = (_num(mm.group(1)), _num(mm.group(2))) if mm else (None, None)
+            desta = antiga is None or abs(antiga - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9
+            if desta and (nova is None or abs(nova - perna["odd"]) > TOL_ODD_CUPOM + 1e-9):
+                return False, "a casa avisou no cupom que a odd mudou (%s)" % linha.strip()[:80]
+            # aviso de OUTRA seleção (o "de X" não é a odd clicada): ignora; a odd do item é conferida abaixo
         itens = self.itens_cupom()
         if len(itens) != 1:
             return False, "cupom com %d seleções (esperado 1)" % len(itens)
@@ -2044,7 +2072,10 @@ class Casa:
             try:
                 loc = self.page.locator('[data-mid="%s"]' % mid)
                 if loc.count() and self._carimbo_vivo(loc.first, perna):
-                    clicou = self._clicar_mid(mid, _odd_txt(loc.first.inner_text(), perna["odd"]))
+                    txb = loc.first.inner_text()
+                    oddb = min((v for v in _numeros(txb) if 1.01 <= v <= 30 and abs(v - abs(perna["linha"])) > 1e-9),
+                               key=lambda v: abs(v - perna["odd"]), default=perna["odd"])
+                    clicou = self._clicar_mid(mid, _odd_txt(txb, oddb))
             except Exception:
                 clicou = False
         if not clicou:  # carimbo morto: relê com a mesma enumeração e clica por identidade
@@ -2057,7 +2088,13 @@ class Casa:
                 except Exception:
                     clicou = False
         if not clicou:
-            r["motivo"] = "a leitura não achou a seleção na página (%s)" % descricao_oferta(perna)
+            mesmas = sorted({o["linha"] for o in getattr(self, "_ultimas_ofs", []) or []
+                             if o["tipo"] == perna["tipo"] and o["periodo"] == perna["periodo"]})
+            if mesmas and perna["tipo"] == "total" and not any(abs(l - perna["linha"]) < 0.001 for l in mesmas):
+                r["motivo"] = "a linha %s não está mais na página — a casa trocou as linhas (agora: %s)" % (
+                    _fmt_linha(perna["linha"]), " / ".join(_fmt_linha(l) for l in mesmas))
+            else:
+                r["motivo"] = "a leitura não achou a seleção na página (%s)" % descricao_oferta(perna)
             r["foto"] = self.foto("falha")
             self.dump("falha")
             return r
