@@ -654,3 +654,21 @@ def test_memoria_de_url_nao_confunde_jogo_por_basket():
 ])
 def test_selecoes_pt_en(a, b, esperado):
     assert P._nome_bate(a, b) is esperado
+
+
+@pytest.mark.parametrize("a,b,esperado", [
+    ("Hapoel Tel Aviv", "Maccabi Tel Aviv", False),       # prefixo de clube diferente = outro time
+    ("Hapoel Holon", "Hapoel Haifa", False),
+    ("Hapoel Tel Aviv", "Hapoel Tel-Aviv", True),
+    ("Los Angeles Lakers", "Los Angeles Clippers", False),  # mesma cidade não basta
+    ("LA Clippers", "Los Angeles Clippers", True),
+    ("BK Levice Patrioti", "PK Patrioti Levice", True),     # BetBurger 14/11
+    ("CSM Ploiesti", "CS Municipal Ploiesti", True),
+    ("CSM Ploiesti", "CSM Galati", False),
+    ("Hungary (w)", "Hungria (f)", True),
+    ("Saint Mary's Gaels", "Saint Louis Billikens", False),
+    ("Real Madrid", "Real Betis", False),
+    ("Movistar Estudiantes Madrid", "Cb Estudiantes", True),
+])
+def test_nomes_clubes_e_cidades(a, b, esperado):
+    assert P._nome_bate(a, b) is esperado

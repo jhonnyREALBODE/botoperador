@@ -249,11 +249,16 @@ _GENERICOS = {"club", "clube", "klub", "klubb", "spor", "kulubu", "sport", "spor
               "baloncesto", "pallacanestro", "kosarka", "kosarkaski", "koszykowka", "sportclub", "sportverein",
               "athletic", "atletico", "esporte", "esportes", "associacao", "associazione", "societa",
               "bc", "bk", "bbk", "kk", "kkk", "ks", "sk", "sc", "fc", "ac", "cb", "cd", "ud", "bv", "tv", "vfl",
-              "women", "feminino", "feminina", "fem", "ladies"}
+              "women", "feminino", "feminina", "fem", "ladies",
+              "saint", "santa", "state", "city", "united", "real", "sporting", "union", "uniao", "deportivo",
+              "university", "universidad", "college", "municipal"}
+# prefixos que dizem QUAL clube da cidade (Hapoel x Maccabi Tel Aviv): diferentes = time diferente
+_PREFIXOS_CLUBE = {"hapoel", "maccabi", "ironi", "bnei", "elitzur", "beitar", "dinamo", "dynamo", "lokomotiv",
+                   "spartak", "crvena", "torpedo", "olimpija", "olimpia"}
 
 
 def _generico(t):
-    return t in _GENERICOS or t.startswith(("basket", "basquet", "koszyk", "kosark"))
+    return t in _GENERICOS or t in _PREFIXOS_CLUBE or t.startswith(("basket", "basquet", "koszyk", "kosark"))
 
 
 def _norm_paises(n):
@@ -297,6 +302,10 @@ def _nome_bate(a, b):
         return False
     if _marcas(a) != _marcas(b):
         return False
+    pa = {t for t in _norm(a).split() if t in _PREFIXOS_CLUBE}
+    pb = {t for t in _norm(b).split() if t in _PREFIXOS_CLUBE}
+    if pa and pb and pa != pb:
+        return False  # Hapoel Tel Aviv ≠ Maccabi Tel Aviv
     na, nb = _norm_paises(_norm(a)), _norm_paises(_norm(b))
     if na == nb:
         return True
@@ -308,8 +317,13 @@ def _nome_bate(a, b):
     if ta and tb:
         menor, maior = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
         bate = sum(1 for t in menor if any(_token_bate(t, u) for u in maior))
-        if bate * 2 >= len(menor) and bate >= 1:
+        # os dois com 2+ palavras próprias: uma só em comum (a cidade) não basta
+        # (Los Angeles Lakers ≠ Los Angeles Clippers)
+        minimo = 2 if len(ta) >= 2 and len(tb) >= 2 else 1
+        if bate * 2 >= len(menor) and bate >= minimo:
             return True
+        if minimo == 2:
+            return False
     return na[:1] == nb[:1] and difflib.SequenceMatcher(None, na, nb).ratio() >= 0.75
 
 
@@ -2509,7 +2523,14 @@ class Operador:
                                                        " — %d vazias seguidas" % vazias if vazias > 1 else ""))
                         ultimo_motivo = mot
             except Exception as e:
-                log("erro no monitoramento (segue): %s" % e)
+                msg = str(e)
+                if any(k in msg for k in ("has been closed", "Target closed", "Connection closed", "passou do prazo")):
+                    # janela caiu no meio (o laço da casa reabre em 5s): caça de novo nas duas, sem esperar a rodada
+                    log("janela de uma casa caiu no meio da rodada — reabre sozinha e eu retomo a caça (%s)" % msg.split("\n")[0][:90])
+                    achado[CASA_1W] = achado[CASA_PS] = False
+                    cancel.wait(6)
+                    continue
+                log("erro no monitoramento (segue): %s" % msg.split("\n")[0][:200])
                 log(traceback.format_exc()[-600:])
             cancel.wait(self.cfg["monitor_intervalo_s"])
 
