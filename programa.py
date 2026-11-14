@@ -39,6 +39,7 @@ import json
 import time
 import queue
 import difflib
+import functools
 import threading
 import traceback
 import unicodedata
@@ -261,6 +262,7 @@ def _generico(t):
     return t in _GENERICOS or t in _PREFIXOS_CLUBE or t.startswith(("basket", "basquet", "koszyk", "kosark"))
 
 
+@functools.lru_cache(maxsize=50000)
 def _norm_paises(n):
     """Seleções: 'Islândia (f)' = 'Iceland Women' — país em PT vira EN antes de comparar."""
     for pt, en in _PAISES_ORDEM():
@@ -286,6 +288,27 @@ def _sigla_bate(a, b):
     return False
 
 
+def pistas_nome(nome):
+    """Pedaços curtos (5 letras) das palavras próprias do time, em EN e PT (seleções), para o
+    filtro rápido dentro da página. Lista vazia = sem filtro (nome só com sigla/genérico)."""
+    out = set()
+    n = _norm(nome)
+    for t in _tokens(nome):
+        if len(t) >= 4:
+            out.add(t[:5])
+            for k, v in _ALIAS_TOKENS.items():  # 'lorenzo' também procura 'lourenco'
+                if v == t and len(k) >= 4:
+                    out.add(k[:5])
+    inv = {en: pt for pt, en in _PAISES.items()}
+    for en, pt in inv.items():
+        if re.search(r"\b" + en + r"\b", _norm_paises(n)):
+            out.add(pt.split()[0][:5])
+    for pt in _PAISES:
+        if re.search(r"\b" + pt + r"\b", n):
+            out.add(pt.split()[0][:5])
+    return sorted(out)
+
+
 def _token_bate(a, b):
     if a == b:
         return True
@@ -295,6 +318,7 @@ def _token_bate(a, b):
     return a[:1] == b[:1] and difflib.SequenceMatcher(None, a, b).ratio() >= 0.75
 
 
+@functools.lru_cache(maxsize=100000)
 def _nome_bate(a, b):
     """Casamento tolerante de nomes de time entre casas. Nome é pista, nunca chave.
     Feminino/base/3x3/reserva fazem parte da identidade."""
@@ -2079,7 +2103,10 @@ class Casa:
         # tela: primeiro AO VIVO -> Basquetebol no menu da esquerda (caso Portimonense 14/11)
         self._ps_so_ao_vivo()
         rolagem = 0
+        buscou = False
         while time.time() < prazo:
+            if rolagem >= 6 and not buscou:  # plano B: a busca da própria PS
+                buscou = self._ps_buscar(times)
             if self.esta_limitada():
                 return {"ok": False, "limitada": True, "motivo": "PS limitada (Excesso de requisições)"}
             alvo = self._marcar_linha_jogo(times, prefer_href="/matchup/")
@@ -2102,6 +2129,22 @@ class Casa:
                     pass
             self.page.wait_for_timeout(500)
         return {"ok": False, "motivo": "PS: jogo não encontrado na lista em %ds" % PRAZO_CACA_S}
+
+    def _ps_buscar(self, times):
+        """Digita o nome do 1º time na busca da PS ('Pesquise por ligas e nomes de equipes')."""
+        try:
+            caixa = self.page.locator('input[placeholder*="esquise" i], input[placeholder*="earch" i]').first
+            if not caixa.count() or not caixa.is_visible():
+                return True
+            palavra = max(_tokens(times[0]) or [times[0]], key=len)
+            caixa.click()
+            caixa.fill("")
+            caixa.type(palavra, delay=30)
+            self.page.wait_for_timeout(2500)
+            log("PS: busca da casa por '%s'" % palavra)
+        except Exception:
+            pass
+        return True
 
     def _ps_so_ao_vivo(self):
         """Clica 'Basquetebol' na seção AO VIVO do menu da esquerda (se existir)."""
@@ -2127,12 +2170,27 @@ class Casa:
         return {"ok": True, "liga": liga, "url": url}
 
     def _marcar_linha_jogo(self, times, prefer_href=""):
-        """Marca (data-alvo-jogo) o menor elemento clicável cujo texto tem os dois times."""
-        cands = self._eval(r"""(pref) => {
+        """Marca (data-alvo-jogo) o menor elemento clicável cujo texto tem os dois times.
+        Filtro rápido na página: só volta elemento que tem uma PISTA de cada time (senão a
+        lista da PS ao vivo, enorme, estoura o prazo — caso 14/11 15:04)."""
+        # a cada 3 voltas, busca completa sem filtro (nome muito diferente entre as casas)
+        self._voltas_caca = getattr(self, "_voltas_caca", 0) + 1
+        if self._voltas_caca % 3 == 0:
+            p1, p2 = [], []
+        else:
+            p1, p2 = pistas_nome(times[0]), pistas_nome(times[1])
+        cands = self._eval(r"""([pref, p1, p2]) => {
             document.querySelectorAll('[data-alvo-jogo]').forEach(e => e.removeAttribute('data-alvo-jogo'));
             const out = [];
+            const nrm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+                .replace(/ł/g, 'l').replace(/ø/g, 'o').replace(/ß/g, 'ss');
+            const tem = (t, ps) => !ps.length || ps.some(p => t.includes(p));
             const els = Array.from(document.querySelectorAll('a, [role=button], [onclick], div, li, tr'));
             els.forEach((e, i) => {
+                const tc = e.textContent || '';
+                if (tc.length > 600) return;
+                const n = nrm(tc);
+                if (!tem(n, p1) || !tem(n, p2)) return;
                 const t = (e.innerText || '').trim();
                 if (!t || t.length > 260) return;
                 const r = e.getBoundingClientRect();
@@ -2141,7 +2199,7 @@ class Casa:
                 e.setAttribute('data-cand-jogo', String(i));
             });
             return out;
-        }""", prefer_href)
+        }""", [prefer_href, p1, p2])
         bons = []
         for c in cands:
             pedacos = [p for p in re.split(r"\n|\s+(?:—|–|-vs-|vs\.?|x|-)\s+", c["t"]) if p.strip()]

@@ -77,6 +77,10 @@ if (ESTADO.limite) {
   if (ESTADO.sujo) { sel = {aid: '999|0|3|3|0|150.5', t1: 'Outro', t2: 'Jogo', per: 'Jogo', mk: 'OU', rot: 'Mais de 150.5', odd: '1.900'}; render(); }
 } else {
   let h = '<h2>Basquete</h2>';
+  for (let k = 0; k < (ESTADO.muitos || 0); k++) {  // lista enorme (caso 14/11 15:04)
+    h += '<table><tr><td><div class="team-name-container"><span>Time Azul ' + k + ' Basket Club</span><span>Time Verde ' + k + ' BC</span></div></td>' +
+         '<td><div>Mais 150.' + (k % 10) + ' <span>1.9' + (k % 10) + '</span></div></td><td><div>HDP 3.5 <span>1.8' + (k % 10) + '</span></div></td></tr></table>';
+  }
   for (const id of Object.keys(JOGOS)) {
     const j = JOGOS[id];
     h += '<a class="jogo-lista" href="/pt/sports/basketball/matchup/' + encodeURIComponent(j.ligaps.replace(/ /g, '-')) + '/' + j.t1.replace(/\W+/g, '-') + '-vs-' + j.t2.replace(/\W+/g, '-') + '/487/' + id + '">' + j.t1 + '<br>' + j.t2 + '</a>';

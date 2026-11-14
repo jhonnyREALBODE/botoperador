@@ -417,3 +417,14 @@ def test_1awin_selecao_some_do_cupom_nao_conta_como_montado(casas, ms):
     assert not r["ok"] and ("sumiu" in r["motivo"] or "não recebeu" in r["motivo"]), r
     codigo = c1.executar(lambda: c1.page.locator('input[placeholder="Código da aposta"]').input_value())
     assert codigo == ""
+
+
+def test_caca_ps_em_lista_enorme_dentro_do_prazo(casas):
+    """Caso 14/11 15:04: lista ao vivo da PS enorme -> 'job cacar passou do prazo'."""
+    servidor.ESTADO["muitos"] = 1500
+    cps = casas[P.CASA_PS]
+    cps.executar(cps.ir, cps.url_lista())
+    t0 = time.time()
+    r = cps.executar(cps.cacar, ["Atenas Cordoba", "San Lorenzo de Almagro"])
+    assert r["ok"], r
+    assert time.time() - t0 < 25
