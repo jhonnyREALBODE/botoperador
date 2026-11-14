@@ -329,3 +329,20 @@ def test_calibracao(casas, cfgc):
     assert arqs
     rel = json.load(open(arqs[0]))
     assert rel and rel[0]["casas"]["1aWin"]["ok"], rel
+
+
+def test_1awin_espelho_rotativo(site, tmp_path):
+    """Caso real 14/11: 1wcwlx.life redirecionou para 1wmvjy.life no meio da carga
+    e o goto morreu com 'interrupted by another navigation'."""
+    cfg = P.carregar_config(str(tmp_path / "x.json"), avisar=False)
+    c = P.Casa(P.CASA_1W, cfg, base_url=site + "/mv", perfil=str(tmp_path / "p"), headless=True).iniciar()
+    try:
+        c.executar(c.ir, site + "/mv" + cfg["caminho_lista_1awin"])
+        assert c.base.startswith("http://localhost:")
+        assert "EUA. NBA" in c.executar(c.texto)
+        r = c.executar(c.cacar, TIMES, "EUA - NBA")
+        assert r["ok"] and r["url"].startswith("http://localhost:")
+        # endereço decorado num espelho velho é aberto no espelho atual
+        assert P.trocar_origem("https://1wcwlx.life/betting/match/x-1", "https://1wmvjy.life") == "https://1wmvjy.life/betting/match/x-1"
+    finally:
+        c.parar()

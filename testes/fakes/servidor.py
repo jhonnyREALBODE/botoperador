@@ -15,7 +15,13 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = urlparse(self.path).path
-        if p.startswith("/fakes/"):
+        if p.startswith("/mv/"):
+            # domínio de referência que redireciona (por JS, no meio da carga) para o espelho atual
+            porta = self.server.server_address[1]
+            corpo = ("<html><head><script>location.replace('http://localhost:%d%s?cda_id=abc&token=xyz')</script>"
+                     "</head><body>redirecionando...</body></html>" % (porta, p[3:])).encode()
+            tipo = "text/html; charset=utf-8"
+        elif p.startswith("/fakes/"):
             arq = os.path.join(PASTA, os.path.basename(p))
             corpo = open(arq, "rb").read()
             tipo = "application/javascript"

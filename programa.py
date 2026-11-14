@@ -1061,6 +1061,14 @@ def liga_da_url_ps(url):
     return ""
 
 
+def trocar_origem(url, base):
+    """Mesmo caminho, no domínio do espelho atual."""
+    u, b = urlparse(url or ""), urlparse(base or "")
+    if not u.netloc or not b.netloc or u.netloc == b.netloc:
+        return url
+    return "%s://%s%s%s" % (b.scheme, b.netloc, u.path, ("?" + u.query) if u.query else "")
+
+
 class FalhaCasa(Exception):
     pass
 
@@ -1108,7 +1116,7 @@ class Casa:
         self.page.set_default_timeout(15000)
         self.vivo = True
         try:
-            self.page.goto(self.url_lista(), wait_until="domcontentloaded")
+            self.ir(self.url_lista())
         except Exception as e:
             log("%s: lista não abriu na subida (%s)" % (self.rotulo, str(e)[:120]))
 
@@ -1225,7 +1233,37 @@ class Casa:
         return n
 
     def ir(self, url):
-        self.page.goto(url, wait_until="domcontentloaded")
+        """Navega tolerando o redirecionamento da casa (a 1aWin manda do domínio de
+        referência para o espelho atual no meio do carregamento)."""
+        if self.nome == CASA_1W:
+            url = trocar_origem(url, self.base)
+        try:
+            self.page.goto(url, wait_until="domcontentloaded")
+        except Exception as e:
+            msg = str(e)
+            if "interrupted by another navigation" not in msg and "ERR_ABORTED" not in msg and "frame was detached" not in msg:
+                raise
+            try:
+                self.page.wait_for_load_state("domcontentloaded", timeout=20000)
+            except Exception:
+                pass
+        self._atualizar_espelho()
+
+    def _atualizar_espelho(self):
+        """Domínios da 1aWin são espelhos rotativos: a sessão mora no espelho atual."""
+        if self.nome != CASA_1W:
+            return
+        try:
+            u = urlparse(self.page.url)
+        except Exception:
+            return
+        if u.scheme not in ("http", "https") or not u.netloc or "/betting" not in u.path:
+            return
+        nova = "%s://%s" % (u.scheme, u.netloc)
+        atual = urlparse(self.base)
+        if nova != "%s://%s" % (atual.scheme, atual.netloc):
+            log("1aWin: espelho atual é %s (era %s) — sigo nele" % (u.netloc, atual.netloc))
+            self.base = nova
 
     # -------------------------------------------------- cupom / boletim
     def itens_cupom(self):
@@ -2123,7 +2161,7 @@ class Operador:
         try:
             jogos = c1.executar(_calib_listar_jogos, c1, timeout=120)
         except Exception as e:
-            log("calibração: lista falhou: %s" % e)
+            log("calibração: lista falhou: %s" % str(e)[:200])
             return
         relatorio = []
         for url, times in jogos[:3]:
