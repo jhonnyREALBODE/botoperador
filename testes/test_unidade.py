@@ -388,8 +388,11 @@ def test_vigia_backlog_nunca_executa_e_fresco_executa(cfg):
     est = P.Estado(cfg)
     op = OperadorFalso()
     v = P.Vigia(cfg, op, est)
+    v.min_estavel_s = 0
     v.processar(CONVERSA)
     assert not v.backlog_ok  # uma leitura só não conclui
+    v.processar(CONVERSA)
+    assert not v.backlog_ok  # duas também não
     v.processar(CONVERSA)
     assert v.backlog_ok and len(est.backlog) == 2 and op.recebidos == []
     novo = CONVERSA + "\n🛰️ SINAL DE MIDDLE (BetBurger)\nJogo: Flamengo x Franca\nMercado do sinal: Total\n"
@@ -403,8 +406,9 @@ def test_vigia_resultado_nao_clica(cfg):
     est = P.Estado(cfg)
     op = OperadorFalso()
     v = P.Vigia(cfg, op, est)
-    v.processar(CONVERSA)
-    v.processar(CONVERSA)
+    v.min_estavel_s = 0
+    for _ in range(3):
+        v.processar(CONVERSA)
     v.processar(CONVERSA + "\nRESULTADO\nJogo: Phoenix Suns x Charlotte Hornets\nDesfecho: DEVOLVIDA\n")
     assert op.recebidos == [] and est.resultados[0]["desfecho"] == "DEVOLVIDA"
 
@@ -427,7 +431,7 @@ def test_sinal_novo_cancela_o_atual(cfg, monkeypatch):
     monkeypatch.setattr(P.Operador, "_monitorar", mon)
     op = P.Operador(cfg, P.Estado(cfg), {})
     op.novo_sinal(dict(SINAL))
-    op.novo_sinal(dict(SINAL, id="b"))
+    op.novo_sinal(dict(SINAL, id="b", times=["Flamengo", "Franca"]))
     time.sleep(0.3)
     assert cancelados == [SINAL["id"]]
 
@@ -499,3 +503,29 @@ def test_navegador_sem_marca_de_automacao(cfg, tmp_path):
     assert P.opcoes_navegador(cfg, False)["executable_path"] == str(exe)
     cfg["navegador_exe"] = str(tmp_path / "nao-existe.exe")
     assert "executable_path" not in P.opcoes_navegador(cfg, False)
+
+
+def test_vigia_pagina_carregando_nao_vira_fresco(cfg):
+    """Caso real 14/11: Grok ainda carregando (vazio) concluiu a varredura e os
+    sinais antigos entraram como frescos."""
+    est = P.Estado(cfg)
+    op = OperadorFalso()
+    v = P.Vigia(cfg, op, est)
+    v.min_estavel_s = 0.5
+    for _ in range(3):
+        v.processar("")          # página vazia, ainda carregando
+    assert not v.backlog_ok      # tempo mínimo não passou
+    for _ in range(3):
+        v.processar(CONVERSA)    # conversa apareceu
+    time.sleep(0.6)
+    v.processar(CONVERSA)
+    assert v.backlog_ok and op.recebidos == [] and len(est.backlog) == 2
+
+
+def test_sinal_do_mesmo_jogo_nao_reinicia(cfg, monkeypatch):
+    monkeypatch.setattr(P.Operador, "_monitorar", lambda self, s, ev, o: ev.wait(5))
+    op = P.Operador(cfg, P.Estado(cfg), {})
+    assert op.novo_sinal(dict(SINAL)) is True
+    outro_mercado = dict(SINAL, id="chicago|spread", times=["Phoenix", "Charlotte Hornets"])
+    assert op.novo_sinal(outro_mercado) is False
+    assert op.novo_sinal(dict(SINAL, id="x", times=["Flamengo", "Franca"])) is True

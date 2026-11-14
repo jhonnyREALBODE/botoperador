@@ -292,9 +292,10 @@ def test_sinal_fresco_ponta_a_ponta(casas, cfgc):
     est = P.Estado(cfgc)
     op = P.Operador(cfgc, est, casas)
     v = P.Vigia(cfgc, op, est)
+    v.min_estavel_s = 0
     conversa = "🛰️ SINAL DE MIDDLE (BetBurger)\nJogo: Flamengo x Franca\nMercado do sinal: Total\n"
-    v.processar(conversa)
-    v.processar(conversa)  # backlog
+    for _ in range(3):
+        v.processar(conversa)  # backlog
     assert op._atual is None
     conversa += "\n🛰️ SINAL DE MIDDLE (BetBurger)\nJogo: Phoenix x Charlotte\nLiga: EUA - NBA\nMercado do sinal: Total 214.5\n"
     v.processar(conversa)

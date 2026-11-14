@@ -1877,6 +1877,10 @@ def _sem_privados(b):
     return out
 
 
+def _mesmo_jogo(t1, t2):
+    return (_nome_bate(t1[0], t2[0]) and _nome_bate(t1[1], t2[1])) or (_nome_bate(t1[0], t2[1]) and _nome_bate(t1[1], t2[0]))
+
+
 def _nome_bate_jogo(jogo, times):
     t = _separar_times(jogo)
     return bool(t) and ((_nome_bate(t[0], times[0]) and _nome_bate(t[1], times[1])) or
@@ -1903,6 +1907,11 @@ class Operador:
             return False
         self._ultimo_por_id[sinal["id"]] = ag
         with self._trava:
+            if origem == "sinal" and self._atual and self._atual[0].is_alive() and not self._atual[1].is_set() \
+                    and _mesmo_jogo(self._atual[2]["times"], sinal["times"]):
+                log("sinal do mesmo jogo (%s) — já estou monitorando %s: sigo sem reiniciar (todos os mercados já são varridos)" % (
+                    sinal.get("mercado") or "—", self._atual[2]["jogo"]))
+                return False
             if self._atual:
                 self._atual[1].set()
                 log("sinal novo assume — monitoramento de %s cancelado" % self._atual[2]["jogo"])
@@ -2191,6 +2200,10 @@ class Vigia:
         self.estado = estado
         self.backlog_ok = False
         self._ultimo_texto = None
+        self._iguais = 0
+        self._t0 = None
+        self.min_estavel_s = 20      # a conversa tem que estar parada e carregada antes de virar "backlog concluído"
+        self.leituras_iguais = 3
         self._contagem = {}       # id -> nº máximo de ocorrências já vistas
         self._resultados = set()
 
@@ -2203,9 +2216,18 @@ class Vigia:
             cont[s["id"]] = cont.get(s["id"], 0) + 1
             ultimo[s["id"]] = s
         if not self.backlog_ok:
-            # trava do backlog: só conclui após duas leituras idênticas
+            # trava do backlog: só conclui com a conversa CARREGADA e PARADA
+            # (leituras idênticas seguidas + tempo mínimo desde que a página abriu).
+            # Página ainda carregando (vazia) não pode concluir a varredura: os
+            # sinais antigos apareceriam depois como "frescos" e executariam sozinhos.
+            if self._t0 is None:
+                self._t0 = time.time()
             if texto != self._ultimo_texto:
                 self._ultimo_texto = texto
+                self._iguais = 1
+                return []
+            self._iguais += 1
+            if self._iguais < self.leituras_iguais or time.time() - self._t0 < self.min_estavel_s:
                 return []
             self.backlog_ok = True
             self._contagem = dict(cont)
@@ -2250,7 +2272,9 @@ class Vigia:
                     ctx = pw.chromium.launch_persistent_context(os.path.join(DADOS, "perfil-grok"), **kw)
                     page = ctx.pages[0] if ctx.pages else ctx.new_page()
                     page.goto(self.cfg["url_grok"], wait_until="domcontentloaded")
-                    log("vigia: lendo a conversa do ANALISTA a cada ~1s")
+                    if not self.backlog_ok:
+                        self._t0 = time.time()
+                    log("vigia: lendo a conversa do ANALISTA a cada ~1s (varredura inicial: esperando a conversa carregar e parar)")
                 tx = page.inner_text("body", timeout=5000)
                 self.processar(tx)
             except Exception as e:
