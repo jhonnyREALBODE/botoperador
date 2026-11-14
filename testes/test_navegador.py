@@ -444,3 +444,41 @@ def test_carimbo_que_virou_outra_linha_nao_e_clicado(casas):
     assert r["ok"], r
     assert "214.5" in c1.executar(c1.itens_cupom)[0]
     c1.executar(c1.desfazer, o1)
+
+
+@pytest.mark.parametrize("ms", [600, 1100])
+def test_odd_que_cai_depois_de_montado_reprova_tudo(casas, cfgc, ms):
+    """Caso Ratiopharm 14/11 15:21: PS 'Odds have changed from 2.000 to 1.675' DEPOIS de montado.
+    No modo real teria confirmado a 1.675. Agora a conferência final reprova e desfaz as duas."""
+    servidor.ESTADO["odd_muda"] = ms
+    c1, cps = ir_jogo(casas)
+    recarregar(cps)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+    assert st == "falhou", bil["detalhe"]
+    assert "odd" in bil["detalhe"]["PS3838"].lower()
+    for c in casas.values():
+        assert c.executar(c.itens_cupom) == []
+
+
+def test_modo_real_reconfere_no_instante_de_confirmar(casas, cfgc):
+    """A odd cai DEPOIS da conferência final: no modo real o confirmar reconfere e não aposta."""
+    c1, cps = ir_jogo(casas)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    servidor.ESTADO["odd_muda"] = 1
+    recarregar(cps)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    def montar_sem_conferir():
+        cps.clicar_firme(cps.page.locator('[data-mid="%s"]' % o["_mid"]).first)
+        cps.page.wait_for_timeout(500)
+    cps.executar(montar_sem_conferir)
+    r = cps.executar(cps.confirmar, dict(o, stake=31.0))
+    assert not r["ok"] and "odd mudou" in r["motivo"]
+    assert "Aposta aceita" not in cps.executar(cps.texto)
+    limpar_cupons(casas)

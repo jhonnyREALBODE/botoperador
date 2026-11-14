@@ -1220,6 +1220,8 @@ def liga_parecida(a, b):
 # ---------------------------------------------------------------- textos/regex das casas
 _RX_LIMITE = re.compile(r"excesso de requisi|too many requests|rate limit", re.I)
 _RX_DESLOGADO = re.compile(r"\b(entrar|login|iniciar sess[aã]o|fazer login|sign in|log in)\b", re.I)
+_RX_ODD_MUDOU = re.compile(r"odds? (have |has )?changed|odds? (mudou|mudaram|alterad)|cota[cç](ao|oes) (mudou|mudaram|alterad)|"
+                           r"coeficiente (mudou|alterad)|price changed", re.I)
 _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado (fechado|encerrado)|market closed", re.I)
 _RX_REMOVER_TUDO = re.compile(r"^\s*(remover tudo|remove all|limpar tudo|clear all|apagar tudo)\s*$", re.I)
 _RX_OK_MODAL = re.compile(r"^\s*(ok|sim|confirmar|yes)\s*$", re.I)
@@ -1924,6 +1926,10 @@ class Casa:
         tx = self.texto_cupom()
         if _RX_EXCLUIDO.search(tx):
             return False, "cupom mostra 'Evento excluído' — mercado encerrado, perna morta"
+        m = _RX_ODD_MUDOU.search(_sem_acento(tx))
+        if m:
+            linha = next((l for l in tx.splitlines() if _RX_ODD_MUDOU.search(_sem_acento(l))), m.group(0))
+            return False, "a casa avisou no cupom que a odd mudou (%s)" % linha.strip()[:80]
         itens = self.itens_cupom()
         if len(itens) != 1:
             return False, "cupom com %d seleções (esperado 1)" % len(itens)
@@ -2065,8 +2071,12 @@ class Casa:
         ok = self.limpar_cupom(perna)
         return {"ok": ok, "foto": self.foto("desfeito"), "motivo": "" if ok else "cupom não esvaziou"}
 
-    def confirmar(self):
-        """Só no modo real. Clica em apostar dentro do cupom e espera a confirmação."""
+    def confirmar(self, perna=None):
+        """Só no modo real. Reconfere a perna e só então clica em apostar e espera a confirmação."""
+        if perna is not None:
+            ok, mot = self.conferir_cupom(perna)
+            if not ok:
+                return {"ok": False, "motivo": "não confirmei — " + mot, "foto": self.foto("confirmar")}
         if self._clicar_no_cupom(r"^(fazer (a |uma )?aposta|apostar|place bet|confirmar aposta|realizar aposta)") == 0:
             return {"ok": False, "motivo": "botão de apostar não encontrado", "foto": self.foto("confirmar")}
         self._modal_ok_rapido()
@@ -2663,6 +2673,11 @@ class Operador:
                     res[nome] = w()
                 except Exception as e:
                     res[nome] = {"ok": False, "motivo": "erro: %s" % e, "foto": ""}
+            if all(r["ok"] for r in res.values()):
+                # CONFERÊNCIA FINAL, no instante em que o modo real confirmaria: as duas pernas
+                # ainda são as mesmas, na mesma odd? (caso Ratiopharm 15:21: PS 2.000 -> 1.675
+                # depois de montado)
+                self._conferencia_final(res, bil)
             fotos = [r["foto"] for r in res.values() if r.get("foto")]
             detalhe = {NOME_CASA[n]: ("montou" if r["ok"] else r["motivo"]) for n, r in res.items()}
             for n, r in res.items():
@@ -2677,14 +2692,14 @@ class Operador:
                 self.estado.atualizar(bil, status=st, detalhe=detalhe, fotos=fotos)
                 return st
             # MODO REAL — frágil primeiro, com a outra já montada
-            r1 = c1.executar(c1.confirmar, timeout=40)
+            r1 = c1.executar(c1.confirmar, p1, timeout=40)
             fotos.append(r1.get("foto", ""))
             if not r1["ok"]:
                 detalhe["1aWin"] = "não confirmou: " + r1["motivo"]
                 cps.executar(cps.desfazer, p2, timeout=30)
                 self.estado.atualizar(bil, status="falhou", detalhe=detalhe, fotos=fotos)
                 return "falhou"
-            r2 = cps.executar(cps.confirmar, timeout=40)
+            r2 = cps.executar(cps.confirmar, p2, timeout=40)
             fotos.append(r2.get("foto", ""))
             if not r2["ok"]:
                 detalhe["PS3838"] = "NÃO CONFIRMOU com a 1aWin já apostada: " + r2["motivo"]
@@ -2695,11 +2710,27 @@ class Operador:
             self.estado.atualizar(bil, status="confirmado", detalhe=detalhe, fotos=fotos)
             return "confirmado"
 
+    def _conferencia_final(self, res, bil):
+        esperas = []
+        for (nome, perna) in zip((CASA_1W, CASA_PS), bil["pernas"]):
+            c = self.casas[nome]
+            esperas.append((nome, c.em_paralelo(c.conferir_cupom, perna, timeout=20)))
+        for nome, w in esperas:
+            try:
+                ok, mot = w()
+            except Exception as e:
+                ok, mot = False, "conferência final falhou: %s" % str(e)[:80]
+            if not ok:
+                res[nome]["ok"] = False
+                res[nome]["motivo"] = "montou, mas na conferência final: " + mot
+                res[nome]["montada"] = True  # está no cupom: precisa ser desfeita
+                log("%s: conferência final reprovou — %s" % (NOME_CASA[nome], mot))
+
     def _desfazer(self, res, bil, fotos, detalhe):
         ok_geral = True
         esperas = []
         for (nome, r), perna in zip(((CASA_1W, res[CASA_1W]), (CASA_PS, res[CASA_PS])), bil["pernas"]):
-            if r["ok"]:
+            if r["ok"] or r.get("montada"):
                 c = self.casas[nome]
                 esperas.append((nome, c.em_paralelo(c.desfazer, perna, timeout=40)))
         for nome, w in esperas:
