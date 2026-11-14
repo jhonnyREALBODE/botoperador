@@ -66,7 +66,7 @@ def test_caca_ps_liga_certa_vem_da_url(casas):
     cps = casas[P.CASA_PS]
     cps.executar(cps.ir, cps.url_lista())
     r = cps.executar(cps.cacar, TIMES)
-    assert r["ok"] and r["liga"] == "eua nba"
+    assert r["ok"] and r["liga"] == "NBA"
 
 
 def test_caca_1awin_por_liga_com_nomes_tolerantes(casas):

@@ -1,0 +1,209 @@
+{
+ "origem": "PS3838 matchup San Antonio x Golden State, 14/11 01:40 (Q4 10')",
+ "itens": [
+  {
+   "mid": "1",
+   "odd": "1.980",
+   "txt": "38.5 1.980",
+   "seg": "38.5 1.980",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|2|0|1|-38.5",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "2",
+   "odd": "1.847",
+   "txt": "1.847",
+   "seg": "1.847",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|2|1|1|38.5",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "3",
+   "odd": "1.990",
+   "txt": "208.5 1.990",
+   "seg": "208.5 1.990",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|3|3|1|208.5",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "4",
+   "odd": "1.746",
+   "txt": "u 1.746",
+   "seg": "u 1.746",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|3|4|1|208.5",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "5",
+   "odd": "1.877",
+   "txt": "38.0 1.877",
+   "seg": "38.0 1.877",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|2|0|0|-38",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "6",
+   "odd": "1.943",
+   "txt": "1.943",
+   "seg": "1.943",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|2|1|0|38",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "7",
+   "odd": "1.884",
+   "txt": "208.0 1.884",
+   "seg": "208.0 1.884",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|3|3|0|208",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "8",
+   "odd": "1.847",
+   "txt": "u 1.847",
+   "seg": "u 1.847",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|3|4|0|208",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "9",
+   "odd": "1.787",
+   "txt": "37.5 1.787",
+   "seg": "37.5 1.787",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|2|0|1|-37.5",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "10",
+   "odd": "2.050",
+   "txt": "2.050",
+   "seg": "2.050",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|2|1|1|37.5",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "11",
+   "odd": "1.781",
+   "txt": "207.5 1.781",
+   "seg": "207.5 1.781",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|3|3|1|207.5",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  },
+  {
+   "mid": "12",
+   "odd": "1.952",
+   "txt": "u 1.952",
+   "seg": "u 1.952",
+   "linha": null,
+   "col": "",
+   "ci": -1,
+   "hdrs": null,
+   "heads": [],
+   "aid": "1640419409|0|3|4|1|207.5",
+   "travado": false,
+   "casa_times": [
+    "San Antonio Spurs",
+    "Golden State Warriors"
+   ]
+  }
+ ]
+}

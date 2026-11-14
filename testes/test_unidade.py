@@ -529,3 +529,62 @@ def test_sinal_do_mesmo_jogo_nao_reinicia(cfg, monkeypatch):
     outro_mercado = dict(SINAL, id="chicago|spread", times=["Phoenix", "Charlotte Hornets"])
     assert op.novo_sinal(outro_mercado) is False
     assert op.novo_sinal(dict(SINAL, id="x", times=["Flamengo", "Franca"])) is True
+
+
+# ------------------------------------------------------------------ casos REAIS (calibração de 14/11)
+REAIS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reais")
+SAS = ["San Antonio Spurs", "Golden State Warriors"]
+
+
+def test_ps_real_le_pelo_id_do_botao():
+    """A PS mostra '38.5 1.980' só no mandante e 'u 1.746' no abaixo: a verdade está no id."""
+    itens = json.load(open(os.path.join(REAIS, "ps_matchup_14-11.json"), encoding="utf-8"))["itens"]
+    ofs = P.ofertas_de_enumeracao(itens, "ps3838", SAS, quarto=4)
+    t = {(o["lado"], o["linha"]): o["odd"] for o in ofs if o["tipo"] == "total"}
+    assert t[("acima", 208.5)] == 1.99 and t[("abaixo", 208.5)] == 1.746 and t[("abaixo", 207.5)] == 1.952
+    h = {(o["time_idx"], o["linha"]): o["odd"] for o in ofs if o["tipo"] == "handicap"}
+    assert h[(0, -38.5)] == 1.98 and h[(1, 38.5)] == 1.847 and h[(0, -38.0)] == 1.877
+    assert all(o["periodo"] == "jogo" for o in ofs) and len(ofs) == 12
+
+
+def test_ps_id_periodos_e_q4():
+    base = {"mid": "1", "odd": "1.900", "txt": "", "seg": "52.5 1.900", "linha": None, "col": "", "ci": -1,
+            "hdrs": None, "heads": [], "travado": False, "casa_times": SAS}
+    per = lambda aid: [o["periodo"] for o in P.ofertas_de_enumeracao([dict(base, aid=aid)], "ps3838", SAS)]
+    assert per("1|3|3|3|0|52.5") == ["q1"] and per("1|4|3|3|0|52.5") == ["q2"] and per("1|1|3|3|0|52.5") == ["t1"]
+    assert per("1|6|3|3|0|52.5") == []  # 4º quarto proibido
+
+
+def test_ps_odd_travada_e_deslogado_nao_nascem():
+    base = {"mid": "1", "odd": "1.900", "txt": "", "seg": "4.5 1.900", "linha": None, "col": "", "ci": -1,
+            "hdrs": None, "heads": [], "aid": "1|0|2|0|0|-4.5", "travado": True, "casa_times": SAS}
+    assert P.ofertas_de_enumeracao([base], "ps3838", SAS) == []
+    sem_odd = dict(base, travado=False, odd="4.5", seg="4.5")  # deslogado: só a linha na tela
+    assert P.ofertas_de_enumeracao([sem_odd], "ps3838", SAS) == []
+
+
+def test_relogios_reais():
+    assert P.quarto_atual("San Antonio Spurs\n4º Quarto 10`\n") == 4      # 1aWin usa crase
+    assert P.quarto_atual("99-62\nQ4 10'") == 4                          # PS
+    assert P.quarto_atual("2º Tempo 3`") == 3                            # NCAA (tempos): 1º tempo encerrado
+    assert "t1" in P.periodos_encerrados(P.quarto_atual("2º Tempo 3`"))
+
+
+def test_1awin_real_handicap_positivo_sem_sinal():
+    it = item("Golden State Warriors 42.5 1.31", "1.31", ["San Antonio Spurs Golden State Warriors", "Handicap (inc OT)"])
+    o = P.ofertas_de_enumeracao([it], "1awin", SAS)[0]
+    assert o["linha"] == 42.5 and o["time_idx"] == 1
+    it = item("San Antonio Spurs -42.5 3.13", "3.13", ["San Antonio Spurs Golden State Warriors", "Handicap (inc OT)"])
+    assert P.ofertas_de_enumeracao([it], "1awin", SAS)[0]["linha"] == -42.5
+
+
+def test_1awin_real_mercados_que_nao_sao_linha():
+    h = lambda seg, odd, heads: P.ofertas_de_enumeracao([item(seg, odd, heads)], "1awin", SAS)
+    assert h("Abaixo De 208.5 1.85", "1.85", ["Menos Mais", "Totais (inc OT)"])[0]["linha"] == 208.5
+    assert h("Abaixo De 120.5 2.96", "2.96", ["Menos Mais", "San Antonio Spurs total (inc OT)"]) == []
+    assert h("San Antonio Spurs 172.0 1.8", "1.8", ["Vencedor Do Ponto"]) == []
+    assert h("Dicas de IA San Antonio Spurs marcou mais de 120.5 pontos San Antonio Spurs total (inc OT) Acima De 120.5 1.35",
+             "1.35", []) == []
+    assert h("Abaixo De 110.5 2.32", "2.32", ["Menos Mais", "Totais. 2º tempo"])[0]["periodo"] == "t2"
+    assert h("San Antonio Spurs -1.5 1.97", "1.97", ["San Antonio Spurs Golden State Warriors", "Handicap. 4º quarto"]) == []
+    assert h("Nenhum 25 5.37", "5.37", ["4º quarto. Corrida até N pontos"]) == []

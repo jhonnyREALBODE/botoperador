@@ -323,8 +323,9 @@ def periodo_de_texto(txt):
     return None
 
 
-_RX_RELOGIO = re.compile(r"\b([1-4])\s*[º°ªo]?\s*(?:quarto|quarter|q)\b\s*[-–:]?\s*(\d{1,2})\s*['’]", re.I)
-_RX_RELOGIO2 = re.compile(r"\bq([1-4])\s*[-–:]?\s*(\d{1,2})\s*['’]", re.I)
+_RX_RELOGIO = re.compile(r"\b([1-4])\s*[º°ªo]?\s*(?:quarto|quarter|q)\b\s*[-–:]?\s*(\d{1,2})\s*['’`´]", re.I)
+_RX_RELOGIO2 = re.compile(r"\bq([1-4])\s*[-–:]?\s*(\d{1,2})\s*['’`´]", re.I)
+_RX_RELOGIO_TEMPO = re.compile(r"\b([12])\s*[º°ªo]?\s*(?:tempo|half|metade)\b\s*[-–:]?\s*(\d{1,2})\s*['’`´]", re.I)
 _RX_INTERVALO = re.compile(r"\b(intervalo|half ?time|halftime)\b", re.I)
 
 
@@ -334,6 +335,9 @@ def quarto_atual(texto_pagina):
     m = _RX_RELOGIO.search(t) or _RX_RELOGIO2.search(t)
     if m:
         return int(m.group(1))
+    m = _RX_RELOGIO_TEMPO.search(t)  # jogo em tempos (NCAA): 2º tempo = 1º tempo encerrado
+    if m:
+        return 1 if m.group(1) == "1" else 3
     if _RX_INTERVALO.search(t):
         return 2.5
     return None
@@ -594,7 +598,7 @@ def cenarios(bil):
 
 # ---------------------------------------------------------------- MOTOR-LEITOR (JS)
 SEL_CUPOM_PADRAO = {
-    CASA_1W: '[class*="coupon" i], [class*="betslip" i], [class*="bet-slip" i], [class*="cupom" i], [id*="coupon" i]',
+    CASA_1W: '[data-scope="Betslip"], [class*="coupon" i], [class*="betslip" i], [class*="bet-slip" i], [class*="cupom" i]',
     CASA_PS: '[class*="betslip" i], [class*="bet-slip" i], [class*="boletim" i], [id*="betslip" i], [class*="coupon" i]',
 }
 
@@ -631,6 +635,11 @@ JS_ENUMERAR = r"""
     if ((e.closest('[aria-disabled="true"],[disabled],.locked,.blocked,.suspended'))) continue;
     folhas.push(e);
   }
+  // mesmo botão com dois números "com cara de odd" (ex.: linha 4.5 + odd 1.980): a odd é o ÚLTIMO
+  for (let i = folhas.length - 1; i >= 0; i--) {
+    const b = folhas[i].closest('a, button, [role=button]');
+    if (b && folhas.some((g, k) => k > i && b.contains(g))) folhas.splice(i, 1);
+  }
   const conta = el => folhas.reduce((n, f) => n + (el.contains(f) ? 1 : 0), 0);
   const clicavel = e => {
     if (['BUTTON','A','TD'].includes(e.tagName)) return true;
@@ -642,21 +651,22 @@ JS_ENUMERAR = r"""
   const cabecalhos = alvo => {
     const hs = [];
     let filho = alvo;
+    // barra de navegação (abas) não é cabeçalho de seção: tem vários botões/abas dentro
+    const eBarra = e => e.querySelectorAll('button, [role=tab], a').length >= 3;
     for (let a = alvo.parentElement, n = 0; a && a !== document.body && n < 14; filho = a, a = a.parentElement, n++) {
-      let achou = '';
+      const nivel = [];
       for (const irm of a.children) {
-        if (irm === filho) break;
-        if (irm.contains(alvo)) break;
+        if (irm === filho || irm.contains(alvo)) break;
         const tx = curto(irm.innerText);
         if (!tx || tx.length > 90) continue;
-        if (folhas.some(f => irm.contains(f))) continue;
-        achou = tx;
+        if (folhas.some(f => irm.contains(f)) || eBarra(irm)) continue;
+        nivel.push(tx);
       }
-      if (!achou) {
+      if (!nivel.length) {
         const h = a.getAttribute('aria-label') || a.getAttribute('data-title') || '';
-        if (h && h.length <= 90) achou = curto(h);
+        if (h && h.length <= 90) nivel.push(curto(h));
       }
-      if (achou) hs.push(achou);
+      for (const tx of nivel.reverse().slice(0, 2)) hs.push(tx);  // o mais perto primeiro
     }
     return hs;
   };
@@ -682,13 +692,57 @@ JS_ENUMERAR = r"""
       if (!hr && tab) hr = tab.rows[0] !== tr ? tab.rows[0] : null;
       if (hr) { hdrs = Array.from(hr.cells).map(c => curto(c.innerText)); col = hdrs[ci] || ''; }
     }
+    // PS: o <a> da odd carrega id "evento|período|mercado|lado|alt|linha"
+    const a = f.closest('a[id]') || alvo.querySelector('a[id]');
+    const aid = a && /^\d+\|\d+\|\d+\|\d+\|/.test(a.id) ? a.id : '';
+    const caixa = a ? a.parentElement : null;
+    const travado = !!(caixa && caixa.querySelector(':scope > .style-lock:not(.lock-hidden)'));
+    const tr = f.closest('tr');
+    const nt = tr && tr.querySelector('[data-home-team]');
+    const casaTimes = nt ? [nt.getAttribute('data-home-team'), nt.getAttribute('data-away-team')] : null;
     mid += 1;
     alvo.setAttribute('data-mid', String(mid));
     out.push({mid: String(mid), odd: curto(f.textContent), txt: curto(alvo.innerText),
-              seg: curto(seg.innerText), linha, col, ci, hdrs,
+              seg: curto(seg.innerText), linha, col, ci, hdrs, aid, travado, casa_times: casaTimes,
               heads: cabecalhos(td ? td.closest('table') || alvo : seg)});
   }
   return out;
+}
+"""
+
+JS_ITENS_CUPOM = r"""
+([sc, si]) => {
+  const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  const cups = Array.from(document.querySelectorAll(sc));
+  const out = [];
+  for (const c of cups) for (const e of c.querySelectorAll(si)) if (vis(e) && !out.some(o => o.contains(e))) out.push(e);
+  document.querySelectorAll('[data-item-cupom]').forEach(e => e.removeAttribute('data-item-cupom'));
+  if (!out.length) {
+    const MERC = /(acima|abaixo|mais|menos|over|under|handicap|total|-vs-|\s[-—]\s)/i;
+    const ODD = /(^|\s)(\d{1,2}[.,]\d{2,3})(\s|$)/;
+    const cand = [];
+    for (const c of cups) for (const e of c.querySelectorAll('*')) {
+      if (!vis(e) || e.tagName === 'INPUT') continue;
+      const t = (e.innerText || '').trim();
+      if (!t || t.length > 400) continue;
+      if (/evento exclu[ií]do|event (excluded|removed)/i.test(t)) { cand.push(e); continue; }  // seleção morta também é seleção
+      const m = t.match(ODD);
+      if (!m || parseFloat(m[2].replace(',', '.')) < 1.01) continue;
+      if (!MERC.test(t)) continue;
+      if (/selecione um resultado|cota[cç][oõ]es a partir|b[oô]nus|possível vitória|quantia/i.test(t)) continue;
+      cand.push(e);
+    }
+    for (const e of cand) if (!cand.some(o => o !== e && e.contains(o))) {
+      // sobe até o cartão: o maior ancestral que ainda contém só esta seleção
+      let card = e;
+      while (card.parentElement && !cups.includes(card.parentElement) &&
+             cand.filter(o => card.parentElement.contains(o) && !cand.some(x => x !== o && o.contains(x))).length === 1 &&
+             (card.parentElement.innerText || '').length < 400) card = card.parentElement;
+      if (!out.some(o => o.contains(card) || card.contains(o))) out.push(card);
+    }
+  }
+  out.forEach((e, i) => e.setAttribute('data-item-cupom', String(i + 1)));
+  return out.map(e => e.innerText);
 }
 """
 
@@ -740,10 +794,10 @@ def _cab_familia(heads, times):
     fam = None
     per = None
     for i, h in enumerate(heads):
-        if re.search(r"\d+\s*['’]", h) and quarto_atual(h):
+        if re.search(r"\d+\s*['’`´]", h) and quarto_atual(h):
             continue  # relógio do jogo não é cabeçalho de seção
         hn = _sem_acento(h)
-        if fam is None and i < 3:
+        if i < 2 or (fam is None and i < 3):
             if _RX_NAO_LINHA.search(hn):
                 return None, None, True
             if times and re.search(r"\btotal", hn, re.I) and any(_nome_bate(h2, t) for t in times for h2 in _pedacos(h)):
@@ -777,8 +831,14 @@ def ofertas_de_enumeracao(itens, casa, times, quarto=None, aba=""):
         if odd is None or odd < 1.01:
             continue
         heads = it.get("heads") or []
+        if it.get("travado"):
+            continue  # odd com cadeado (offline) não é clicável
         o = None
-        if it.get("linha") and it.get("hdrs"):
+        if it.get("aid"):
+            o = _oferta_id_ps(it, times)
+            if o is None:
+                continue
+        elif it.get("linha") and it.get("hdrs"):
             o = _oferta_tabela(it, odd, heads, times)
         if o is None:
             o = _oferta_segmento(it, odd, heads, times)
@@ -798,6 +858,44 @@ def ofertas_de_enumeracao(itens, casa, times, quarto=None, aba=""):
         vistos.add(chave)
         out.append(o)
     return out
+
+
+_PS_PERIODOS = {0: "jogo", 1: "t1", 2: "t2", 3: "q1", 4: "q2", 5: "q3", 6: "q4"}
+
+
+def _oferta_id_ps(it, times):
+    """PS3838 real: <a id="evento|período|mercado|lado|alt|linha">. Mercado 2 = handicap
+    (lado 0 = casa, 1 = visitante; a linha já vem com o sinal do próprio time);
+    mercado 3 = total (lado 3 = acima, 4 = abaixo). Período 0 jogo, 1/2 tempos, 3..6 quartos.
+    A tela mostra só '38.5' no mandante e 'u' no abaixo — a verdade está no id."""
+    partes = it["aid"].split("|")
+    if len(partes) < 6:
+        return None
+    try:
+        per = _PS_PERIODOS.get(int(partes[1]))
+        mercado, lado, linha = int(partes[2]), int(partes[3]), float(partes[5])
+    except ValueError:
+        return None
+    if per is None:
+        return None
+    # deslogado / sem odd: o único número do botão é a própria linha — nunca vira odd
+    nums_seg = _numeros(it.get("seg") or "")
+    odd = _num(it.get("odd"))
+    if odd is None or (len(nums_seg) <= 1 and abs(odd - abs(linha)) < 1e-9):
+        return None
+    src = "%s [%s]" % (it.get("seg") or "", it["aid"])
+    if mercado == 3 and lado in (3, 4):
+        return {"tipo": "total", "periodo": per, "lado": "acima" if lado == 3 else "abaixo", "linha": abs(linha),
+                "time": None, "time_idx": None, "_src": src}
+    if mercado == 2 and lado in (0, 1):
+        ct = it.get("casa_times") or []
+        nome = ct[lado] if len(ct) > lado and ct[lado] else (times[lado] if times and len(times) > lado else "")
+        ti = _idx_time(nome, times)
+        if ti is None:
+            return None
+        return {"tipo": "handicap", "periodo": per, "lado": "time%d" % ti, "linha": linha,
+                "time": times[ti], "time_idx": ti, "_src": src}
+    return None
 
 
 def _oferta_tabela(it, odd, heads, times):
@@ -849,7 +947,9 @@ def _oferta_segmento(it, odd, heads, times):
     if bloq:
         return None
     segn = _sem_acento(seg)
-    if _RX_NAO_LINHA.search(segn) and fam is None:
+    if _RX_NAO_LINHA.search(segn):
+        return None  # o próprio bloco do botão é Dicas de IA / Vencedor do Ponto / total de equipe…
+    if times and re.search(r"\btotal", segn, re.I) and any(_nome_bate(p, t) for t in times for p in _pedacos(segn.split("\n")[0])):
         return None
     rotulos = list(_RX_LADO_TOTAL.finditer(segn))
     if rotulos and fam != "handicap":
@@ -872,16 +972,16 @@ def _oferta_segmento(it, odd, heads, times):
         return {"tipo": "total", "periodo": per, "lado": _lado_total(m.group(1)), "linha": linha,
                 "time": None, "time_idx": None, "_src": trecho}
     if fam == "handicap" or _RX_FAM_HCP.search(segn):
-        mh = None
-        for mm in _RX_HCP_LINHA.finditer(segn.replace("−", "-")):
-            v = _num(mm.group(1) or mm.group(2))
-            if v is not None and not (abs(v - odd) < 1e-9 and mm.group(2) is None and mm.group(1) is None):
-                mh = (v, mm)
-                break
-        if not mh:
+        pos_odd = segn.rfind(it["odd"])
+        antes_odd = segn[:pos_odd] if pos_odd >= 0 else segn
+        nums = list(re.finditer(r"[-+\u2212]?\s?\d{1,2}(?:[.,]\d{1,2})?(?![\d.,])", antes_odd))
+        if not nums:
             return None
-        linha = mh[0]
-        antes = segn[:mh[1].start()]
+        mm = nums[-1]
+        linha = _num(mm.group(0).replace(" ", ""))
+        if linha is None or abs(linha) > 60:
+            return None
+        antes = antes_odd[:mm.start()].strip(" ([")
         ti = _idx_time(antes, times)
         if ti is None:
             mt = re.search(r"\b(?:h|handicap\s*)?([12])\b", antes, re.I)
@@ -890,7 +990,8 @@ def _oferta_segmento(it, odd, heads, times):
         if ti is None:
             return None
         return {"tipo": "handicap", "periodo": per, "lado": "time%d" % ti, "linha": linha,
-                "time": times[ti] if times and ti < len(times) else "time%d" % (ti + 1), "time_idx": ti, "_src": seg}
+                "time": times[ti] if times and ti < len(times) else "time%d" % (ti + 1), "time_idx": ti,
+                "_src": segn[:pos_odd + len(it["odd"])] if pos_odd >= 0 else seg}
     return None
 
 
@@ -1006,7 +1107,7 @@ _RX_DESLOGADO = re.compile(r"\b(entrar|login|iniciar sess[aã]o|fazer login|sign
 _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado (fechado|encerrado)|market closed", re.I)
 _RX_REMOVER_TUDO = re.compile(r"^\s*(remover tudo|remove all|limpar tudo|clear all|apagar tudo)\s*$", re.I)
 _RX_OK_MODAL = re.compile(r"^\s*(ok|sim|confirmar|yes)\s*$", re.I)
-_RX_APOSTAR = re.compile(r"^\s*(fazer (a )?aposta|apostar|place bet|confirmar aposta|realizar aposta)\b", re.I)
+_RX_APOSTAR = re.compile(r"^\s*(fazer (a |uma )?aposta|apostar|place bet|confirmar aposta|realizar aposta)\b", re.I)
 _RX_SUCESSO = re.compile(r"aposta (aceita|feita|realizada|registrada)|bet (accepted|placed)", re.I)
 
 
@@ -1331,14 +1432,10 @@ class Casa:
 
     # -------------------------------------------------- cupom / boletim
     def itens_cupom(self):
-        return self._eval("""([sc, si]) => {
-            const out = [];
-            for (const c of document.querySelectorAll(sc)) for (const e of c.querySelectorAll(si)) {
-                const r = e.getBoundingClientRect();
-                if (r.width > 0 && r.height > 0 && !out.some(o => o.contains(e))) out.push(e);
-            }
-            return out.map(e => e.innerText);
-        }""", [self.sel_cupom, self.sel_item])
+        """Seleções no cupom. Pelo seletor de item; se ele não achar nada (classes
+        embaralhadas, como na 1aWin), pela forma: o MENOR bloco do cupom que tem um
+        rótulo de mercado E uma odd. Cupom vazio ('Selecione um resultado') = []."""
+        return self._eval(JS_ITENS_CUPOM, [self.sel_cupom, self.sel_item])
 
     def texto_cupom(self):
         return self._eval("""(sc) => Array.from(document.querySelectorAll(sc))
@@ -1372,6 +1469,28 @@ class Casa:
             except Exception:
                 pass
         return clicou
+
+    def _clicar_icone_do_item(self):
+        """O ✕ da seleção na 1aWin é um botão só com ícone (sem texto, classe embaralhada):
+        clica o botão-ícone de cada cartão de seleção do cupom."""
+        self.itens_cupom()
+        n = self._eval("""() => {
+            document.querySelectorAll('[data-alvo-x]').forEach(e => e.removeAttribute('data-alvo-x'));
+            let n = 0;
+            for (const card of document.querySelectorAll('[data-item-cupom]')) {
+                const bts = Array.from(card.querySelectorAll('button, [role=button], svg')).map(b => b.closest('button,[role=button]') || b)
+                    .filter(b => !(b.innerText || '').trim());
+                if (bts.length) { n++; bts[0].setAttribute('data-alvo-x', String(n)); }
+            }
+            return n;
+        }""")
+        for i in range(1, (n or 0) + 1):
+            try:
+                self.clicar_firme(self.page.locator('[data-alvo-x="%d"]' % i).first)
+                self.page.wait_for_timeout(200)
+            except Exception:
+                pass
+        return n
 
     def _modal_ok(self):
         for _ in range(10):
@@ -1409,7 +1528,8 @@ class Casa:
                     return True
             return False
         for _ in range(5):
-            self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|cancelar|remove|delete|cancel|limpar tudo|remover tudo)$", True)
+            if not self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|cancelar|remove|delete|cancel|limpar tudo|remover tudo)$", True):
+                self._clicar_icone_do_item()
             self._modal_ok_rapido()
             if self.esperar_cupom_vazio(1.5):
                 return True
@@ -1454,7 +1574,7 @@ class Casa:
             tx = self.texto()
             q = quarto_atual(tx)
             ofs = ofertas_de_enumeracao(itens, self.nome, times, q)
-            if not itens and _RX_DESLOGADO.search(tx):
+            if not ofs and _RX_DESLOGADO.search(tx):
                 r["motivo"] = "PS deslogada — odds escondidas para visitante (rode 1-LOGIN.bat)"
                 return r
         else:
@@ -1649,6 +1769,9 @@ class Casa:
         fim = time.time() + 4
         while time.time() < fim:
             self.page.wait_for_timeout(250)
+            if _RX_EXCLUIDO.search(self.texto_cupom() or ""):
+                ok, mot = False, "cupom mostra 'Evento excluído' — mercado encerrado, perna morta"
+                break
             if self.itens_cupom():
                 ok, mot = self.conferir_cupom(perna)
                 if ok or "Evento exclu" in mot:
@@ -1675,7 +1798,7 @@ class Casa:
 
     def confirmar(self):
         """Só no modo real. Clica em apostar dentro do cupom e espera a confirmação."""
-        if self._clicar_no_cupom(r"^(fazer (a )?aposta|apostar|place bet|confirmar aposta|realizar aposta)") == 0:
+        if self._clicar_no_cupom(r"^(fazer (a |uma )?aposta|apostar|place bet|confirmar aposta|realizar aposta)") == 0:
             return {"ok": False, "motivo": "botão de apostar não encontrado", "foto": self.foto("confirmar")}
         self._modal_ok_rapido()
         fim = time.time() + 15
@@ -2279,8 +2402,8 @@ def _calib_listar_jogos(c):
             c.ir(lg["url"])
 
             def linhas_da_liga():
-                return c._eval(r"""() => Array.from(document.querySelectorAll('a[href*="/match/"], [class*="event" i], [class*="match" i], [class*="game" i], [class*="row" i]'))
-                    .filter(e => e.tagName === 'A' || getComputedStyle(e).cursor === 'pointer')
+                return c._eval(r"""() => Array.from(document.querySelectorAll('[data-scope*="Team" i], a[href*="/match/"], [class*="event" i], [class*="match" i], [class*="game" i], [class*="row" i]'))
+                    .filter(e => e.tagName === 'A' || e.hasAttribute('data-scope') || getComputedStyle(e).cursor === 'pointer')
                     .map(e => (e.innerText || '').trim()).filter(t => t && t.length < 200)""")
             linhas = c._sondar(linhas_da_liga, 6) or []
             achou = False

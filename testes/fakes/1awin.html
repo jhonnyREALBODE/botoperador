@@ -1,71 +1,79 @@
 <!doctype html><html><head><meta charset="utf-8"><title>1aWin (falsa)</title>
-<style>body{font-family:Arial;margin:0;display:flex}#app{flex:1;padding:10px}.coupon{width:300px;border-left:1px solid #ccc;padding:10px;min-height:400px}
-.odd-btn{display:inline-flex;gap:8px;border:1px solid #999;margin:3px;padding:4px 8px;cursor:pointer}.mk{margin:8px 0}.mk-title{font-weight:bold}
-.sec-title{font-size:18px;background:#eee;margin-top:10px}.event-row{cursor:pointer;border:1px solid #ddd;margin:4px;padding:6px}
-.tab{display:inline-block;padding:4px 10px;cursor:pointer;border:1px solid #aaa}.cp-sel{border:1px solid #888;margin:4px 0;padding:4px}.x{cursor:pointer;float:right}</style>
+<style>body{font-family:Arial;margin:0;display:flex}#app{flex:1;padding:10px}._side_x9{width:320px;border-left:1px solid #ccc;padding:10px;min-height:400px}
+._btn_q1{display:inline-flex;gap:8px;border:1px solid #999;margin:3px;padding:4px 8px;cursor:pointer;background:#fff}._mk_a1{margin:8px 0;border:1px solid #eee}._t_a1{font-weight:bold}
+._evt_r9{cursor:pointer;border:1px solid #ddd;margin:4px;padding:6px}._tab_k2{display:inline-block;padding:4px 10px;cursor:pointer;border:1px solid #aaa}
+._card_c7{border:1px solid #888;margin:4px 0;padding:4px}._ico_z3{width:16px;height:16px;cursor:pointer;float:right;border:0;background:#eee}</style>
 <script>const ESTADO = __ESTADO__;</script><script src="/fakes/dados.js"></script></head><body>
 <div id="app"></div>
-<div class="coupon"><b>Cupom</b><div id="sels"></div><div>Valor: <input id="stake" type="text"></div><button id="apostar">Fazer aposta</button><div id="msg"></div></div>
+<aside class="_side_x9"><p class="_title_16m5v_36">Cupom de apostas</p><div class="_amount_1ch79_13">BRL&nbsp;0,00</div>
+<div data-scope="Betslip" class="_root_1j176_2" id="slip"></div></aside>
 <script>
 const p = location.pathname;
 const app = document.getElementById('app');
 let sel = null;
 function renderCupom() {
-  const s = document.getElementById('sels'); s.innerHTML = '';
-  if (!sel) return;
-  const d = document.createElement('div'); d.className = 'cp-sel';
-  if (sel.morto) {
-    d.innerHTML = '<div>' + sel.jogo + '</div><div>Evento excluído</div><button class="cancelar">Cancelar</button>';
-    d.querySelector('.cancelar').onclick = () => { sel = null; renderCupom(); };
-  } else {
-    d.innerHTML = '<span class="x">×</span><div>' + sel.jogo + '</div><div>' + sel.mk + ': ' + sel.rot + '</div><div><b>' + sel.odd + '</b></div>';
-    d.querySelector('.x').onclick = () => { sel = null; renderCupom(); };
+  const s = document.getElementById('slip'); s.innerHTML = '';
+  if (!sel) {
+    s.innerHTML = '<div class="_root_20z5t_2"><p class="_title_20z5t_13">Selecione um resultado para fazer uma aposta</p>' +
+      '<form><input class="_input_1yqxh_36" placeholder="Código da aposta"><button type="submit" disabled>Ver aposta</button></form></div>';
+    return;
   }
+  const d = document.createElement('div'); d.className = '_card_c7';
+  if (sel.morto) {
+    d.innerHTML = '<div>' + sel.jogo + '</div><div>Evento excluído</div><button class="_b_m1">Cancelar</button>';
+    d.querySelector('button').onclick = () => { sel = null; renderCupom(); };
+    s.appendChild(d);
+    return;
+  }
+  d.innerHTML = '<div class="_head_p2"><span>77 : 49</span> <span>' + sel.jogo + '</span><button type="button" class="_ico_z3"><svg width="10" height="10"><path d="M0 0L10 10"/></svg></button></div>' +
+    '<div><span>' + sel.mk + ', ' + sel.rot + '</span> <span class="_cf_17if8_2">' + sel.odd + '</span></div>';
+  d.querySelector('button').onclick = () => { sel = null; renderCupom(); };
   s.appendChild(d);
+  const f = document.createElement('div');
+  f.innerHTML = '<div class="_x_b2">Adicione 4 resultados com cotações a partir de 1.25 para receber um bônus de ganho de 7%</div>' +
+    '<div><input class="_input_q8" placeholder="Quantia da aposta" type="text"> <span>MAX</span></div><div>Possível vitória BRL 0,00</div>' +
+    '<button type="button" class="_acc_x1">Fazer uma aposta</button><div id="msg"></div>';
+  f.querySelector('._acc_x1').onclick = () => { document.getElementById('msg').textContent = 'Aposta aceita'; };
+  s.appendChild(f);
 }
-document.getElementById('apostar').onclick = () => { if (sel && !sel.morto) document.getElementById('msg').textContent = 'Aposta aceita'; };
+renderCupom();
 if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
   app.innerHTML = '<h2>Basquete ao vivo</h2>' + (ESTADO.feed_vazio ? '' : LIGAS1W.map(l => '<div><a href="/betting/live/basketball-23/' + l[0] + '">' + l[1] + ' <span>' + l[2].length + '</span></a></div>').join(''));
 } else if (p.match(/\/betting\/live\/basketball-23\/(.+)$/)) {
   const lg = LIGAS1W.find(l => l[0] === p.split('/').pop());
   app.innerHTML = '<h2>' + (lg ? lg[1] : '?') + '</h2>';
   (lg ? lg[2] : []).forEach(id => {
-    const j = JOGOS[id]; const r = document.createElement('div'); r.className = 'event-row';
-    r.innerHTML = '<div>' + j.c1 + '</div><div>' + j.c2 + '</div><div>' + relogio() + '</div>';
+    const j = JOGOS[id]; const r = document.createElement('div'); r.className = '_evt_r9';
+    r.innerHTML = '<div data-scope="TeamNames"><div>' + j.c1 + '</div><div>' + j.c2 + '</div></div><div>' + relogio() + '</div>';
     r.onclick = () => { location.href = '/betting/match/sport/' + j.t1.toLowerCase().replace(/\W+/g, '-') + '-vs-' + j.t2.toLowerCase().replace(/\W+/g, '-') + '-' + id; };
     app.appendChild(r);
   });
 } else if (p.match(/\/betting\/match\//)) {
   const id = p.split('-').pop(); const j = JOGOS[id];
-  const mortos = []; const q = qAtual(); if (q >= 2) mortos.push('1º Quarto');
-  app.innerHTML = '<div class="hdr"><h2>' + j.t1 + ' — ' + j.t2 + '</h2><div class="clock">' + relogio() + '</div></div>' +
-    '<div class="tabs"><div class="tab" role="tab">Todos</div><div class="tab" role="tab">Principal</div><div class="tab" role="tab">Quartos</div></div><div id="mks"></div>';
+  const q = qAtual(); const mortos = q >= 2 ? ['Totais. 1º quarto'] : [];
+  app.innerHTML = '<div>Voltar</div><div>/ EUA. NBA</div><div><div>' + j.t1 + '</div><div>99</div><div>62</div><div>' + j.t2 + '</div></div>' +
+    '<div><div>' + relogio() + '</div><div>' + j.t1 + '</div><div>' + j.t2 + '</div></div>' +
+    '<div class="_tabs_w1"><button role="tab" class="_tab_k2">Todos</button><button role="tab" class="_tab_k2">Principal</button><button role="tab" class="_tab_k2">Quartos</button>' +
+    '<button role="tab" class="_tab_k2">Handicap</button><button role="tab" class="_tab_k2">Totais</button><button role="tab" class="_tab_k2">Corrida até</button></div>' +
+    '<div class="_dica_d1"><div>Dicas de IA</div><div>' + j.t1 + ' marcou mais de 120.5 pontos em 6 das últimas 10 partidas</div><div>' + j.t1 + ' total (inc OT)</div>' +
+    '<button type="button" class="_btn_q1"><span>Acima De 120.5</span><span>1.35</span></button></div><div id="mks"></div>';
   const mks = document.getElementById('mks');
-  let secAtual = null;
-  for (const [sec, mk, btns] of mercados1w(j)) {
-    let alvo = mks;
-    if (sec) {
-      if (!secAtual || secAtual.dataset.n !== sec) {
-        secAtual = document.createElement('div'); secAtual.className = 'sec'; secAtual.dataset.n = sec;
-        secAtual.innerHTML = '<div class="sec-title">' + sec + '</div>'; mks.appendChild(secAtual);
-      }
-      alvo = secAtual;
-    }
-    const m = document.createElement('div'); m.className = 'mk';
-    m.innerHTML = '<div class="mk-title">' + mk + '</div><div class="mk-body"></div>';
+  for (const [mk, cols, btns] of mercados1w(j)) {
+    const m = document.createElement('div'); m.className = '_mk_a1';
+    m.innerHTML = '<div class="_t_a1">' + mk + '</div>' + (cols.length ? '<div class="_cols_e4">' + cols.map(c => '<span>' + c + '</span>').join(' ') + '</div>' : '') + '<div class="_body_r2"></div>';
     for (const [rot, odd] of btns) {
-      const b = document.createElement('div'); b.className = 'odd-btn';
-      b.innerHTML = '<span>' + rot + '</span><span class="v">' + odd + '</span>';
+      const b = document.createElement('button'); b.type = 'button'; b.className = '_btn_q1';
+      b.innerHTML = '<span class="_name_1hbh7_36">' + rot + '</span><span class="_cf_17if8_2">' + odd + '</span>';
       b.onclick = () => {
-        if (sel && sel.rot === rot && sel.mk === (sec ? sec + ' ' : '') + mk) { sel = null; renderCupom(); return; }
-        sel = {jogo: j.t1 + ' — ' + j.t2, mk: (sec ? sec + ' ' : '') + mk, rot, odd, morto: mortos.includes(sec)};
+        if (sel && sel.rot === rot && sel.mk === mk) { sel = null; renderCupom(); return; }
+        sel = {jogo: j.t1 + ' - ' + j.t2, mk, rot, odd, morto: mortos.includes(mk)};
         renderCupom();
       };
-      m.querySelector('.mk-body').appendChild(b);
+      m.querySelector('._body_r2').appendChild(b);
     }
-    alvo.appendChild(m);
+    mks.appendChild(m);
   }
-  if (ESTADO.sujo) { sel = {jogo: 'Outro x Jogo', mk: 'Total', rot: 'Acima de (150.5)', odd: '1.90'}; renderCupom(); }
-  if (ESTADO.cupom_preso) { sel = {jogo: 'Outro x Jogo', morto: true}; renderCupom(); }
+  if (ESTADO.sujo) { sel = {jogo: 'Outro - Jogo', mk: 'Totais (inc OT)', rot: 'Acima De 150.5', odd: '1.90'}; renderCupom(); }
+  if (ESTADO.cupom_preso) { sel = {jogo: 'Outro - Jogo', morto: true}; renderCupom(); }
 }
 </script></body></html>
