@@ -715,7 +715,7 @@ JS_ITENS_CUPOM = r"""
   const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   const cups = Array.from(document.querySelectorAll(sc));
   const out = [];
-  for (const c of cups) for (const e of c.querySelectorAll(si)) if (vis(e) && !out.some(o => o.contains(e))) out.push(e);
+  if (si) for (const c of cups) for (const e of c.querySelectorAll(si)) if (vis(e) && !out.some(o => o.contains(e))) out.push(e);
   document.querySelectorAll('[data-item-cupom]').forEach(e => e.removeAttribute('data-item-cupom'));
   if (!out.length) {
     const MERC = /(acima|abaixo|mais|menos|over|under|handicap|total|-vs-|\s[-—]\s)/i;
@@ -742,6 +742,7 @@ JS_ITENS_CUPOM = r"""
     }
   }
   out.forEach((e, i) => e.setAttribute('data-item-cupom', String(i + 1)));
+  window.__idsCupom = out.map(e => e.getAttribute('data-id') || (e.querySelector('[data-id]') || {getAttribute: () => ''}).getAttribute('data-id') || '');
   return out.map(e => e.innerText);
 }
 """
@@ -826,7 +827,10 @@ def ofertas_de_enumeracao(itens, casa, times, quarto=None, aba=""):
     mortos = periodos_encerrados(quarto)
     out = []
     vistos = set()
+    tem_id = any(it.get("aid") for it in itens)
     for it in itens:
+        if tem_id and not it.get("aid"):
+            continue  # PS: a verdade está no id do botão; célula solta (ex.: coluna HDP) não é odd
         odd = _num(it["odd"])
         if odd is None or odd < 1.01:
             continue
@@ -886,7 +890,7 @@ def _oferta_id_ps(it, times):
     src = "%s [%s]" % (it.get("seg") or "", it["aid"])
     if mercado == 3 and lado in (3, 4):
         return {"tipo": "total", "periodo": per, "lado": "acima" if lado == 3 else "abaixo", "linha": abs(linha),
-                "time": None, "time_idx": None, "_src": src}
+                "time": None, "time_idx": None, "_src": src, "_aid": it["aid"]}
     if mercado == 2 and lado in (0, 1):
         ct = it.get("casa_times") or []
         nome = ct[lado] if len(ct) > lado and ct[lado] else (times[lado] if times and len(times) > lado else "")
@@ -894,7 +898,7 @@ def _oferta_id_ps(it, times):
         if ti is None:
             return None
         return {"tipo": "handicap", "periodo": per, "lado": "time%d" % ti, "linha": linha,
-                "time": times[ti], "time_idx": ti, "_src": src}
+                "time": times[ti], "time_idx": ti, "_src": src, "_aid": it["aid"]}
     return None
 
 
@@ -1197,8 +1201,9 @@ class Casa:
         self.limitada = False
         self.jogo = {}           # {"times": [...], "url": ..., "liga": ..., "times_casa": [...]}
         self.sel_cupom = cfg.get("seletor_cupom_" + ("1awin" if nome == CASA_1W else "ps")) or SEL_CUPOM_PADRAO[nome]
-        self.sel_item = ('[class*="selection" i], [class*="bet-item" i], [class*="betslip-item" i], '
-                         '[class*="coupon-item" i], [class*="cp-sel" i], [class*="slip-sel" i]')
+        # PS real: cada seleção é um .BetItemComponent (data-id = id do botão). 1aWin: classes
+        # embaralhadas -> sem seletor, vale a heurística (menor bloco com mercado + odd).
+        self.sel_item = ('[class*="BetItemComponent"], [class*="slip-sel" i]' if nome == CASA_PS else "")
         self.thread = threading.Thread(target=self._laco, name="casa-" + nome, daemon=True)
 
     @property
@@ -1570,6 +1575,7 @@ class Casa:
                 self.dump_diag("ps_nao_e_jogo")
                 return r
             self.expandir()
+            self._sondar(lambda: self._eval("() => document.querySelectorAll('a.odds span, a[id*=\"|\"] span').length > 0"), 8)
             itens = self.enumerar()
             tx = self.texto()
             q = quarto_atual(tx)
@@ -1584,6 +1590,9 @@ class Casa:
                 return r
             q = quarto_atual(tx)
             ofs = []
+            # a página do jogo aparece antes dos mercados: espera os botões de odd carregarem
+            self._sondar(lambda: self._eval(r"""() => Array.from(document.querySelectorAll('button, [role=button]'))
+                .some(b => /\d{1,2}[.,]\d{1,3}\s*$/.test((b.innerText || '').trim()))"""), 8)
             abas = self._abas()
             todos = [a for a in abas if re.match(r"^(todos|all|tudo)\b", a, re.I)]
             if todos:
@@ -1687,6 +1696,13 @@ class Casa:
         if len(itens) != 1:
             return False, "cupom com %d seleções (esperado 1)" % len(itens)
         it = _sem_acento(itens[0])
+        if perna.get("_aid"):
+            ids = self._eval("() => window.__idsCupom || []") or []
+            if ids and ids[0]:
+                a, b = ids[0].split("|"), perna["_aid"].split("|")
+                mesma = len(a) >= 6 and len(b) >= 6 and a[:4] == b[:4] and abs(float(a[5]) - float(b[5])) < 1e-6
+                if not mesma:
+                    return False, "boletim tem outra seleção (%s ≠ %s)" % (ids[0], perna["_aid"])
         if not _coexiste(perna["linha"], it, usar_abs=True):
             return False, "cupom sem a linha %s" % _fmt_linha(perna["linha"])
         odds = [v for v in _numeros(it) if 1.01 <= v <= 30 and abs(v - abs(perna["linha"])) > 1e-9]
@@ -2417,6 +2433,8 @@ def _calib_listar_jogos(c):
             linhas = c._sondar(linhas_da_liga, 6) or []
             achou = False
             for t in linhas:
+                if re.search(r"finalizado|encerrado|temporariamente", t, re.I):
+                    continue
                 partes = [p.strip() for p in re.split(r"\n|\s+(?:—|–|vs\.?|x)\s+", t)
                           if len(p.strip()) >= 3 and not re.match(r"^[\d\s.:'’`´,-]+$", p.strip()) and not _e_status_jogo(p)]
                 if len(partes) >= 2 and not any(_mesmo_jogo(partes[:2], t) for _, t in jogos):

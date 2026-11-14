@@ -171,11 +171,11 @@ def test_stake_ps_com_ponto_e_lida_de_volta(casas):
     perna = dict(o, stake=31.0)
     r = cps.executar(cps.montar, perna, TIMES)
     assert r["ok"], r
-    v = cps.executar(lambda: cps.page.locator(".betslip input").input_value())
+    v = cps.executar(lambda: cps.page.locator(".BetItemComponent input[name=risk]").input_value())
     assert v == "5.00"
     # a vírgula que custou caro: "5,00" vira 500 na casa
     def virgula():
-        inp = cps.page.locator(".betslip input")
+        inp = cps.page.locator(".BetItemComponent input[name=risk]")
         inp.fill("")
         inp.type("5,00")
         inp.evaluate("e => { e.dispatchEvent(new Event('change', {bubbles: true})); e.blur(); }")
@@ -358,3 +358,19 @@ def test_leitura_sobrevive_a_pagina_que_troca_de_rota(site, casas):
         return c1._sondar(c1._mapa_ligas, 8)
     ligas = c1.executar(corrida)
     assert ligas and any("NBA" in l["nome"] for l in ligas)
+
+
+def test_ps_boletim_confere_pelo_id_exato(casas):
+    """Boletim real da PS: .BetItemComponent[data-id] = id do botão clicado."""
+    _, cps = ir_jogo(casas)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    assert o["_aid"].endswith("|0|3|3|1|211.5")
+    r = cps.executar(cps.montar, dict(o, stake=31.0), TIMES)
+    assert r["ok"], r
+    assert cps.executar(cps.desfazer, o)["ok"]
+    errado = dict(o, stake=31.0, _aid=o["_aid"].replace("|3|3|", "|3|4|"))  # pede o 'abaixo', clica o 'acima'
+    r = cps.executar(cps.montar, errado, TIMES)
+    assert not r["ok"] and "outra seleção" in r["motivo"]
+    assert cps.executar(cps.itens_cupom) == []

@@ -5,17 +5,25 @@ td{border:1px solid #ccc;padding:3px 6px}a.odds{display:inline-block;cursor:poin
 .jogo-lista{display:block;margin:4px;border:1px solid #ddd;padding:4px}</style>
 <script>const ESTADO = __ESTADO__;</script><script src="/fakes/dados.js"></script></head><body>
 <div id="app"></div>
-<div class="betslip"><b>Boletim</b><div id="sels"></div><div>Stake €: <input id="stake" type="text"></div>
-<button id="rem">Remover tudo</button> <button id="apostar">Fazer aposta</button><div id="msg"></div></div>
+<div class="BetslipComponent" style="width:300px;border-left:1px solid #ccc;padding:10px;min-height:400px"><div class="betslip-tab active">SIMPLES</div>
+<div class="SingleBetComponent"><div class="bet-header"><span class="remove-all" id="rem"><span class="remove-all-icon"></span><span class="remove-all-text">Remover tudo</span></span>
+<span class="refresh-all"><span class="refresh-text">Atualizar</span></span></div><div class="bet-body" id="sels"></div>
+<div class="bet-footer"><div class="total-stake"><span>Total Stake</span><span>0.00 EUR</span></div><button class="place-bet-btn" id="apostar">Fazer aposta</button><div id="msg"></div></div></div></div>
 <script>
 const p = location.pathname; const app = document.getElementById('app');
 let sel = null;
-const stake = document.getElementById('stake');
-stake.addEventListener('change', () => { const v = parseFloat(stake.value.replace(/,/g, '')); if (!isNaN(v)) stake.value = v.toFixed(2); });
 function render() {
   const s = document.getElementById('sels'); s.innerHTML = '';
   if (!sel) return;
-  s.innerHTML = '<div class="slip-sel"><div>' + sel.jogo + '</div><div>' + sel.per + ' - ' + sel.mk + '</div><div>' + sel.rot + ' @ ' + sel.odd + '</div></div>';
+  s.innerHTML = '<div class="bet-body-item"><div class="BetItemComponent" data-id="' + sel.aid + '"><div class="BetItemContent"><div class="remove-icon"></div>' +
+    '<div class="title"><div class="live-label">Ao vivo</div><div class="bet-event"><span class="team1">' + sel.t1 + '</span><span class="vs"> vs </span><span class="team2">' + sel.t2 + '</span></div></div>' +
+    '<div class="bet-extra-info">2026-11-14 ' + sel.mk + ' - ' + sel.per + ' - NBA</div><div class="team"><div class="odds-info-container"><span class="odds-info"><span class="at">@</span><span class="odds"> ' + sel.odd + '</span></span></div>' +
+    '<div class="selection-container"><span class="selection">' + sel.rot + '  </span></div></div>' +
+    '<div class="multi-stake-stretch"><input name="risk" class="input-stake stake risk" placeholder="Aposta" inputmode="decimal" type="text"><input name="win" class="input-stake stake win" placeholder="Ganho" type="text"></div>' +
+    '<div class="quick-stakes-wrapper"><button class="btn-stake">+45</button><button class="btn-stake">+225</button></div><div class="min-max-bet"><span>Aposta mín.</span><span>5.00</span><span>Aposta máx.</span><span>2,517.40</span></div></div></div></div>';
+  const stake = s.querySelector('input[name=risk]');
+  stake.addEventListener('change', () => { const v = parseFloat(stake.value.replace(/,/g, '')); if (!isNaN(v)) stake.value = v.toFixed(2); });
+  s.querySelector('.remove-icon').onclick = () => { sel = null; render(); };
 }
 document.getElementById('rem').onclick = () => {
   const m = document.createElement('div'); m.className = 'modal';
@@ -52,11 +60,11 @@ if (ESTADO.limite) {
     const odd = a.querySelector('span').innerText;
     const l = parseFloat(ln);
     let rot, mk;
-    if (mer === '3') { rot = (lado === '3' ? 'Acima ' : 'Abaixo ') + l; mk = 'Mais/Menos'; }
-    else { rot = (lado === '0' ? j.t1 : j.t2) + ' ' + (l > 0 ? '+' : '') + l; mk = 'Handicap'; }
-    sel = {jogo: j.t1 + ' -vs- ' + j.t2, per: PERS[per] || per, mk, rot, odd}; render();
+    if (mer === '3') { rot = (lado === '3' ? 'Mais de ' : 'Menos de ') + l.toFixed(1); mk = 'OU'; }
+    else { rot = (lado === '0' ? j.t1 : j.t2) + ' ' + (l > 0 ? '+' : '') + l; mk = 'HDP'; }
+    sel = {aid: a.id, t1: j.t1, t2: j.t2, per: PERS[per] || per, mk, rot, odd}; render();
   });
-  if (ESTADO.sujo) { sel = {jogo: 'Outro -vs- Jogo', per: 'Jogo', mk: 'Mais/Menos', rot: 'Acima 150.5', odd: '1.90'}; render(); }
+  if (ESTADO.sujo) { sel = {aid: '999|0|3|3|0|150.5', t1: 'Outro', t2: 'Jogo', per: 'Jogo', mk: 'OU', rot: 'Mais de 150.5', odd: '1.900'}; render(); }
 } else {
   let h = '<h2>Basquete</h2>';
   for (const id of Object.keys(JOGOS)) {
