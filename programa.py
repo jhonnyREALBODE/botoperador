@@ -2075,9 +2075,9 @@ class Casa:
             self.ir(self.url_lista())
         except Exception as e:
             return {"ok": False, "motivo": "lista da 1aWin não abriu: %s" % str(e)[:100]}
-        self.page.wait_for_timeout(800)
-        # o jogo pode já estar visível na lista
-        if self._marcar_linha_jogo(times, prefer_href="/match"):
+        # o jogo pode já estar visível na lista ao vivo (ligas abertas com os jogos dentro):
+        # espera a lista carregar de verdade — a 1aWin é lenta (caso Krosno x Inowroclaw 14/11)
+        if self._sondar(lambda: self._marcar_linha_jogo(times, prefer_href="/match"), 5.0):
             self.clicar_firme(self.page.locator('[data-alvo-jogo="1"]').first)
             r = self._sondar(teste, 8)
             if r:

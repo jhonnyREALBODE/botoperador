@@ -617,3 +617,10 @@ def test_liga_polonia_14_11_e_cyber_fora():
         assert P._e_liga_virtual(l), l
     for l in ["Polônia. 1ª Liga", "Turquia. TBL", "EUA. NBA", "Brasil. NBB"]:
         assert not P._e_liga_virtual(l), l
+
+
+def test_nomes_krosno_14_11():
+    assert P._nome_bate("MOSiR Miasto Szkla Krosno", "KKK MOSiR Krosno")
+    assert P._nome_bate("Notes Inowroclaw", "Notec Inowroclaw")
+    assert P.ordenar_ligas([{"nome": "Sérvia. KLS", "url": "a"}, {"nome": "Polônia. 1ª Liga", "url": "b"}],
+                           "Poland - 1. Liga")[0]["url"] == "b"
