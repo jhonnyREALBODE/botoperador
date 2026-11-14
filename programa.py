@@ -230,7 +230,19 @@ def _norm(s):
 
 
 _ALIAS_TOKENS = {"sao": "san", "santo": "san", "saint": "san", "st": "san", "sankt": "san",
-                 "lourenco": "lorenzo", "jose": "jose", "atletico": "atletico", "atl": "atletico"}
+                 "lourenco": "lorenzo", "jose": "jose", "atletico": "atletico", "atl": "atletico",
+                 # apelidos que a 1aWin traduz para o português (caso 'Ursos Stella Artois Leuven' = 'Leuven Bears')
+                 "ursos": "bears", "urso": "bears", "aguias": "eagles", "aguia": "eagles", "leoes": "lions",
+                 "leao": "lions", "lobos": "wolves", "lobo": "wolves", "tigres": "tigers", "tigre": "tigers",
+                 "reis": "kings", "rei": "kings", "gigantes": "giants", "guerreiros": "warriors",
+                 "dragoes": "dragons", "dragao": "dragons", "tubaroes": "sharks", "panteras": "panthers",
+                 "falcoes": "hawks", "falcao": "hawks", "touros": "bulls", "cangurus": "kangaroos",
+                 "piratas": "pirates", "cavaleiros": "knights", "raposas": "foxes", "corvos": "ravens",
+                 "trovao": "thunder", "relampago": "lightning", "tempestade": "storm", "estrelas": "stars",
+                 "gatos": "cats", "bufalos": "buffaloes", "cometas": "comets", "foguetes": "rockets",
+                 "titas": "titans", "spartanos": "spartans", "vikings": "vikings", "herois": "heroes",
+                 "aguias-reais": "eagles", "gaivotas": "gulls", "golfinhos": "dolphins", "abelhas": "bees",
+                 "vespas": "hornets", "magos": "wizards", "selvagens": "savages", "dragoes-azuis": "dragons"}
 _MARCA_IDENTIDADE = [
     (re.compile(r"\b(w|f|women|woman|fem|feminino|feminina|femenino|womens|ladies|damen)\b"), "fem"),
     (re.compile(r"\b(u\d{2}|sub\s?\d{2}|youth|junior|juniors|juvenil|base)\b"), "base"),
@@ -351,7 +363,8 @@ def _nome_bate(a, b, leniente=False):
         bate = sum(1 for t in menor if any(_token_bate(t, u) for u in maior))
         # os dois com 2+ palavras próprias: uma só em comum (a cidade) não basta
         # (Los Angeles Lakers ≠ Los Angeles Clippers)
-        minimo = 2 if len(ta) >= 2 and len(tb) >= 2 else 1
+        # (leniente = 2ª passada: uma palavra própria em comum basta, desde que os DOIS times batam)
+        minimo = 2 if len(ta) >= 2 and len(tb) >= 2 and not leniente else 1
         if bate * 2 >= len(menor) and bate >= minimo:
             return True
         if minimo == 2:

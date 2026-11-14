@@ -721,3 +721,11 @@ def test_tolerancia_005_exata_passa():
     """14/11 16:05: 1.95 -> 2.0 (diferença 0,05 exata) reprovou por arredondamento."""
     assert abs(2.0 - 1.95) > 0.05            # o computador acha que passou de 0,05…
     assert abs(2.0 - 1.95) <= P.TOL_ODD_CUPOM + 1e-9   # …mas é 0,05: dentro da tolerância
+
+
+def test_apelido_traduzido_leuven_14_11():
+    """1aWin: 'Ursos Stella Artois Leuven' para o sinal 'Leuven Bears'."""
+    assert P._nome_bate("Leuven Bears", "Ursos Stella Artois Leuven")
+    assert P.linha_confronto("Ursos Stella Artois Leuven\n40\n57\nKangoeroes Basket Mechelen",
+                             ["Leuven Bears", "Kangoeroes Basket Mechelen"])
+    assert not P._nome_bate("Los Angeles Lakers", "Los Angeles Clippers")  # estrito continua
