@@ -1834,12 +1834,21 @@ class Casa:
 
     def preencher_stake(self, valor):
         """PS: com PONTO e lido de volta (com vírgula a PS lê €500). 1aWin: idem + leitura de volta."""
+        if not self.itens_cupom():
+            return False, "a seleção sumiu do cupom antes da stake (a casa tirou a linha do ar)"
         loc = self.page.locator(", ".join("%s input" % s.strip() for s in self.sel_cupom.split(",")))
         alvo = None
         for i in range(loc.count()):
-            if loc.nth(i).is_visible() and (loc.nth(i).get_attribute("type") or "text") in ("text", "number", "tel", "decimal"):
-                alvo = loc.nth(i)
-                break
+            el = loc.nth(i)
+            if not el.is_visible() or (el.get_attribute("type") or "text") not in ("text", "number", "tel", "decimal"):
+                continue
+            rotulo = " ".join(filter(None, [el.get_attribute("placeholder"), el.get_attribute("name"),
+                                            el.get_attribute("aria-label")])).lower()
+            # NUNCA o campo de "Código da aposta"/promo (caso 14/11: stake digitada no código, cupom vazio)
+            if re.search(r"c[oó]digo|code|promo|cupom|coupon|bonus|b[oô]nus|ganho|win", _sem_acento(rotulo)):
+                continue
+            alvo = el
+            break
         if alvo is None:
             return False, "campo de stake não encontrado no cupom"
         formatos = ["%.2f" % valor] if self.nome == CASA_PS else ["%.2f" % valor, ("%.2f" % valor).replace(".", ",")]
@@ -1918,9 +1927,19 @@ class Casa:
             return r
         valor = perna["stake"] / self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else perna["stake"]
         ok, mot = self.preencher_stake(round(valor, 2))
+        if ok:
+            # reconfere DEPOIS da stake: a seleção tem que continuar lá, a mesma
+            self.page.wait_for_timeout(300)
+            if not self.itens_cupom():
+                ok, mot = False, "a seleção sumiu do cupom depois da stake (a casa tirou a linha do ar)"
+            else:
+                ok, mot = self.conferir_cupom(perna)
+                if not ok:
+                    mot = "após a stake: " + mot
         if not ok:
             r["motivo"] = mot
             r["foto"] = self.foto("falha")
+            self.dump("falha")
             self.limpar_cupom(perna)
             return r
         r.update(ok=True, foto=self.foto("montado"))

@@ -401,3 +401,19 @@ def test_calibracao_testa_ps_mesmo_sem_jogo_da_1awin(casas, cfgc, monkeypatch):
     rel = json.load(open(sorted(glob.glob(os.path.join(P.PRINTS, "calibracao_*.json")))[-1]))
     ps = rel[-1]["casas"]["PS3838"]
     assert ps["ok"], rel
+
+
+@pytest.mark.parametrize("ms", [150, 700])
+def test_1awin_selecao_some_do_cupom_nao_conta_como_montado(casas, ms):
+    """Caso 14/11 12:32: a 1aWin tirou a linha 164.5 do cupom; a stake foi digitada no
+    'Código da aposta' e a perna contou como montada. Agora falha com o motivo verdadeiro."""
+    servidor.ESTADO["linha_sai"] = ms
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
+    limpar_cupons(casas)
+    l1, _ = ler(casas)
+    o1 = [x for x in l1["ofertas"] if x["linha"] == 214.5 and x["lado"] == "abaixo"][0]
+    r = c1.executar(c1.montar, dict(o1, stake=34.56), TIMES)
+    assert not r["ok"] and ("sumiu" in r["motivo"] or "não recebeu" in r["motivo"]), r
+    codigo = c1.executar(lambda: c1.page.locator('input[placeholder="Código da aposta"]').input_value())
+    assert codigo == ""

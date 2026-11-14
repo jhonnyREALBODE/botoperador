@@ -68,6 +68,7 @@ if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
         if (sel && sel.rot === rot && sel.mk === mk) { sel = null; renderCupom(); return; }
         sel = {jogo: j.t1 + ' - ' + j.t2, mk, rot, odd, morto: mortos.includes(mk)};
         renderCupom();
+        if (ESTADO.linha_sai) setTimeout(() => { sel = null; renderCupom(); }, ESTADO.linha_sai);
       };
       m.querySelector('._body_r2').appendChild(b);
     }
