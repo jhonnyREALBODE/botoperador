@@ -2497,6 +2497,22 @@ class Operador:
                         item["casas"][c.rotulo] = {"ok": False, "motivo": str(e)}
                 log("calibração %s / %s: %s" % (item["jogo"], c.rotulo, item["casas"][c.rotulo].get("motivo") or "ok"))
             relatorio.append(item)
+        # a PS precisa ser provada mesmo quando os jogos da 1aWin não existem nela
+        ps_montou = any(("selecao" in it["casas"].get(cps.rotulo, {})) for it in relatorio)
+        if not ps_montou:
+            log("calibração: nenhum jogo da 1aWin estava na PS — testo a PS num jogo da lista dela")
+            with _TRAVA_CLIQUES:
+                try:
+                    times = cps.executar(_calib_jogo_da_ps, cps, timeout=60)
+                    if times:
+                        r = cps.executar(_calib_casa, cps, None, times, timeout=150)
+                    else:
+                        r = {"ok": False, "motivo": "lista da PS sem jogo ao vivo"}
+                except Exception as e:
+                    times, r = None, {"ok": False, "motivo": str(e)[:200]}
+            nome = "%s x %s" % tuple(times) if times else "(lista da PS)"
+            log("calibração %s / %s: %s" % (nome, cps.rotulo, r.get("motivo") or "ok"))
+            relatorio.append({"jogo": nome, "casas": {cps.rotulo: r}})
         arq = os.path.join(PRINTS, "calibracao_%s.json" % datetime.now().strftime("%Y%m%d-%H%M%S"))
         _gravar_json(arq, relatorio)
         log("🧪 calibração concluída — raio-x em %s" % arq)
@@ -2543,6 +2559,26 @@ def _calib_listar_jogos(c):
         except Exception:
             continue
     return jogos
+
+
+def _calib_jogo_da_ps(c):
+    """Um jogo ao vivo da própria lista da PS (times pelo data-home-team/away-team)."""
+    c.ir(c.url_lista())
+
+    def achar():
+        return c._eval("""() => {
+            for (const e of document.querySelectorAll('[data-home-team][data-away-team]')) {
+                const r = e.getBoundingClientRect();
+                const h = e.getAttribute('data-home-team'), a = e.getAttribute('data-away-team');
+                if (r.width > 0 && h && a) return [h.trim(), a.trim()];
+            }
+            for (const a of document.querySelectorAll('a[href*="/matchup/"]')) {
+                const t = (a.innerText || '').split(String.fromCharCode(10)).map(x => x.trim()).filter(x => x);
+                if (t.length >= 2) return t.slice(0, 2);
+            }
+            return null;
+        }""")
+    return c._sondar(achar, 10)
 
 
 def _calib_casa(c, url_liga, times):

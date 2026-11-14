@@ -387,3 +387,17 @@ def test_ps_desfaz_pelo_x_quando_remover_tudo_nao_responde(casas):
     assert cps.executar(cps.montar, dict(o, stake=31.0), TIMES)["ok"]
     assert cps.executar(cps.desfazer, o)["ok"]
     assert cps.executar(cps.itens_cupom) == []
+
+
+def test_calibracao_testa_ps_mesmo_sem_jogo_da_1awin(casas, cfgc, monkeypatch):
+    """Caso 14/11 11:05: os 3 jogos da 1aWin não existiam na PS -> a PS nunca era provada."""
+    for c in casas.values():
+        c.executar(c.ir, c.url_lista())
+    monkeypatch.setattr(P, "_calib_listar_jogos", lambda c: [(c.url_lista(), ["Time Que Nao Existe", "Outro Inexistente"])])
+    monkeypatch.setattr(P, "PRAZO_CACA_S", 5)
+    op = P.Operador(cfgc, P.Estado(cfgc), casas)
+    op._calibrar()
+    import glob, json, os
+    rel = json.load(open(sorted(glob.glob(os.path.join(P.PRINTS, "calibracao_*.json")))[-1]))
+    ps = rel[-1]["casas"]["PS3838"]
+    assert ps["ok"], rel
