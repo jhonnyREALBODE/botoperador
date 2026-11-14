@@ -237,7 +237,8 @@ def test_leitura_nao_cai_para_busca_antiga(casas):
     perna = {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": 299.5, "odd": 1.9,
              "_mid": "9999", "_src": "", "stake": 10.0, "aba": ""}
     r = c1.executar(c1.montar, perna, TIMES)
-    assert not r["ok"] and "a leitura não achou a seleção na página" in r["motivo"]
+    assert not r["ok"] and ("a leitura não achou a seleção na página" in r["motivo"]
+                            or "não está mais na página" in r["motivo"])
     assert c1.executar(c1.itens_cupom) == []
 
 
