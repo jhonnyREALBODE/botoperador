@@ -30,6 +30,7 @@ function render() {
   s.querySelector('.remove-icon').onclick = () => { sel = null; render(); };
 }
 document.getElementById('rem').onclick = () => {
+  if (ESTADO.remover_tudo_morto) return;
   const m = document.createElement('div'); m.className = 'modal';
   m.innerHTML = '<div>Quer limpar o seu boletim de apostas?</div><div><span id="canc" style="cursor:pointer">CANCELAR</span> <span id="okm" style="cursor:pointer">OK</span></div>';
   document.body.appendChild(m);

@@ -1493,6 +1493,22 @@ class Casa:
                 pass
         return clicou
 
+    def _clicar_x_ps(self):
+        """O X de cada seleção do boletim da PS (.remove-icon dentro do cartão)."""
+        n = self._eval("""() => {
+            document.querySelectorAll('[data-alvo-x]').forEach(e => e.removeAttribute('data-alvo-x'));
+            let n = 0;
+            for (const it of document.querySelectorAll('[class*="BetItemComponent"]')) {
+                const x = it.querySelector('.remove-icon, [class*="remove" i], [class*="close" i]');
+                if (x) { n++; x.setAttribute('data-alvo-x', String(n)); }
+            }
+            return n;
+        }""") or 0
+        for i in range(1, n + 1):
+            self.clicar_firme(self.page.locator('[data-alvo-x="%d"]' % i).first)
+            self.page.wait_for_timeout(250)
+        return n
+
     def _clicar_icone_do_item(self):
         """O ✕ da seleção na 1aWin é um botão só com ícone (sem texto, classe embaralhada):
         clica o botão-ícone de cada cartão de seleção do cupom."""
@@ -1519,6 +1535,30 @@ class Casa:
         """Confirma o 'Quer limpar o seu boletim de apostas? CANCELAR / OK' (na PS o OK é
         só texto, não <button>). Nunca clica em CANCELAR."""
         for _ in range(10):
+            # 1º: o TEXTO "OK" na tela (nó de texto), clicado com o mouse na posição dele —
+            # funciona seja qual for a estrutura (span, div, texto solto ao lado de CANCELAR)
+            pos = self._eval(r"""() => {
+                const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                const achados = [];
+                for (let n = w.nextNode(); n; n = w.nextNode()) {
+                    if (!/^\s*(ok|sim|yes)\s*$/i.test(n.textContent || '')) continue;
+                    const r = document.createRange(); r.selectNodeContents(n);
+                    const b = r.getBoundingClientRect();
+                    if (b.width <= 0 || b.height <= 0) continue;
+                    let perto = false;
+                    for (let a = n.parentElement, k = 0; a && k < 6; a = a.parentElement, k++)
+                        if (/limpar|remover|clear|apagar/i.test(a.innerText || '') && (a.innerText || '').length < 300) { perto = true; break; }
+                    achados.push({x: b.left + b.width / 2, y: b.top + b.height / 2, perto});
+                }
+                return achados.find(a => a.perto) || null;
+            }""")
+            if pos:
+                try:
+                    self.page.mouse.click(pos["x"], pos["y"])
+                    self.page.wait_for_timeout(300)
+                    return True
+                except Exception:
+                    pass
             n = self._eval(r"""() => {
                 document.querySelectorAll('[data-alvo-ok]').forEach(e => e.removeAttribute('data-alvo-ok'));
                 const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
@@ -1564,13 +1604,19 @@ class Casa:
         if not self.itens_cupom():
             return True
         if self.nome == CASA_PS:
-            for _ in range(3):
+            for rodada in range(3):
+                # 1) "Remover tudo" -> "Quer limpar o seu boletim de apostas? CANCELAR / OK"
                 if self._clicar_no_cupom(r"^(remover tudo|remove all|limpar tudo|clear all|apagar tudo)$"):
+                    self.page.wait_for_timeout(300)
                     self._modal_ok()
-                else:
-                    self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|remove|delete)$", True)
-                if self.esperar_cupom_vazio(2.5):
+                    if self.esperar_cupom_vazio(2.0):
+                        return True
+                # 2) plano B: o X (.remove-icon) de cada seleção
+                self._clicar_x_ps()
+                self._modal_ok()
+                if self.esperar_cupom_vazio(2.0):
                     return True
+            self.dump_diag("desfazer_falhou")
             return False
         for _ in range(5):
             if not self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|cancelar|remove|delete|cancel|limpar tudo|remover tudo)$", True):

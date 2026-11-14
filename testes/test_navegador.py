@@ -374,3 +374,16 @@ def test_ps_boletim_confere_pelo_id_exato(casas):
     r = cps.executar(cps.montar, errado, TIMES)
     assert not r["ok"] and "outra seleção" in r["motivo"]
     assert cps.executar(cps.itens_cupom) == []
+
+
+def test_ps_desfaz_pelo_x_quando_remover_tudo_nao_responde(casas):
+    """Plano B real: se o 'Remover tudo' não esvaziar, clica o X da seleção."""
+    servidor.ESTADO["remover_tudo_morto"] = True
+    _, cps = ir_jogo(casas)
+    recarregar(cps)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    assert cps.executar(cps.montar, dict(o, stake=31.0), TIMES)["ok"]
+    assert cps.executar(cps.desfazer, o)["ok"]
+    assert cps.executar(cps.itens_cupom) == []
