@@ -227,7 +227,7 @@ def _norm(s):
 _ALIAS_TOKENS = {"sao": "san", "santo": "san", "saint": "san", "st": "san", "sankt": "san",
                  "lourenco": "lorenzo", "jose": "jose", "atletico": "atletico", "atl": "atletico"}
 _MARCA_IDENTIDADE = [
-    (re.compile(r"\b(w|women|woman|fem|feminino|feminina|femenino|womens|ladies|damen)\b"), "fem"),
+    (re.compile(r"\b(w|f|women|woman|fem|feminino|feminina|femenino|womens|ladies|damen)\b"), "fem"),
     (re.compile(r"\b(u\d{2}|sub\s?\d{2}|youth|junior|juniors|juvenil|base)\b"), "base"),
     (re.compile(r"\b(3x3)\b"), "3x3"),
     (re.compile(r"\b(b|ii|2)\b"), "reserva"),
@@ -249,7 +249,8 @@ def _token_bate(a, b):
         return True
     if len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)):
         return True
-    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.75
+    # parecido só vale com a mesma inicial ('lorenzo'~'lourenco' sim; 'eagles'~'angeles' NÃO — caso 14/11)
+    return a[:1] == b[:1] and difflib.SequenceMatcher(None, a, b).ratio() >= 0.75
 
 
 def _nome_bate(a, b):
@@ -269,7 +270,7 @@ def _nome_bate(a, b):
         bate = sum(1 for t in menor if any(_token_bate(t, u) for u in maior))
         if bate * 2 >= len(menor) and bate >= 1:
             return True
-    return difflib.SequenceMatcher(None, na, nb).ratio() >= 0.75
+    return na[:1] == nb[:1] and difflib.SequenceMatcher(None, na, nb).ratio() >= 0.75
 
 
 def _limpar(txt):
@@ -1436,10 +1437,27 @@ class Casa:
             self.base = nova
 
     # -------------------------------------------------- cupom / boletim
+    def mostrar_boletim(self):
+        """PS: o boletim mora numa aba da barra da esquerda ('BOLETIM DE APOSTAS'); com
+        a aba 'Todos os eventos' ativa ele fica escondido."""
+        if self.nome != CASA_PS:
+            return
+        try:
+            loc = self.page.locator('.BET_SLIP, [title="BOLETIM DE APOSTAS"]').first
+            if loc.count() and loc.is_visible():
+                ativo = loc.evaluate("e => !!(e.closest('.selection-button') || e).classList.contains('active') || !!(e.closest('.active'))")
+                if not ativo:
+                    self.clicar_firme(loc)
+                    self.page.wait_for_timeout(300)
+        except Exception:
+            pass
+
     def itens_cupom(self):
         """Seleções no cupom. Pelo seletor de item; se ele não achar nada (classes
         embaralhadas, como na 1aWin), pela forma: o MENOR bloco do cupom que tem um
-        rótulo de mercado E uma odd. Cupom vazio ('Selecione um resultado') = []."""
+        rótulo de mercado E uma odd. Cupom vazio ('Selecione um resultado') = [].
+        PS: abre a aba do boletim antes — boletim escondido NÃO é boletim vazio."""
+        self.mostrar_boletim()
         return self._eval(JS_ITENS_CUPOM, [self.sel_cupom, self.sel_item])
 
     def texto_cupom(self):
@@ -1498,6 +1516,27 @@ class Casa:
         return n
 
     def _modal_ok(self):
+        """Confirma o 'Quer limpar o seu boletim de apostas? CANCELAR / OK' (na PS o OK é
+        só texto, não <button>). Nunca clica em CANCELAR."""
+        for _ in range(10):
+            n = self._eval(r"""() => {
+                document.querySelectorAll('[data-alvo-ok]').forEach(e => e.removeAttribute('data-alvo-ok'));
+                const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+                const oks = Array.from(document.querySelectorAll('body *')).filter(e =>
+                    vis(e) && /^\s*(ok|sim|yes|confirmar)\s*$/i.test(e.innerText || '') &&
+                    !Array.from(e.children).some(c => /^\s*(ok|sim|yes|confirmar)\s*$/i.test(c.innerText || '')));
+                if (!oks.length) return 0;
+                const perto = oks.find(e => { for (let a = e; a; a = a.parentElement) if (/limpar|remover|clear|apagar/i.test(a.innerText || '') && (a.innerText || '').length < 300) return true; return false; });
+                (perto || oks[oks.length - 1]).setAttribute('data-alvo-ok', '1');
+                return 1;
+            }""")
+            if n:
+                if self.clicar_firme(self.page.locator('[data-alvo-ok="1"]').first):
+                    return True
+            self.page.wait_for_timeout(150)
+        return False
+
+    def _modal_ok_antigo(self):
         for _ in range(10):
             btn = self.page.locator("button, [role=button], a").filter(has_text=re.compile(r"^\s*(OK|Sim|Confirmar|Yes)\s*$", re.I))
             try:
@@ -1521,6 +1560,7 @@ class Casa:
 
     def limpar_cupom(self, perna=None):
         """Desfazer/limpar. Só conta com o cupom VAZIO de verdade."""
+        self.mostrar_boletim()
         if not self.itens_cupom():
             return True
         if self.nome == CASA_PS:
@@ -1550,6 +1590,8 @@ class Casa:
         return False
 
     def _modal_ok_rapido(self):
+        if self.nome == CASA_PS:
+            return False
         try:
             btn = self.page.locator("button").filter(has_text=re.compile(r"^\s*(OK|Sim|Yes)\s*$", re.I))
             for i in range(btn.count()):
@@ -1580,9 +1622,15 @@ class Casa:
             tx = self.texto()
             q = quarto_atual(tx)
             ofs = ofertas_de_enumeracao(itens, self.nome, times, q)
-            if not ofs and _RX_DESLOGADO.search(tx):
-                r["motivo"] = "PS deslogada — odds escondidas para visitante (rode 1-LOGIN.bat)"
-                return r
+            if not ofs:
+                logado = self._eval("() => !!document.querySelector('.loginId, .AccountInfoComponent .balance')")
+                travados = self._eval("() => document.querySelectorAll('.style-lock:not(.lock-hidden)').length")
+                if not logado and _RX_DESLOGADO.search(tx):
+                    r["motivo"] = "PS deslogada — odds escondidas para visitante (rode 1-LOGIN.bat)"
+                    return r
+                if travados:
+                    r.update(ok=True, ofertas=[], quarto=q, motivo="PS: mercado travado (cadeado em %d odds)" % travados)
+                    return r
         else:
             if not linha_confronto(tx, times):
                 r["motivo"] = "a página da 1aWin não é a deste jogo"
@@ -1753,6 +1801,7 @@ class Casa:
         if self.nome == CASA_PS and not ps_e_o_jogo(tx, times):
             r["motivo"] = "PS não está no matchup deste jogo (a página é lista) — montagem abortada"
             return r
+        self.mostrar_boletim()
         if self.itens_cupom():  # quarentena
             log("%s: cupom sujo antes de montar — limpando primeiro" % self.rotulo)
             if not self.limpar_cupom():
@@ -1785,6 +1834,7 @@ class Casa:
         fim = time.time() + 4
         while time.time() < fim:
             self.page.wait_for_timeout(250)
+            self.mostrar_boletim()
             if _RX_EXCLUIDO.search(self.texto_cupom() or ""):
                 ok, mot = False, "cupom mostra 'Evento excluído' — mercado encerrado, perna morta"
                 break

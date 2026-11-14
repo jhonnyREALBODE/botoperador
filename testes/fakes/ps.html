@@ -5,10 +5,14 @@ td{border:1px solid #ccc;padding:3px 6px}a.odds{display:inline-block;cursor:poin
 .jogo-lista{display:block;margin:4px;border:1px solid #ddd;padding:4px}</style>
 <script>const ESTADO = __ESTADO__;</script><script src="/fakes/dados.js"></script></head><body>
 <div id="app"></div>
-<div class="BetslipComponent" style="width:300px;border-left:1px solid #ccc;padding:10px;min-height:400px"><div class="betslip-tab active">SIMPLES</div>
+<div class="LeftSideBarComponent" style="width:300px;border-left:1px solid #ccc;padding:10px;min-height:400px">
+<div class="ButtonSelectionComponent"><div class="selection-button" id="tab-slip"><span title="BOLETIM DE APOSTAS" class="title BET_SLIP">Boletim de apostas</span></div>
+<div class="selection-button all-events active" id="tab-all"><span title="TODOS OS EVENTOS" class="title ALL_EVENTS">Todos Os Eventos</span></div></div>
+<div class="SportMenuComponent" id="menu-esportes">Futebol 12<br>Basquetebol 9</div>
+<div class="BetslipComponent" id="slip-box" style="display:none"><div class="betslip-tab active">SIMPLES</div>
 <div class="SingleBetComponent"><div class="bet-header"><span class="remove-all" id="rem"><span class="remove-all-icon"></span><span class="remove-all-text">Remover tudo</span></span>
 <span class="refresh-all"><span class="refresh-text">Atualizar</span></span></div><div class="bet-body" id="sels"></div>
-<div class="bet-footer"><div class="total-stake"><span>Total Stake</span><span>0.00 EUR</span></div><button class="place-bet-btn" id="apostar">Fazer aposta</button><div id="msg"></div></div></div></div>
+<div class="bet-footer"><div class="total-stake"><span>Total Stake</span><span>0.00 EUR</span></div><button class="place-bet-btn" id="apostar">Fazer aposta</button><div id="msg"></div></div></div></div></div>
 <script>
 const p = location.pathname; const app = document.getElementById('app');
 let sel = null;
@@ -27,11 +31,16 @@ function render() {
 }
 document.getElementById('rem').onclick = () => {
   const m = document.createElement('div'); m.className = 'modal';
-  m.innerHTML = 'Quer limpar o boletim? <button id="okm">OK</button> <button id="canc">Cancelar</button>';
+  m.innerHTML = '<div>Quer limpar o seu boletim de apostas?</div><div><span id="canc" style="cursor:pointer">CANCELAR</span> <span id="okm" style="cursor:pointer">OK</span></div>';
   document.body.appendChild(m);
   m.querySelector('#okm').onclick = () => { sel = null; render(); m.remove(); };
   m.querySelector('#canc').onclick = () => m.remove();
 };
+const mostraSlip = (sim) => { document.getElementById('slip-box').style.display = sim ? 'block' : 'none';
+  document.getElementById('menu-esportes').style.display = sim ? 'none' : 'block';
+  document.getElementById('tab-slip').classList.toggle('active', sim); document.getElementById('tab-all').classList.toggle('active', !sim); };
+document.getElementById('tab-slip').onclick = () => mostraSlip(true);
+document.getElementById('tab-all').onclick = () => mostraSlip(false);
 document.getElementById('apostar').onclick = () => { if (sel) document.getElementById('msg').textContent = 'Aposta aceita'; };
 const PERS = {0: 'Jogo', 1: '1º Tempo', 3: '1º Quarto', 4: '2º Quarto', 6: '4º Quarto'};
 if (ESTADO.limite) {

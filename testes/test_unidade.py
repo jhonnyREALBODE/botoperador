@@ -595,3 +595,14 @@ def test_status_do_jogo_nao_e_nome_de_time():
         assert P._e_status_jogo(t), t
     for t in ["Utah State", "Oklahoma (f)", "San Antonio Spurs"]:
         assert not P._e_status_jogo(t), t
+
+
+def test_nomes_caso_oklahoma_feminino_14_11():
+    """PS 'achou' LA Clippers x OKC para Oklahoma (f) x Oral Roberts (f): '(f)' é feminino e
+    'Eagles' não é 'Angeles'."""
+    assert not P._nome_bate("Oral Roberts Golden Eagles (f)", "Los Angeles Clippers")
+    assert not P._nome_bate("Oklahoma (f)", "Oklahoma City Thunder")
+    assert P._nome_bate("LA Clippers", "Los Angeles Clippers")
+    assert P._nome_bate("Saint Mary's Gaels", "Saint Marys CA")
+    assert not P.ps_e_o_jogo("NBA /\nLos Angeles Clippers -vs- Oklahoma City Thunder",
+                             ["Oklahoma (f)", "Oral Roberts Golden Eagles (f)"])
