@@ -6,6 +6,7 @@
 <script>const ESTADO = __ESTADO__;</script><script src="/fakes/dados.js"></script></head><body>
 <div id="app"></div>
 <aside class="_side_x9"><p class="_title_16m5v_36">Cupom de apostas</p><div class="_amount_1ch79_13">BRL&nbsp;0,00</div>
+<div class="_tabs_c2"><span>Simples</span> <span>Múltipla</span> <span>Série</span> <button type="button" class="_lix_t9" id="lix"><svg width="10" height="10"><path d="M0 0L10 10"/></svg></button></div>
 <div data-scope="Betslip" class="_root_1j176_2" id="slip"></div></aside>
 <script>
 const p = location.pathname;
@@ -25,9 +26,9 @@ function renderCupom() {
     s.appendChild(d);
     return;
   }
-  d.innerHTML = '<div class="_head_p2"><span>77 : 49</span> <span>' + sel.jogo + '</span><button type="button" class="_ico_z3"><svg width="10" height="10"><path d="M0 0L10 10"/></svg></button></div>' +
+  d.innerHTML = '<div class="_head_p2"><span class="_live_k1"><svg width="10" height="10"><circle cx="5" cy="5" r="4"/></svg></span><span>77 : 49</span> <span>' + sel.jogo + '</span><button type="button" class="_ico_z3"><svg width="10" height="10"><path d="M0 0L10 10"/></svg></button></div>' +
     '<div><span>' + sel.mk + ', ' + sel.rot + '</span> <span class="_cf_17if8_2">' + sel.odd + '</span></div>';
-  d.querySelector('button').onclick = () => { sel = null; renderCupom(); };
+  d.querySelector('button').onclick = () => { if (!ESTADO.x_morto) { sel = null; renderCupom(); } };
   s.appendChild(d);
   const f = document.createElement('div');
   f.innerHTML = '<div class="_x_b2">Adicione 4 resultados com cotações a partir de 1.25 para receber um bônus de ganho de 7%</div>' +
@@ -37,6 +38,7 @@ function renderCupom() {
   s.appendChild(f);
 }
 renderCupom();
+document.getElementById('lix').onclick = () => { sel = null; renderCupom(); };
 if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
   app.innerHTML = '<h2>Basquete ao vivo</h2>' + (ESTADO.feed_vazio ? '' : LIGAS1W.map(l => '<div><a href="/betting/live/basketball-23/' + l[0] + '">' + l[1] + ' <span>' + l[2].length + '</span></a></div>').join(''));
 } else if (p.match(/\/betting\/live\/basketball-23\/(.+)$/)) {

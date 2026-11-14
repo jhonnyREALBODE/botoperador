@@ -1714,6 +1714,33 @@ class Casa:
             self.page.wait_for_timeout(250)
         return n
 
+    def _clicar_lixeira_1w(self):
+        try:
+            n = self._eval("""(sc) => {
+                document.querySelectorAll('[data-alvo-lix]').forEach(e => e.removeAttribute('data-alvo-lix'));
+                const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+                // a lixeira mora no aside do cupom, na linha das abas Simples/Múltipla/Série
+                const raiz = Array.from(document.querySelectorAll(sc)).map(c => c.closest('aside') || c.parentElement || c);
+                for (const r of raiz) {
+                    const abas = Array.from(r.querySelectorAll('*')).find(e => /^\s*simples\s*$/i.test(e.innerText || '') && e.children.length <= 1);
+                    let linha = abas;
+                    for (let k = 0; linha && k < 4; k++, linha = linha.parentElement) {
+                        const bts = Array.from(linha.querySelectorAll('button, [role=button]')).filter(b => vis(b) && !(b.innerText || '').trim());
+                        if (bts.length) { bts[bts.length - 1].setAttribute('data-alvo-lix', '1'); return 1; }
+                    }
+                    const tit = Array.from(r.querySelectorAll('button, [role=button]')).find(b => vis(b) &&
+                        /lixeira|limpar|trash|delete|clear/i.test((b.getAttribute('aria-label') || '') + (b.getAttribute('title') || '')));
+                    if (tit) { tit.setAttribute('data-alvo-lix', '1'); return 1; }
+                }
+                return 0;
+            }""", self.sel_cupom)
+            if n:
+                log("1aWin: o X da seleção não limpou — usando a lixeira do cupom")
+                return self.clicar_firme(self.page.locator('[data-alvo-lix="1"]').first)
+        except Exception:
+            pass
+        return False
+
     def _clicar_icone_do_item(self):
         """O ✕ da seleção na 1aWin é um botão só com ícone (sem texto, classe embaralhada):
         clica o botão-ícone de cada cartão de seleção do cupom."""
@@ -1722,9 +1749,15 @@ class Casa:
             document.querySelectorAll('[data-alvo-x]').forEach(e => e.removeAttribute('data-alvo-x'));
             let n = 0;
             for (const card of document.querySelectorAll('[data-item-cupom]')) {
-                const bts = Array.from(card.querySelectorAll('button, [role=button], svg')).map(b => b.closest('button,[role=button]') || b)
-                    .filter(b => !(b.innerText || '').trim());
-                if (bts.length) { n++; bts[0].setAttribute('data-alvo-x', String(n)); }
+                // o X é o ícone MAIS À DIREITA do cartão (à esquerda fica o ícone de 'ao vivo' —
+                // caso 14/11 18:21: o programa clicava nele e o cupom não esvaziava)
+                const bts = Array.from(new Set(Array.from(card.querySelectorAll('button, [role=button], svg'))
+                    .map(b => b.closest('button,[role=button]') || b)))
+                    .filter(b => !(b.innerText || '').trim() && b.getBoundingClientRect().width > 0);
+                if (bts.length) {
+                    const x = bts.reduce((a, b) => b.getBoundingClientRect().right > a.getBoundingClientRect().right ? b : a);
+                    n++; x.setAttribute('data-alvo-x', String(n));
+                }
             }
             return n;
         }""")
@@ -1829,10 +1862,17 @@ class Casa:
             self._modal_ok_rapido()
             if self.esperar_cupom_vazio(1.5):
                 return True
-        if perna and perna.get("_mid"):  # plano B: clicar a própria odd (desmarca)
+        # plano B: a LIXEIRA do cupom (botão-ícone ao lado de 'Simples / Múltipla / Série', limpa tudo)
+        if self._clicar_lixeira_1w():
+            self._modal_ok()
+            if self.esperar_cupom_vazio(2.0):
+                return True
+        if perna and perna.get("_mid"):  # plano C: clicar a própria odd (desmarca)
             try:
                 loc = self.page.locator('[data-mid="%s"]' % perna["_mid"])
-                if loc.count():
+                # só se o botão AINDA for a mesma seleção — senão o clique ADICIONA outra
+                # (caso 14/11 18:21: o carimbo virou 'Abaixo De 194.5' e foi parar no cupom)
+                if loc.count() and self._carimbo_vivo(loc.first, perna):
                     loc.first.click(timeout=2000)
             except Exception:
                 pass

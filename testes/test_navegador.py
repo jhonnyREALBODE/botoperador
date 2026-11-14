@@ -514,3 +514,16 @@ def test_ps_selecao_indisponivel_fecha_janela_e_falha(casas):
     r = cps.executar(cps.montar, dict(o, stake=31.0), TIMES)
     assert not r["ok"] and "indisponível" in r["motivo"]
     assert "Seleção Indisponível" not in cps.executar(cps.texto)  # janela fechada: a página volta a funcionar
+
+
+def test_1awin_desfaz_pela_lixeira_quando_o_x_nao_funciona(casas):
+    """14/11 18:21: 'DESFAZER FALHOU: cupom não esvaziou' e a 1aWin ficou bloqueada (cupom sujo)."""
+    servidor.ESTADO["x_morto"] = True
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
+    limpar_cupons(casas)
+    l1, _ = ler(casas)
+    o1 = [x for x in l1["ofertas"] if x["linha"] == 214.5 and x["lado"] == "abaixo"][0]
+    assert c1.executar(c1.montar, dict(o1, stake=26.57), TIMES)["ok"]
+    assert c1.executar(c1.desfazer, dict(o1, _mid=None))["ok"]
+    assert c1.executar(c1.itens_cupom) == []
