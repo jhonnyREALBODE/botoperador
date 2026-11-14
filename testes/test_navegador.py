@@ -346,3 +346,15 @@ def test_1awin_espelho_rotativo(site, tmp_path):
         assert P.trocar_origem("https://1wcwlx.life/betting/match/x-1", "https://1wmvjy.life") == "https://1wmvjy.life/betting/match/x-1"
     finally:
         c.parar()
+
+
+def test_leitura_sobrevive_a_pagina_que_troca_de_rota(site, casas):
+    """Caso real 14/11: 'Execution context was destroyed' — a página navegou de novo
+    logo depois de carregar."""
+    c1 = casas[P.CASA_1W]
+
+    def corrida():
+        c1.page.goto(site + "/mv" + c1.cfg["caminho_lista_1awin"], wait_until="commit")
+        return c1._sondar(c1._mapa_ligas, 8)
+    ligas = c1.executar(corrida)
+    assert ligas and any("NBA" in l["nome"] for l in ligas)

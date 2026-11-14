@@ -1220,17 +1220,54 @@ class Casa:
         return bool(_RX_LIMITE.search(texto if texto is not None else self.texto()))
 
     def enumerar(self):
-        return self.page.evaluate(JS_ENUMERAR, self.sel_cupom)
+        return self._eval(JS_ENUMERAR, self.sel_cupom)
 
     def expandir(self):
         n = 0
         for _ in range(3):
-            k = self.page.evaluate(JS_EXPANDIR, self.sel_cupom)
+            k = self._eval(JS_EXPANDIR, self.sel_cupom)
             n += k
             if not k:
                 break
             self.page.wait_for_timeout(250)
         return n
+
+    def _eval(self, js, arg=None, tentativas=6):
+        """page.evaluate blindado: a página das casas se redesenha/troca de rota
+        sozinha depois de carregar ('Execution context was destroyed'). Espera
+        assentar e lê de novo."""
+        ult = None
+        for _ in range(tentativas):
+            try:
+                return self.page.evaluate(js) if arg is None else self.page.evaluate(js, arg)
+            except Exception as e:
+                msg = str(e)
+                if not any(k in msg for k in ("Execution context was destroyed", "navigation", "Cannot find context",
+                                              "frame was detached", "Target closed")) or "Target page" in msg:
+                    raise
+                ult = e
+                try:
+                    self.page.wait_for_load_state("domcontentloaded", timeout=10000)
+                except Exception:
+                    pass
+                self.page.wait_for_timeout(500)
+        raise ult
+
+    def _esperar_url_parada(self, s_parada=1.0, teto=8.0):
+        """Redirecionamentos em cadeia: só segue quando o endereço parou de mudar."""
+        fim = time.time() + teto
+        ult, desde = self.page.url, time.time()
+        while time.time() < fim:
+            self.page.wait_for_timeout(250)
+            u = self.page.url
+            if u != ult:
+                ult, desde = u, time.time()
+            elif time.time() - desde >= s_parada:
+                break
+        try:
+            self.page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
 
     def ir(self, url):
         """Navega tolerando o redirecionamento da casa (a 1aWin manda do domínio de
@@ -1247,6 +1284,7 @@ class Casa:
                 self.page.wait_for_load_state("domcontentloaded", timeout=20000)
             except Exception:
                 pass
+        self._esperar_url_parada()
         self._atualizar_espelho()
 
     def _atualizar_espelho(self):
@@ -1267,7 +1305,7 @@ class Casa:
 
     # -------------------------------------------------- cupom / boletim
     def itens_cupom(self):
-        return self.page.evaluate("""([sc, si]) => {
+        return self._eval("""([sc, si]) => {
             const out = [];
             for (const c of document.querySelectorAll(sc)) for (const e of c.querySelectorAll(si)) {
                 const r = e.getBoundingClientRect();
@@ -1277,14 +1315,14 @@ class Casa:
         }""", [self.sel_cupom, self.sel_item])
 
     def texto_cupom(self):
-        return self.page.evaluate("""(sc) => Array.from(document.querySelectorAll(sc))
+        return self._eval("""(sc) => Array.from(document.querySelectorAll(sc))
             .filter(c => !Array.from(document.querySelectorAll(sc)).some(o => o !== c && o.contains(c)))
             .map(c => c.innerText).join('\\n')""", self.sel_cupom)
 
     def _clicar_no_cupom(self, rx, por_classe=False):
         """Clica controles DENTRO do cupom pelo texto. por_classe=True (só para limpar)
         aceita também ícones de remover/fechar sem texto."""
-        alvos = self.page.evaluate("""([sc, src, pc]) => {
+        alvos = self._eval("""([sc, src, pc]) => {
             document.querySelectorAll('[data-alvo-cupom]').forEach(e => e.removeAttribute('data-alvo-cupom'));
             const rx = new RegExp(src, 'i'); const out = [];
             let n = 0;
@@ -1417,7 +1455,7 @@ class Casa:
         return r
 
     def _abas(self):
-        return self.page.evaluate(r"""() => {
+        return self._eval(r"""() => {
             const out = [];
             for (const e of document.querySelectorAll('[role=tab], .tab, [class*="tabs" i] > *')) {
                 const t = (e.innerText || '').trim();
@@ -1677,7 +1715,7 @@ class Casa:
 
     def _marcar_linha_jogo(self, times, prefer_href=""):
         """Marca (data-alvo-jogo) o menor elemento clicável cujo texto tem os dois times."""
-        cands = self.page.evaluate(r"""(pref) => {
+        cands = self._eval(r"""(pref) => {
             document.querySelectorAll('[data-alvo-jogo]').forEach(e => e.removeAttribute('data-alvo-jogo'));
             const out = [];
             const els = Array.from(document.querySelectorAll('a, [role=button], [onclick], div, li, tr'));
@@ -1701,7 +1739,7 @@ class Casa:
         if not bons:
             return None
         bons.sort(key=lambda c: (0 if prefer_href and prefer_href in c["href"] else 1, c["n"], len(c["t"])))
-        self.page.evaluate("""(i) => { const e = document.querySelector('[data-cand-jogo="' + i + '"]');
+        self._eval("""(i) => { const e = document.querySelector('[data-cand-jogo="' + i + '"]');
             if (e) e.setAttribute('data-alvo-jogo', '1');
             document.querySelectorAll('[data-cand-jogo]').forEach(x => x.removeAttribute('data-cand-jogo')); }""", bons[0]["i"])
         return bons[0]
@@ -1739,7 +1777,7 @@ class Casa:
             if r:
                 return self._achou_1w(r, times, t0, "lista", None)
             self.ir(self.url_lista())
-        ligas = self._mapa_ligas()
+        ligas = self._sondar(self._mapa_ligas, 8)
         if not ligas:
             return {"ok": False, "motivo": "1aWin: lista ao vivo de basquete veio vazia (feed vazio)"}
         ordem = ordenar_ligas(ligas, liga_dica)
@@ -1765,7 +1803,7 @@ class Casa:
     def _mapa_ligas(self):
         """Mapa de URLs reais das ligas extraído da lista de basquete (dedupe)."""
         caminho = self.cfg["caminho_lista_1awin"].rstrip("/")
-        itens = self.page.evaluate("""(cam) => Array.from(document.querySelectorAll('a[href]'))
+        itens = self._eval("""(cam) => Array.from(document.querySelectorAll('a[href]'))
             .map(a => ({nome: (a.innerText||'').trim(), href: a.href}))
             .filter(x => x.nome && x.href.indexOf(cam + '/') >= 0)""", caminho)
         vistos, out = set(), []
@@ -2159,7 +2197,8 @@ class Operador:
         c1, cps = self.casas[CASA_1W], self.casas[CASA_PS]
         log("🧪 calibração: até 3 jogos ao vivo (um por liga) — monta 'acima' da linha principal, foto, desfaz")
         try:
-            jogos = c1.executar(_calib_listar_jogos, c1, timeout=120)
+            jogos = c1.executar(_calib_listar_jogos, c1, timeout=180)
+            log("calibração: %d jogo(s) escolhido(s): %s" % (len(jogos), "; ".join("%s x %s" % tuple(t) for _, t in jogos) or "nenhum"))
         except Exception as e:
             log("calibração: lista falhou: %s" % str(e)[:200])
             return
@@ -2181,21 +2220,30 @@ class Operador:
 
 def _calib_listar_jogos(c):
     c.ir(c.url_lista())
-    c.page.wait_for_timeout(1000)
+    ligas = c._sondar(c._mapa_ligas, 10) or []
+    log("calibração: %d liga(s) na lista ao vivo da 1aWin" % len(ligas))
     jogos = []
-    for lg in c._mapa_ligas()[:6]:
+    for lg in ligas[:6]:
         if len(jogos) >= 3:
             break
         try:
             c.ir(lg["url"])
-            c.page.wait_for_timeout(800)
-            linhas = c.page.evaluate(r"""() => Array.from(document.querySelectorAll('[class*="event" i], [class*="match" i], [class*="game" i], [class*="row" i]'))
-                .filter(e => getComputedStyle(e).cursor === 'pointer').map(e => (e.innerText || '').trim()).filter(t => t.length < 200)""")
+
+            def linhas_da_liga():
+                return c._eval(r"""() => Array.from(document.querySelectorAll('a[href*="/match/"], [class*="event" i], [class*="match" i], [class*="game" i], [class*="row" i]'))
+                    .filter(e => e.tagName === 'A' || getComputedStyle(e).cursor === 'pointer')
+                    .map(e => (e.innerText || '').trim()).filter(t => t && t.length < 200)""")
+            linhas = c._sondar(linhas_da_liga, 6) or []
+            achou = False
             for t in linhas:
                 partes = [p.strip() for p in re.split(r"\n|\s+(?:—|–|vs\.?|x)\s+", t) if len(p.strip()) >= 3 and not re.match(r"^[\d\s.:'’,-]+$", p.strip())]
                 if len(partes) >= 2:
                     jogos.append((lg["url"], partes[:2]))
+                    achou = True
                     break
+            if not achou:
+                log("calibração: liga %s — nenhuma linha de jogo reconhecida (%d elementos)" % (lg["nome"], len(linhas)))
+                c.dump("calib_liga")
         except Exception:
             continue
     return jogos
