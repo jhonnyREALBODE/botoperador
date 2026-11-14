@@ -702,3 +702,16 @@ def test_par_fabricado_barcelos_14_11(cfg):
     assert P.ofertas_de_enumeracao([it], "1awin", times, quarto=2) == []
     it = item("Acima De 32.5 1.95", "1.95", ["Menos Mais", "Totais. 2º quarto"])
     assert P.ofertas_de_enumeracao([it], "1awin", times, quarto=2)[0]["periodo"] == "q2"
+
+
+def test_feminino_sem_marca_na_ps_14_11():
+    """PS lista 'Alges e Dafundo x ACD Ferragudo Cidade Lagoa' (sem 'Women') para o sinal
+    'Alges Women x ACD Ferragudo Cidade Lagoa Women'."""
+    t = ["Alges Women", "ACD Ferragudo Cidade Lagoa Women"]
+    assert P.ps_e_o_jogo("Portugal - Liga Feminina\nAlges e Dafundo -vs- ACD Ferragudo Cidade Lagoa", t)
+    # a regra estrita continua valendo para o caso da manhã
+    assert not P.ps_e_o_jogo("NBA /\nLos Angeles Clippers -vs- Oklahoma City Thunder",
+                             ["Oklahoma (f)", "Oral Roberts Golden Eagles (f)"])
+    assert not P._nome_bate("Oklahoma (f)", "Oklahoma City Thunder")
+    assert P.ordenar_ligas([{"nome": "EUA. NCAA", "url": "a"}, {"nome": "Portugal. Women. Division", "url": "b"}],
+                           "", fem=True)[0]["url"] == "b"

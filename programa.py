@@ -323,13 +323,17 @@ def _token_bate(a, b):
 
 
 @functools.lru_cache(maxsize=100000)
-def _nome_bate(a, b):
+def _nome_bate(a, b, leniente=False):
     """Casamento tolerante de nomes de time entre casas. Nome é pista, nunca chave.
     Feminino/base/3x3/reserva fazem parte da identidade."""
     if not a or not b:
         return False
-    if _marcas(a) != _marcas(b):
-        return False
+    ma, mb = _marcas(a), _marcas(b)
+    if ma != mb:
+        # leniente: a casa OMITIU a marca de um lado (PS: 'Alges e Dafundo' para 'Alges Women');
+        # marca diferente dos dois lados continua barrada
+        if not (leniente and (not ma or not mb) and (ma | mb) <= {"fem"}):
+            return False
     pa = {t for t in _norm(a).split() if t in _PREFIXOS_CLUBE}
     pb = {t for t in _norm(b).split() if t in _PREFIXOS_CLUBE}
     if pa and pb and pa != pb:
@@ -1267,27 +1271,34 @@ def ps_confrontos(texto):
 
 def ps_e_o_jogo(texto, times):
     """Só é a página do jogo se o texto trouxer o cabeçalho -vs- deste confronto."""
-    for a, b, liga in ps_confrontos(texto):
-        if (_nome_bate(a, times[0]) and _nome_bate(b, times[1])) or (_nome_bate(a, times[1]) and _nome_bate(b, times[0])):
-            return {"times_casa": [a, b], "liga": liga}
+    conf = ps_confrontos(texto)
+    for len_ in (False, True):
+        for a, b, liga in conf:
+            if (_nome_bate(a, times[0], len_) and _nome_bate(b, times[1], len_)) or \
+                    (_nome_bate(a, times[1], len_) and _nome_bate(b, times[0], len_)):
+                return {"times_casa": [a, b], "liga": liga}
     return None
 
 
 def linha_confronto(texto, times, max_linhas=60):
+    return _linha_confronto(texto, times, max_linhas, False) or _linha_confronto(texto, times, max_linhas, True)
+
+
+def _linha_confronto(texto, times, max_linhas, len_):
     """Linha de título do evento (1aWin) que contém os dois times."""
     linhas = [l.strip() for l in (texto or "").splitlines() if l.strip()][:max_linhas]
     for l in linhas:
         partes = re.split(r"\s+(?:—|–|-|vs\.?|x|v)\s+", l, maxsplit=1, flags=re.I)
         if len(partes) == 2:
             a, b = partes
-            if (_nome_bate(a, times[0]) and _nome_bate(b, times[1])) or (_nome_bate(a, times[1]) and _nome_bate(b, times[0])):
+            if (_nome_bate(a, times[0], len_) and _nome_bate(b, times[1], len_)) or (_nome_bate(a, times[1], len_) and _nome_bate(b, times[0], len_)):
                 return [a, b]
     # times em linhas separadas e próximas (cabeçalho do evento em blocos)
     curtas = [l for l in linhas if 3 <= len(l) <= 60]
     for i, l in enumerate(curtas):
         for j in range(i + 1, min(i + 4, len(curtas))):
             a, b = l, curtas[j]
-            if (_nome_bate(a, times[0]) and _nome_bate(b, times[1])) or (_nome_bate(a, times[1]) and _nome_bate(b, times[0])):
+            if (_nome_bate(a, times[0], len_) and _nome_bate(b, times[1], len_)) or (_nome_bate(a, times[1], len_) and _nome_bate(b, times[0], len_)):
                 return [a, b]
     return None
 
@@ -2265,12 +2276,15 @@ class Casa:
             return out;
         }""", [prefer_href, p1, p2])
         bons = []
-        for c in cands:
-            pedacos = [p for p in re.split(r"\n|\s+(?:—|–|-vs-|vs\.?|x|-)\s+", c["t"]) if p.strip()]
-            a = any(_nome_bate(p, times[0]) for p in pedacos)
-            b = any(_nome_bate(p, times[1]) for p in pedacos)
-            if a and b:
-                bons.append(c)
+        for len_ in (False, True):
+            for c in cands:
+                pedacos = [p for p in re.split(r"\n|\s+(?:—|–|-vs-|vs\.?|x|-)\s+", c["t"]) if p.strip()]
+                a = any(_nome_bate(p, times[0], len_) for p in pedacos)
+                b = any(_nome_bate(p, times[1], len_) for p in pedacos)
+                if a and b:
+                    bons.append(c)
+            if bons:
+                break
         if not bons:
             return None
         bons.sort(key=lambda c: (0 if prefer_href and prefer_href in c["href"] else 1, c["n"], len(c["t"])))
@@ -2317,7 +2331,7 @@ class Casa:
         ligas = self._sondar(self._mapa_ligas, 8)
         if not ligas:
             return {"ok": False, "motivo": "1aWin: lista ao vivo de basquete veio vazia (feed vazio)"}
-        ordem = ordenar_ligas(ligas, liga_dica)
+        ordem = ordenar_ligas(ligas, liga_dica, fem=any("fem" in _marcas(t) for t in times))
         notas = {lg["url"]: (liga_parecida(liga_dica, lg["nome"]) if liga_dica else 0.0) for lg in ordem}
         log("1aWin: %d liga(s) de basquete; primeiras: %s" % (len(ordem), "; ".join(
             "%s (%.2f)" % (lg["nome"], notas[lg["url"]]) for lg in ordem[:4])))
@@ -2399,8 +2413,11 @@ def confirmar_liga(liga_ps, liga_1w):
     _gravar_json(ARQ_LIGAS, m)
 
 
-def ordenar_ligas(ligas, liga_dica, limiar=0.63, margem=0.12):
-    """Liga confirmada na memória primeiro; depois por similaridade com a dica."""
+def ordenar_ligas(ligas, liga_dica, limiar=0.63, margem=0.12, fem=False):
+    """Liga confirmada na memória primeiro; depois por similaridade com a dica.
+    Jogo feminino: ligas femininas na frente (caso Alges x Ferragudo 14/11)."""
+    if fem:
+        ligas = sorted(ligas, key=lambda lg: 0 if "fem" in _marcas(lg["nome"]) else 1)
     if not liga_dica:
         return ligas
     mem = _mem_ligas().get(_liga_norm(liga_dica))
