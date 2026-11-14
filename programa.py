@@ -1102,11 +1102,7 @@ class Casa:
         if self._pw is None:
             self._pw = sync_playwright().start()
         os.makedirs(self.perfil, exist_ok=True)
-        kw = {"headless": bool(self.headless), "viewport": {"width": 1400, "height": 900}}
-        if self.cfg.get("navegador_exe"):
-            kw["executable_path"] = self.cfg["navegador_exe"]
-        elif self.cfg.get("canal_navegador"):
-            kw["channel"] = self.cfg["canal_navegador"]
+        kw = opcoes_navegador(self.cfg, self.headless, {"width": 1400, "height": 900})
         self.ctx = self._pw.chromium.launch_persistent_context(self.perfil, **kw)
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         self.page.set_default_timeout(15000)
@@ -2250,11 +2246,7 @@ class Vigia:
         while True:
             try:
                 if ctx is None:
-                    kw = {"headless": bool(self.cfg.get("headless")), "viewport": {"width": 1100, "height": 900}}
-                    if self.cfg.get("navegador_exe"):
-                        kw["executable_path"] = self.cfg["navegador_exe"]
-                    elif self.cfg.get("canal_navegador"):
-                        kw["channel"] = self.cfg["canal_navegador"]
+                    kw = opcoes_navegador(self.cfg, self.cfg.get("headless"), {"width": 1100, "height": 900})
                     ctx = pw.chromium.launch_persistent_context(os.path.join(DADOS, "perfil-grok"), **kw)
                     page = ctx.pages[0] if ctx.pages else ctx.new_page()
                     page.goto(self.cfg["url_grok"], wait_until="domcontentloaded")
@@ -2380,21 +2372,74 @@ def criar_painel(estado, operador, porta):
 
 
 # ---------------------------------------------------------------- subida
+_CAMINHOS_NAVEGADOR = [
+    r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe",
+    r"%ProgramFiles(x86)%\BraveSoftware\Brave-Browser\Application\brave.exe",
+    r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe",
+    r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+    r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
+    r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+]
+
+
+def achar_navegador(cfg):
+    """O navegador de verdade do operador (Brave, ou Chrome no PC do sócio).
+    config "navegador_exe" manda; senão procura nos lugares de instalação padrão.
+    "" = usa o Chromium do Playwright."""
+    exe = (cfg.get("navegador_exe") or "").strip().strip('"')
+    if exe:
+        return exe if os.path.isfile(exe) else ""
+    if os.name != "nt":
+        return ""
+    for c in _CAMINHOS_NAVEGADOR:
+        c = os.path.expandvars(c)
+        if os.path.isfile(c):
+            return c
+    return ""
+
+
+def opcoes_navegador(cfg, headless, viewport=None):
+    """Opções do Playwright: navegador de verdade + sem a marca de automação
+    (sites como o login do Google recusam navegador 'controlado por automação')."""
+    kw = {"headless": bool(headless), "ignore_default_args": ["--enable-automation"],
+          "args": ["--disable-blink-features=AutomationControlled", "--no-first-run", "--no-default-browser-check"]}
+    if viewport:
+        kw["viewport"] = viewport
+    exe = achar_navegador(cfg)
+    if exe:
+        kw["executable_path"] = exe
+    elif cfg.get("canal_navegador"):
+        kw["channel"] = cfg["canal_navegador"]
+    return kw
+
+
 def modo_login(cfg):
-    """1-LOGIN.bat: abre as 3 janelas nos perfis do programa para o login à mão."""
-    from playwright.sync_api import sync_playwright
+    """1-LOGIN.bat: abre as 3 janelas nos perfis DO PROGRAMA para o login à mão.
+    Com Brave/Chrome instalado, abre o navegador NORMAL (sem automação nenhuma):
+    o Google aceita o login e a sessão fica salva na pasta do perfil."""
+    alvos = (("perfil-grok", cfg.get("url_grok") or "https://grok.com"),
+             ("perfil-1awin", cfg["url_1awin"]), ("perfil-ps3838", cfg["url_ps3838"]))
+    exe = achar_navegador(cfg)
     print("\nAbrindo as 3 janelas (Grok, 1aWin, PS3838) nos perfis DO PROGRAMA.")
     print("Faça o login à mão em cada uma. NÃO logue essas contas no seu navegador do dia a dia.\n")
+    if exe:
+        import subprocess
+        print("Navegador: %s\n" % exe)
+        for perfil, url in alvos:
+            subprocess.Popen([exe, "--user-data-dir=" + os.path.join(DADOS, perfil),
+                              "--no-first-run", "--no-default-browser-check", "--new-window", url])
+            time.sleep(1.5)
+        input("Quando terminar de logar nas 3 janelas, FECHE as 3 janelas e depois aperte ENTER aqui... ")
+        print("Logins salvos nos perfis do programa. Agora rode 2-INICIAR.bat.")
+        return
+    print("AVISO: não achei Brave nem Chrome. Usando o navegador do Playwright —")
+    print("o login com Google pode ser recusado. Coloque o caminho do brave.exe em")
+    print('"navegador_exe" no config.json para resolver.\n')
+    from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
         ctxs = []
-        for perfil, url in (("perfil-grok", cfg.get("url_grok") or "https://grok.com"),
-                            ("perfil-1awin", cfg["url_1awin"]), ("perfil-ps3838", cfg["url_ps3838"])):
-            kw = {"headless": False}
-            if cfg.get("navegador_exe"):
-                kw["executable_path"] = cfg["navegador_exe"]
-            elif cfg.get("canal_navegador"):
-                kw["channel"] = cfg["canal_navegador"]
-            ctx = pw.chromium.launch_persistent_context(os.path.join(DADOS, perfil), **kw)
+        for perfil, url in alvos:
+            ctx = pw.chromium.launch_persistent_context(os.path.join(DADOS, perfil), **opcoes_navegador(cfg, False))
             pg = ctx.pages[0] if ctx.pages else ctx.new_page()
             try:
                 pg.goto(url)
@@ -2439,6 +2484,8 @@ def main(argv):
         log("ERRO: a porta %d está ocupada — provavelmente um python.exe velho do programa. "
             "Feche-o (Gerenciador de Tarefas) e rode de novo." % porta)
         return
+    exe = achar_navegador(cfg)
+    log("navegador: %s" % (exe or "Chromium do Playwright (Brave/Chrome não encontrado)"))
     estado = Estado(cfg)
     casas = {CASA_PS: Casa(CASA_PS, cfg).iniciar(), CASA_1W: Casa(CASA_1W, cfg).iniciar()}
     operador = Operador(cfg, estado, casas)

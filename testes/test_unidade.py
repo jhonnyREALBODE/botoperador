@@ -487,3 +487,15 @@ def test_log_nao_trava_com_trava_global():
     t.start()
     t.join(2)
     assert not t.is_alive()
+
+
+def test_navegador_sem_marca_de_automacao(cfg, tmp_path):
+    kw = P.opcoes_navegador(cfg, True)
+    assert "--enable-automation" in kw["ignore_default_args"]
+    assert "--disable-blink-features=AutomationControlled" in kw["args"]
+    exe = tmp_path / "brave.exe"
+    exe.write_text("x")
+    cfg["navegador_exe"] = str(exe)
+    assert P.opcoes_navegador(cfg, False)["executable_path"] == str(exe)
+    cfg["navegador_exe"] = str(tmp_path / "nao-existe.exe")
+    assert "executable_path" not in P.opcoes_navegador(cfg, False)
