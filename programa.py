@@ -2390,6 +2390,15 @@ class Operador:
         log("🧪 calibração concluída — raio-x em %s" % arq)
 
 
+_RX_STATUS = re.compile(r"(quarto|quarter|tempo|half|intervalo|finalizado|encerrado|ao vivo|live|prorroga|overtime|"
+                        r"\d+\s*['’`´]|^\s*q[1-4]\b|^\s*\(f\)\s*$)", re.I)
+
+
+def _e_status_jogo(txt):
+    """Relógio/situação do jogo ('4º Quarto 1`', 'Finalizado', 'Intervalo') nunca é nome de time."""
+    return bool(_RX_STATUS.search(_sem_acento(txt or "")))
+
+
 def _calib_listar_jogos(c):
     c.ir(c.url_lista())
     ligas = c._sondar(c._mapa_ligas, 10) or []
@@ -2408,7 +2417,8 @@ def _calib_listar_jogos(c):
             linhas = c._sondar(linhas_da_liga, 6) or []
             achou = False
             for t in linhas:
-                partes = [p.strip() for p in re.split(r"\n|\s+(?:—|–|vs\.?|x)\s+", t) if len(p.strip()) >= 3 and not re.match(r"^[\d\s.:'’,-]+$", p.strip())]
+                partes = [p.strip() for p in re.split(r"\n|\s+(?:—|–|vs\.?|x)\s+", t)
+                          if len(p.strip()) >= 3 and not re.match(r"^[\d\s.:'’`´,-]+$", p.strip()) and not _e_status_jogo(p)]
                 if len(partes) >= 2 and not any(_mesmo_jogo(partes[:2], t) for _, t in jogos):
                     jogos.append((lg["url"], partes[:2]))
                     achou = True

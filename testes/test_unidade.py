@@ -588,3 +588,10 @@ def test_1awin_real_mercados_que_nao_sao_linha():
     assert h("Abaixo De 110.5 2.32", "2.32", ["Menos Mais", "Totais. 2º tempo"])[0]["periodo"] == "t2"
     assert h("San Antonio Spurs -1.5 1.97", "1.97", ["San Antonio Spurs Golden State Warriors", "Handicap. 4º quarto"]) == []
     assert h("Nenhum 25 5.37", "5.37", ["4º quarto. Corrida até N pontos"]) == []
+
+
+def test_status_do_jogo_nao_e_nome_de_time():
+    for t in ["4º Quarto 1`", "2º Tempo 3`", "Finalizado", "Intervalo", "Q4 10'"]:
+        assert P._e_status_jogo(t), t
+    for t in ["Utah State", "Oklahoma (f)", "San Antonio Spurs"]:
+        assert not P._e_status_jogo(t), t
