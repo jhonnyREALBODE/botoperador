@@ -1,0 +1,489 @@
+import json
+import os
+import threading
+import time
+import urllib.request
+
+import pytest
+
+import programa as P
+from conftest import SINAL, TIMES, oferta
+
+
+# ------------------------------------------------------------------ config
+def test_config_default_custo_4(cfg):
+    assert cfg["custo_max"] == 4.0
+    assert cfg["janela_min"] == 1.0
+    assert cfg["perna_ps_eur"] == 5.0
+    assert cfg["cambio_brl_eur"] == 6.20
+    assert cfg["modo_teste"] is True
+
+
+def test_config_nao_atropela_ordem_do_operador(tmp_path):
+    arq = tmp_path / "c.json"
+    arq.write_text(json.dumps({"custo_max": 3.5, "janela_min": 2}))
+    c = P.carregar_config(str(arq), avisar=False)
+    assert c["custo_max"] == 3.5 and c["janela_min"] == 2.0
+
+
+def test_config_restricao_temporaria_default_e_religar(tmp_path, cfg):
+    assert cfg["so_totais"] is True
+    assert cfg["totais_periodos"] == ["jogo", "q1", "q2", "q3"]
+    arq = tmp_path / "c.json"
+    arq.write_text(json.dumps({"so_totais": False, "totais_periodos": None}))
+    c = P.carregar_config(str(arq), avisar=False)
+    assert c["so_totais"] is False
+    assert c["totais_periodos"] == P.PERIODOS_TODOS
+
+
+def test_config_q4_nunca_entra(tmp_path):
+    arq = tmp_path / "c.json"
+    arq.write_text(json.dumps({"totais_periodos": ["jogo", "q4"]}))
+    assert P.carregar_config(str(arq), avisar=False)["totais_periodos"] == ["jogo"]
+
+
+def test_config_modo_real_so_com_false(tmp_path):
+    arq = tmp_path / "c.json"
+    arq.write_text(json.dumps({"modo_teste": "false"}))
+    assert P.carregar_config(str(arq), avisar=False)["modo_teste"] is True
+    arq.write_text(json.dumps({"modo_teste": False}))
+    assert P.carregar_config(str(arq), avisar=False)["modo_teste"] is False
+
+
+def test_config_imprime_parametros_efetivos(tmp_path):
+    P.carregar_config(str(tmp_path / "x.json"))
+    assert any("PARÂMETROS EFETIVOS" in l and "custo_max=4.0" in l for l in P._LOG_MEM)
+
+
+# ------------------------------------------------------------------ texto e números
+@pytest.mark.parametrize("txt,val", [("5,00", 5.0), ("1.613", 1.613), ("1.234,56", 1234.56), ("−3.5", -3.5),
+                                     ("+9.5", 9.5), ("R$ 31,00", 31.0), ("abc", None)])
+def test_num(txt, val):
+    assert P._num(txt) == val
+
+
+@pytest.mark.parametrize("a,b", [("Atenas Cordoba", "Atlético de Atenas"), ("San Lorenzo de Almagro", "São Lourenço"),
+                                 ("Phoenix", "Phoenix Suns"), ("Charlotte Hornets", "Charlotte"),
+                                 ("Al Najma", "Al-Najma"), ("Botafogo", "Botafogo RJ")])
+def test_nome_bate(a, b):
+    assert P._nome_bate(a, b)
+
+
+@pytest.mark.parametrize("a,b", [("Chicago Bulls", "Atlanta Hawks"), ("Flamengo", "Flamengo W"),
+                                 ("Franca", "Pato"), ("Phoenix Suns", "Phoenix Mercury W")])
+def test_nome_nao_bate(a, b):
+    assert not P._nome_bate(a, b)
+
+
+def test_limpar_file_mention():
+    t = 'odd <file-mention id="x">arquivo.txt</file-mention>1,85 <b>ok</b>'
+    out = P._limpar(t)
+    assert "file-mention" not in out and "arquivo" not in out and "1,85" in out and "<b>" not in out
+
+
+def test_ler_valor_eur_e_reais():
+    assert P.ler_valor_reais("apostar 5,00 EUR", 6.2) == 31.0
+    assert P.ler_valor_reais("apostar €5", 6.2) == 31.0
+    assert P.ler_valor_reais("apostar R$ 16,13", 6.2) == 16.13
+
+
+# ------------------------------------------------------------------ sinais
+CONVERSA = """
+🛰️ SINAL DE MIDDLE (BetBurger)
+Jogo: Phoenix Suns x Charlotte Hornets
+Liga: EUA - NBA
+Mercado do sinal: Total <file-mention>x</file-mention>
+algum texto do analista
+
+🛰️ SINAL DE MIDDLE (BetBurger)
+Jogo: Atenas Cordoba vs San Lorenzo de Almagro
+Mercado do sinal: Handicap
+"""
+
+
+def test_extrair_sinais():
+    s = P.extrair_sinais(CONVERSA)
+    assert len(s) == 2
+    assert s[0]["times"] == ["Phoenix Suns", "Charlotte Hornets"] and s[0]["liga"] == "EUA - NBA"
+    assert s[0]["mercado"] == "Total"
+    assert s[1]["times"] == ["Atenas Cordoba", "San Lorenzo de Almagro"] and s[1]["liga"] == ""
+
+
+def test_resultado_nao_vira_sinal_e_le_devolvida():
+    t = CONVERSA + "\nRESULTADO\nJogo: Phoenix Suns x Charlotte Hornets\nDesfecho: DEVOLVIDA\n"
+    assert len(P.extrair_sinais(t)) == 2
+    r = P.extrair_resultados(t)
+    assert r and r[0]["desfecho"] == "DEVOLVIDA"
+
+
+# ------------------------------------------------------------------ períodos / relógio
+@pytest.mark.parametrize("txt,per", [("1º Quarto", "q1"), ("2nd Quarter", "q2"), ("3° quarto - Total", "q3"),
+                                     ("1º Tempo", "t1"), ("2nd Half", "t2"), ("Jogo", "jogo"), ("Total", None),
+                                     ("Q3", "q3"), ("4º Quarto", "q4"), ("1ª metade", "t1")])
+def test_periodo_de_texto(txt, per):
+    assert P.periodo_de_texto(txt) == per
+
+
+def test_relogio_e_periodos_encerrados():
+    assert P.quarto_atual("Phoenix — Charlotte\n2º Quarto 5'") == 2
+    assert P.quarto_atual("3rd quarter 7'") is None or P.quarto_atual("3 Quarter 7'") == 3
+    assert P.periodos_encerrados(2) == {"q1"}
+    assert P.periodos_encerrados(3) == {"q1", "q2", "t1"}
+    assert P.periodos_encerrados(4) == {"q1", "q2", "t1", "q3"}
+    assert P.periodos_encerrados(None) == set()
+
+
+# ------------------------------------------------------------------ matemática do par
+def test_par_phoenix_marco_00h43(cfg):
+    """A primeira rodada completa: 1aWin abaixo 214.5 @3.1 x PS acima 204.5 @1.613."""
+    cfg["custo_max"] = 100  # só a matemática
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 3.1)
+    b = oferta("ps3838", "total", "jogo", "acima", 204.5, 1.613)
+    bil, mot = P.achar_par([a], [b], SINAL, cfg)
+    assert mot is None
+    assert bil["janela"] == 10.0
+    assert bil["pernas"][0]["stake"] == 16.13 and bil["pernas"][1]["stake"] == 31.00
+
+
+def test_custo_ate_4_vale_e_acima_nao(cfg):
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.10)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 1.80)
+    bil, _ = P.achar_par([a], [b], SINAL, cfg)
+    assert bil and 3.0 < bil["custo"] < 4.0
+    b2 = oferta("ps3838", "total", "jogo", "acima", 210.5, 1.70)
+    raio = {}
+    bil, mot = P.achar_par([a], [b2], SINAL, cfg, raio)
+    assert bil is None and "sem par" in mot
+    assert raio["valido"] is False and raio["par"]["janela"] == 4.0  # o "quase"
+
+
+def test_maior_janela_vence_e_desempate_por_custo(cfg):
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.10)
+    bs = [oferta("ps3838", "total", "jogo", "acima", 212.5, 1.90), oferta("ps3838", "total", "jogo", "acima", 211.5, 1.80)]
+    bil, _ = P.achar_par([a], bs, SINAL, cfg)
+    assert bil["janela"] == 3.0
+    a2 = [oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.10), oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.12)]
+    bil, _ = P.achar_par(a2, [bs[0]], SINAL, cfg)
+    assert bil["pernas"][0]["odd"] == 2.12
+
+
+def test_janela_minima(cfg):
+    a = oferta("1awin", "total", "jogo", "abaixo", 212.0, 2.10)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 2.10)
+    bil, mot = P.achar_par([a], [b], SINAL, cfg)
+    assert bil is None
+
+
+def test_teto_janela_total_prishtina(cfg):
+    a = oferta("1awin", "total", "q1", "abaixo", 136.5, 2.0)
+    b = oferta("ps3838", "total", "q1", "acima", 115.0, 2.0)
+    bil, mot = P.achar_par([a], [b], SINAL, cfg)
+    assert bil is None and "1 suspeito" in mot
+
+
+def test_custo_suspeito_menor_que_menos_10(cfg):
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 4.0)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 4.0)
+    bil, mot = P.achar_par([a], [b], SINAL, cfg)
+    assert bil is None and "suspeito" in mot
+
+
+def test_handicap_regra_do_operador(cfg):
+    cfg["so_totais"] = False
+    a = oferta("1awin", "handicap", "jogo", "time0", 5.5, 2.0, "Phoenix Suns", 0)
+    b = oferta("ps3838", "handicap", "jogo", "time1", -3.5, 2.0, "Charlotte Hornets", 1)
+    bil, _ = P.achar_par([a], [b], SINAL, cfg)
+    assert bil["janela"] == 2.0
+    a = oferta("1awin", "handicap", "jogo", "time0", 6.0, 2.0, "Phoenix Suns", 0)
+    b = oferta("ps3838", "handicap", "jogo", "time1", -4.0, 2.0, "Charlotte Hornets", 1)
+    assert P.achar_par([a], [b], SINAL, cfg)[0]["janela"] == 2.0
+
+
+def test_handicap_anti_middle_san_jose(cfg):
+    cfg["so_totais"] = False
+    a = oferta("1awin", "handicap", "jogo", "time0", -20.0, 2.0, "A", 0)
+    b = oferta("ps3838", "handicap", "jogo", "time1", 3.5, 2.0, "B", 1)
+    bil, mot = P.achar_par([a], [b], SINAL, cfg)
+    assert bil is None  # -16,5: as duas perdem juntas numa faixa
+
+
+def test_handicap_mesmo_sinal_kasentina(cfg):
+    cfg["so_totais"] = False
+    a = oferta("1awin", "handicap", "jogo", "time0", 7.0, 2.0, "A", 0)
+    b = oferta("ps3838", "handicap", "jogo", "time1", 7.5, 2.0, "B", 1)
+    bil, mot = P.achar_par([a], [b], SINAL, cfg)
+    assert bil is None and "1 suspeito" in mot
+
+
+def test_handicap_mesmo_time_nao_pareia(cfg):
+    cfg["so_totais"] = False
+    a = oferta("1awin", "handicap", "jogo", "time0", 5.5, 2.0, "A", 0)
+    b = oferta("ps3838", "handicap", "jogo", "time0", -3.5, 2.0, "A", 0)
+    assert P.achar_par([a], [b], SINAL, cfg)[0] is None
+
+
+def test_so_totais_desliga_handicap_e_declara(cfg):
+    a = oferta("1awin", "handicap", "jogo", "time0", 5.5, 2.0, "A", 0)
+    b = oferta("ps3838", "handicap", "jogo", "time1", -3.5, 2.0, "B", 1)
+    bil, mot = P.achar_par([a], [b], SINAL, cfg)
+    assert bil is None and "restrição ativa" in mot
+
+
+def test_periodo_fora_da_lista_e_q4(cfg):
+    a = oferta("1awin", "total", "t1", "abaixo", 112.5, 2.1)
+    b = oferta("ps3838", "total", "t1", "acima", 110.5, 2.1)
+    assert P.achar_par([a], [b], SINAL, cfg)[0] is None
+    cfg["totais_periodos"] = P.PERIODOS_TODOS + ["q4"]
+    a = oferta("1awin", "total", "q4", "abaixo", 58.5, 2.1)
+    b = oferta("ps3838", "total", "q4", "acima", 52.5, 2.1)
+    assert P.achar_par([a], [b], SINAL, cfg)[0] is None
+
+
+def test_periodos_diferentes_nao_pareiam(cfg):
+    a = oferta("1awin", "total", "q1", "abaixo", 56.5, 2.1)
+    b = oferta("ps3838", "total", "q2", "acima", 54.5, 2.1)
+    assert P.achar_par([a], [b], SINAL, cfg)[0] is None
+
+
+def test_escada_vazia_motivo(cfg):
+    bil, mot = P.achar_par([], [oferta("ps3838", "total", "jogo", "acima", 211.5, 1.8)], SINAL, cfg)
+    assert bil is None and "escada vazia em 1aWin" in mot
+
+
+def test_stakes_total_fixo(cfg):
+    cfg["perna_ps_eur"] = 0
+    s1, s2 = P._stakes_iguais(600, 2.0, 2.0)
+    assert (s1, s2) == (300.0, 300.0)
+    cfg["custo_max"] = 100
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.1)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 1.8)
+    bil, _ = P.achar_par([a], [b], SINAL, cfg)
+    assert abs(bil["total"] - 600) < 0.02
+
+
+def test_perna_ps_minima_5eur(cfg):
+    cfg["perna_ps_eur"] = 0
+    cfg["total_operacao"] = 40
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.1)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 2.0)
+    assert P.achar_par([a], [b], SINAL, cfg)[0] is None
+
+
+def test_cenarios(cfg):
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.10)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 1.80)
+    bil, _ = P.achar_par([a], [b], SINAL, cfg)
+    c = P.cenarios(bil)
+    assert len(c) == 3
+    assert c[2]["valor"] > 0 and c[0]["valor"] < 0 and c[1]["valor"] < 0
+
+
+# ------------------------------------------------------------------ leitura (parser)
+def item(seg, odd, heads, mid="1", **kw):
+    d = {"mid": mid, "odd": odd, "txt": seg, "seg": seg, "linha": None, "col": "", "ci": -1, "hdrs": None, "heads": heads}
+    d.update(kw)
+    return d
+
+
+def test_oferta_por_segmento():
+    ofs = P.ofertas_de_enumeracao([item("Abaixo de (214.5) 2.10", "2.10", ["Total", "Phoenix — Charlotte"])], "1awin", TIMES)
+    assert ofs[0]["lado"] == "abaixo" and ofs[0]["linha"] == 214.5 and ofs[0]["odd"] == 2.10 and ofs[0]["periodo"] == "jogo"
+
+
+def test_odd_fantasma_holbaek():
+    """2.58 é da 168.5 — nunca pode colar na 158.5."""
+    ofs = P.ofertas_de_enumeracao([item("Acima de 158.5 Acima de 168.5 2.58", "2.58", ["Total"])], "1awin", TIMES)
+    assert len(ofs) == 1 and ofs[0]["linha"] == 168.5
+
+
+def test_invariante_src():
+    it = item("Acima de (204.5) 1.85", "1.85", ["Total"])
+    it["seg"] = "Acima de (204.5)"  # odd não coexiste no texto-fonte
+    assert P.ofertas_de_enumeracao([it], "1awin", TIMES) == []
+
+
+@pytest.mark.parametrize("head", ["Vencedor do Ponto 50", "Dicas de IA", "Total individual: Phoenix Suns",
+                                  "Corrida até 20 pontos", "Par/Ímpar", "Margem de vitória", "Phoenix Suns - Total"])
+def test_classificacao_nao_linha(head):
+    assert P.ofertas_de_enumeracao([item("Acima de (204.5) 1.85", "1.85", [head])], "1awin", TIMES) == []
+
+
+def test_periodo_manda_na_secao_e_q4_proibido():
+    ofs = P.ofertas_de_enumeracao([item("Acima de (54.5) 1.85", "1.85", ["Total", "2º Quarto"]),
+                                   item("Acima de (58.5) 1.85", "1.85", ["Total", "4º Quarto"], mid="2")], "1awin", TIMES)
+    assert [o["periodo"] for o in ofs] == ["q2"]
+
+
+def test_periodo_encerrado_morre():
+    its = [item("Acima de (54.5) 1.85", "1.85", ["Total", "1º Quarto"]),
+           item("Acima de (55.5) 1.85", "1.85", ["Total", "2º Quarto"], mid="2")]
+    assert [o["periodo"] for o in P.ofertas_de_enumeracao(its, "1awin", TIMES, quarto=2)] == ["q2"]
+    assert len(P.ofertas_de_enumeracao(its, "1awin", TIMES, quarto=1)) == 2
+
+
+def test_faixa_total_jogo():
+    assert P.ofertas_de_enumeracao([item("Acima de (95.5) 1.85", "1.85", ["Total"])], "1awin", TIMES) == []
+
+
+def test_handicap_segmento_time():
+    ofs = P.ofertas_de_enumeracao([item("Charlotte Hornets (+9.5) 2.05", "2.05", ["Handicap"])], "1awin", TIMES)
+    assert ofs[0]["tipo"] == "handicap" and ofs[0]["linha"] == 9.5 and ofs[0]["time_idx"] == 1
+
+
+def test_tabela_ps_colunas():
+    hdrs = ["HDP", "Phoenix Suns", "Charlotte Hornets", "Pontos", "Acima", "Abaixo"]
+    row = ["-4.5", "2.00", "1.85", "211.5", "1.80", "2.02"]
+    its = [item("1.80", "1.80", ["Jogo"], mid="1", linha=row, hdrs=hdrs, col="Acima", ci=4),
+           item("1.85", "1.85", ["Jogo"], mid="2", linha=row, hdrs=hdrs, col="Charlotte Hornets", ci=2),
+           item("2.00", "2.00", ["Jogo"], mid="3", linha=row, hdrs=hdrs, col="Phoenix Suns", ci=1)]
+    ofs = P.ofertas_de_enumeracao(its, "ps3838", TIMES)
+    assert ofs[0]["tipo"] == "total" and ofs[0]["lado"] == "acima" and ofs[0]["linha"] == 211.5
+    assert ofs[1]["tipo"] == "handicap" and ofs[1]["linha"] == 4.5 and ofs[1]["time_idx"] == 1
+    assert ofs[2]["linha"] == -4.5 and ofs[2]["time_idx"] == 0
+
+
+# ------------------------------------------------------------------ casas: textos
+def test_ps_confronto_e_lista():
+    t = "EUA - NBA\nPhoenix Suns -vs- Charlotte Hornets\n2º Quarto"
+    assert P.ps_e_o_jogo(t, TIMES)["liga"] == "EUA - NBA"
+    assert P.ps_e_o_jogo("Phoenix Suns\nCharlotte Hornets\n1.90", TIMES) is None
+    assert P.liga_da_url_ps("https://x/pt/sports/basketball/eua-nba/matchup/123") == "eua nba"
+
+
+def test_linha_confronto_1awin():
+    assert P.linha_confronto("Menu\nAtl. Atenas — São Lourenço\n2º Quarto", ["Atenas Cordoba", "San Lorenzo de Almagro"])
+
+
+def test_memoria_ps_so_matchup():
+    P.memorizar_url("ps3838", TIMES, "https://x/pt/sports/basketball")
+    assert P.url_memorizada("ps3838", TIMES) is None
+    P.memorizar_url("ps3838", TIMES, "https://x/pt/a/matchup/1")
+    assert P.url_memorizada("ps3838", ["Phoenix", "Charlotte"]) == "https://x/pt/a/matchup/1"
+
+
+def test_liga_parecida():
+    assert P.liga_parecida("Brasil - NBB", "Brazil. NBB") > 0.63
+    assert P.liga_parecida("Argentina - Liga Nacional", "Brasil. NBB") < 0.5
+    assert P.liga_parecida("Espanha - Liga Feminina", "Spain. Liga") == 0.0
+    assert P.liga_parecida("Brasil - Liga 2", "Brasil - Liga") == 0.0
+
+
+def test_ordenar_ligas_memoria_confirmada():
+    ligas = [{"nome": "Espanha. ACB", "url": "u1"}, {"nome": "Brasil. NBB", "url": "u2"}]
+    assert P.ordenar_ligas(ligas, "Brasil - NBB")[0]["url"] == "u2"
+    P.confirmar_liga("Liga X", {"nome": "Espanha. ACB", "url": "u1"})
+    assert P.ordenar_ligas(ligas, "Liga X")[0]["url"] == "u1"
+
+
+# ------------------------------------------------------------------ vigia
+class OperadorFalso:
+    def __init__(self):
+        self.recebidos = []
+
+    def novo_sinal(self, s, origem="sinal"):
+        self.recebidos.append((s, origem))
+
+
+def test_vigia_backlog_nunca_executa_e_fresco_executa(cfg):
+    est = P.Estado(cfg)
+    op = OperadorFalso()
+    v = P.Vigia(cfg, op, est)
+    v.processar(CONVERSA)
+    assert not v.backlog_ok  # uma leitura só não conclui
+    v.processar(CONVERSA)
+    assert v.backlog_ok and len(est.backlog) == 2 and op.recebidos == []
+    novo = CONVERSA + "\n🛰️ SINAL DE MIDDLE (BetBurger)\nJogo: Flamengo x Franca\nMercado do sinal: Total\n"
+    v.processar(novo)
+    assert len(op.recebidos) == 1 and op.recebidos[0][0]["times"] == ["Flamengo", "Franca"]
+    v.processar(novo)
+    assert len(op.recebidos) == 1
+
+
+def test_vigia_resultado_nao_clica(cfg):
+    est = P.Estado(cfg)
+    op = OperadorFalso()
+    v = P.Vigia(cfg, op, est)
+    v.processar(CONVERSA)
+    v.processar(CONVERSA)
+    v.processar(CONVERSA + "\nRESULTADO\nJogo: Phoenix Suns x Charlotte Hornets\nDesfecho: DEVOLVIDA\n")
+    assert op.recebidos == [] and est.resultados[0]["desfecho"] == "DEVOLVIDA"
+
+
+def test_cooldown_do_sinal_identico(cfg, monkeypatch):
+    monkeypatch.setattr(P.Operador, "_monitorar", lambda self, s, ev, o: None)
+    op = P.Operador(cfg, P.Estado(cfg), {})
+    assert op.novo_sinal(dict(SINAL)) is True
+    assert op.novo_sinal(dict(SINAL)) is False
+    outro = dict(SINAL, id="outro")
+    assert op.novo_sinal(outro) is True
+
+
+def test_sinal_novo_cancela_o_atual(cfg, monkeypatch):
+    cancelados = []
+
+    def mon(self, s, ev, o):
+        ev.wait(5)
+        cancelados.append(s["id"])
+    monkeypatch.setattr(P.Operador, "_monitorar", mon)
+    op = P.Operador(cfg, P.Estado(cfg), {})
+    op.novo_sinal(dict(SINAL))
+    op.novo_sinal(dict(SINAL, id="b"))
+    time.sleep(0.3)
+    assert cancelados == [SINAL["id"]]
+
+
+# ------------------------------------------------------------------ estado/painel
+def test_resultado_marca_desfecho_do_bilhete(cfg):
+    est = P.Estado(cfg)
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.10)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 1.80)
+    bil, _ = P.achar_par([a], [b], SINAL, cfg)
+    est.registrar_bilhete(bil, "sinal")
+    est.registrar_resultado({"jogo": "Phoenix x Charlotte", "desfecho": "DEVOLVIDA", "id": "x"})
+    assert bil["desfecho"] == "DEVOLVIDA"
+    assert json.load(open(P.ARQ_HIST))["bilhetes"][0]["desfecho"] == "DEVOLVIDA"
+
+
+def test_painel_estado_e_backlog(cfg):
+    est = P.Estado(cfg)
+    op = OperadorFalso()
+    op.calibrar = lambda: None
+    est.backlog.append(dict(SINAL))
+    raio = {"jogo": SINAL["jogo"]}
+    P.achar_par([oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.10)],
+                [oferta("ps3838", "total", "jogo", "acima", 211.5, 1.80)], SINAL, cfg, raio)
+    est.set_calc(raio, 1)
+    srv = P.criar_painel(est, op, 0)
+    porta = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        d = json.load(urllib.request.urlopen("http://127.0.0.1:%d/api/estado" % porta))
+        assert d["modo"] == "TESTE" and d["calculadora"]["valido"] is True
+        assert len(d["calculadora"]["cenarios"]) == 3
+        assert "_mid" not in json.dumps(d)
+        html = urllib.request.urlopen("http://127.0.0.1:%d/" % porta).read().decode()
+        assert "Calculadora do motor" in html
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/backlog/0" % porta, method="POST"))
+        assert op.recebidos and op.recebidos[0][1] == "backlog" and est.backlog == []
+    finally:
+        srv.shutdown()
+
+
+def test_painel_so_localhost(cfg):
+    srv = P.criar_painel(P.Estado(cfg), None, 0)
+    try:
+        assert srv.server_address[0] == "127.0.0.1"
+    finally:
+        srv.server_close()
+
+
+def test_palavra_abolida_nao_existe():
+    src = open(os.path.join(os.path.dirname(P.__file__), "programa.py"), encoding="utf-8").read().lower()
+    assert "vencid" not in src and "venceu" not in src
+
+
+def test_log_nao_trava_com_trava_global():
+    t = threading.Thread(target=lambda: P.log("teste"))
+    t.start()
+    t.join(2)
+    assert not t.is_alive()

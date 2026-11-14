@@ -1,0 +1,69 @@
+<!doctype html><html><head><meta charset="utf-8"><title>PS3838 (falsa)</title>
+<style>body{font-family:Arial;margin:0;display:flex}#app{flex:1;padding:10px}.betslip{width:300px;border-left:1px solid #ccc;padding:10px;min-height:400px}
+td,th{border:1px solid #ccc;padding:3px 6px}td.c{cursor:pointer}.grupo-tit,.per-tit{cursor:pointer;background:#ddd;margin:4px 0;padding:4px}
+.modal{position:fixed;top:30%;left:30%;background:#fff;border:2px solid #000;padding:20px}.slip-sel{border:1px solid #888;padding:4px}
+.jogo-lista{display:block;margin:4px;border:1px solid #ddd;padding:4px}</style>
+<script>const ESTADO = __ESTADO__;</script><script src="/fakes/dados.js"></script></head><body>
+<div id="app"></div>
+<div class="betslip"><b>Boletim</b><div id="sels"></div><div>Stake €: <input id="stake" type="text"></div>
+<button id="rem">Remover tudo</button> <button id="apostar">Fazer aposta</button><div id="msg"></div></div>
+<script>
+const p = location.pathname; const app = document.getElementById('app');
+let sel = null;
+const stake = document.getElementById('stake');
+stake.addEventListener('change', () => { const v = parseFloat(stake.value.replace(/,/g, '')); if (!isNaN(v)) stake.value = v.toFixed(2); });
+function render() {
+  const s = document.getElementById('sels'); s.innerHTML = '';
+  if (!sel) return;
+  s.innerHTML = '<div class="slip-sel"><div>' + sel.jogo + '</div><div>' + sel.per + ' - ' + sel.mk + '</div><div>' + sel.rot + ' @ ' + sel.odd + '</div></div>';
+}
+document.getElementById('rem').onclick = () => {
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = 'Quer limpar o boletim? <button id="okm">OK</button> <button id="canc">Cancelar</button>';
+  document.body.appendChild(m);
+  m.querySelector('#okm').onclick = () => { sel = null; render(); m.remove(); };
+  m.querySelector('#canc').onclick = () => m.remove();
+};
+document.getElementById('apostar').onclick = () => { if (sel) document.getElementById('msg').textContent = 'Aposta aceita'; };
+if (ESTADO.limite) {
+  app.innerHTML = '<h2>Excesso de requisições</h2><p>Tente novamente mais tarde.</p>';
+} else if (p.indexOf('/matchup/') >= 0) {
+  const id = p.split('/').pop(); const j = JOGOS[id];
+  let h = '<div class="liga">' + (ESTADO.liga_errada ? 'Espanha - ACB' : j.ligaps) + '</div><h2 class="confronto">' + j.t1 + ' -vs- ' + j.t2 + '</h2><div>' + relogio() + '</div>';
+  if (ESTADO.deslogado) h += '<div><button>Entrar</button></div>';
+  h += '<div class="grupo"><div class="grupo-tit" aria-expanded="false">Handicap &amp; Mais/Menos que</div><div class="grupo-corpo" style="display:none">';
+  for (const [per, linhas] of mercadosPS(j)) {
+    h += '<div class="per"><div class="per-tit" aria-expanded="false">' + per + '</div><div class="per-corpo" style="display:none"><table><thead><tr><th>HDP</th><th>' + j.t1 + '</th><th>' + j.t2 + '</th><th>Pontos</th><th>Acima</th><th>Abaixo</th></tr></thead><tbody>';
+    for (const l of linhas) {
+      h += '<tr>' + l.map((v, i) => (i === 0 || i === 3) ? '<td>' + v + '</td>' : '<td class="c">' + (ESTADO.deslogado ? '' : '<span class="odd">' + v + '</span>') + '</td>').join('') + '</tr>';
+    }
+    h += '</tbody></table></div></div>';
+  }
+  h += '</div></div>';
+  app.innerHTML = h;
+  document.querySelectorAll('[aria-expanded]').forEach(t => t.onclick = () => {
+    const ab = t.getAttribute('aria-expanded') === 'true'; t.setAttribute('aria-expanded', ab ? 'false' : 'true');
+    t.nextElementSibling.style.display = ab ? 'none' : 'block'; });
+  document.querySelectorAll('td.c').forEach(td => td.onclick = (ev) => {
+    const tr = td.parentElement; const i = Array.from(tr.children).indexOf(td);
+    const cel = Array.from(tr.children).map(c => c.innerText.trim());
+    const per = td.closest('.per').querySelector('.per-tit').innerText;
+    const odd = cel[i]; if (!odd) return;
+    let rot, mk;
+    if (i === 4) { rot = 'Acima ' + cel[3]; mk = 'Mais/Menos'; }
+    else if (i === 5) { rot = 'Abaixo ' + cel[3]; mk = 'Mais/Menos'; }
+    else { const hdp = parseFloat(cel[0]); const l = i === 1 ? hdp : -hdp; rot = (i === 1 ? j.t1 : j.t2) + ' ' + (l > 0 ? '+' : '') + l; mk = 'Handicap'; }
+    sel = {jogo: j.t1 + ' -vs- ' + j.t2, per, mk, rot, odd}; render();
+  });
+  if (ESTADO.sujo) { sel = {jogo: 'Outro -vs- Jogo', per: 'Jogo', mk: 'Mais/Menos', rot: 'Acima 150.5', odd: '1.90'}; render(); }
+} else {
+  // lista de basquete (com linhas — mas NÃO é página de jogo)
+  let h = '<h2>Basquete</h2>';
+  for (const id of Object.keys(JOGOS)) {
+    const j = JOGOS[id];
+    h += '<a class="jogo-lista" href="/pt/sports/basketball/' + j.slugps + '/matchup/' + id + '">' + j.t1 + '<br>' + j.t2 + '</a>';
+    h += '<div>1º Tempo — Acima 105.5 <span>1.90</span></div>';
+  }
+  app.innerHTML = h;
+}
+</script></body></html>

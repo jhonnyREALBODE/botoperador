@@ -1,0 +1,71 @@
+<!doctype html><html><head><meta charset="utf-8"><title>1aWin (falsa)</title>
+<style>body{font-family:Arial;margin:0;display:flex}#app{flex:1;padding:10px}.coupon{width:300px;border-left:1px solid #ccc;padding:10px;min-height:400px}
+.odd-btn{display:inline-flex;gap:8px;border:1px solid #999;margin:3px;padding:4px 8px;cursor:pointer}.mk{margin:8px 0}.mk-title{font-weight:bold}
+.sec-title{font-size:18px;background:#eee;margin-top:10px}.event-row{cursor:pointer;border:1px solid #ddd;margin:4px;padding:6px}
+.tab{display:inline-block;padding:4px 10px;cursor:pointer;border:1px solid #aaa}.cp-sel{border:1px solid #888;margin:4px 0;padding:4px}.x{cursor:pointer;float:right}</style>
+<script>const ESTADO = __ESTADO__;</script><script src="/fakes/dados.js"></script></head><body>
+<div id="app"></div>
+<div class="coupon"><b>Cupom</b><div id="sels"></div><div>Valor: <input id="stake" type="text"></div><button id="apostar">Fazer aposta</button><div id="msg"></div></div>
+<script>
+const p = location.pathname;
+const app = document.getElementById('app');
+let sel = null;
+function renderCupom() {
+  const s = document.getElementById('sels'); s.innerHTML = '';
+  if (!sel) return;
+  const d = document.createElement('div'); d.className = 'cp-sel';
+  if (sel.morto) {
+    d.innerHTML = '<div>' + sel.jogo + '</div><div>Evento excluído</div><button class="cancelar">Cancelar</button>';
+    d.querySelector('.cancelar').onclick = () => { sel = null; renderCupom(); };
+  } else {
+    d.innerHTML = '<span class="x">×</span><div>' + sel.jogo + '</div><div>' + sel.mk + ': ' + sel.rot + '</div><div><b>' + sel.odd + '</b></div>';
+    d.querySelector('.x').onclick = () => { sel = null; renderCupom(); };
+  }
+  s.appendChild(d);
+}
+document.getElementById('apostar').onclick = () => { if (sel && !sel.morto) document.getElementById('msg').textContent = 'Aposta aceita'; };
+if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
+  app.innerHTML = '<h2>Basquete ao vivo</h2>' + (ESTADO.feed_vazio ? '' : LIGAS1W.map(l => '<div><a href="/betting/live/basketball-23/' + l[0] + '">' + l[1] + ' <span>' + l[2].length + '</span></a></div>').join(''));
+} else if (p.match(/\/betting\/live\/basketball-23\/(.+)$/)) {
+  const lg = LIGAS1W.find(l => l[0] === p.split('/').pop());
+  app.innerHTML = '<h2>' + (lg ? lg[1] : '?') + '</h2>';
+  (lg ? lg[2] : []).forEach(id => {
+    const j = JOGOS[id]; const r = document.createElement('div'); r.className = 'event-row';
+    r.innerHTML = '<div>' + j.c1 + '</div><div>' + j.c2 + '</div><div>' + relogio() + '</div>';
+    r.onclick = () => { location.href = '/betting/match/sport/' + j.t1.toLowerCase().replace(/\W+/g, '-') + '-vs-' + j.t2.toLowerCase().replace(/\W+/g, '-') + '-' + id; };
+    app.appendChild(r);
+  });
+} else if (p.match(/\/betting\/match\//)) {
+  const id = p.split('-').pop(); const j = JOGOS[id];
+  const mortos = []; const q = qAtual(); if (q >= 2) mortos.push('1º Quarto');
+  app.innerHTML = '<div class="hdr"><h2>' + j.t1 + ' — ' + j.t2 + '</h2><div class="clock">' + relogio() + '</div></div>' +
+    '<div class="tabs"><div class="tab" role="tab">Todos</div><div class="tab" role="tab">Principal</div><div class="tab" role="tab">Quartos</div></div><div id="mks"></div>';
+  const mks = document.getElementById('mks');
+  let secAtual = null;
+  for (const [sec, mk, btns] of mercados1w(j)) {
+    let alvo = mks;
+    if (sec) {
+      if (!secAtual || secAtual.dataset.n !== sec) {
+        secAtual = document.createElement('div'); secAtual.className = 'sec'; secAtual.dataset.n = sec;
+        secAtual.innerHTML = '<div class="sec-title">' + sec + '</div>'; mks.appendChild(secAtual);
+      }
+      alvo = secAtual;
+    }
+    const m = document.createElement('div'); m.className = 'mk';
+    m.innerHTML = '<div class="mk-title">' + mk + '</div><div class="mk-body"></div>';
+    for (const [rot, odd] of btns) {
+      const b = document.createElement('div'); b.className = 'odd-btn';
+      b.innerHTML = '<span>' + rot + '</span><span class="v">' + odd + '</span>';
+      b.onclick = () => {
+        if (sel && sel.rot === rot && sel.mk === (sec ? sec + ' ' : '') + mk) { sel = null; renderCupom(); return; }
+        sel = {jogo: j.t1 + ' — ' + j.t2, mk: (sec ? sec + ' ' : '') + mk, rot, odd, morto: mortos.includes(sec)};
+        renderCupom();
+      };
+      m.querySelector('.mk-body').appendChild(b);
+    }
+    alvo.appendChild(m);
+  }
+  if (ESTADO.sujo) { sel = {jogo: 'Outro x Jogo', mk: 'Total', rot: 'Acima de (150.5)', odd: '1.90'}; renderCupom(); }
+  if (ESTADO.cupom_preso) { sel = {jogo: 'Outro x Jogo', morto: true}; renderCupom(); }
+}
+</script></body></html>
