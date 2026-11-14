@@ -682,3 +682,23 @@ def test_relogio_ps_ncaa_h2():
 def test_pistas_nunca_vazias_no_filtro_frouxo():
     assert P.pistas_nome("Co Basketbol", 3) == ["co"]
     assert "geo" in P.pistas_nome("George Mason", 3)
+
+
+@pytest.mark.parametrize("titulo,equipe", [
+    ("Totais (inc OT)", False), ("Totais. 2º quarto", False), ("Totais. 2º tempo", False),
+    ("Totais (inc OT) - Linhas asiáticas", False),
+    ("2º quarto. Basquete De Barcelos total", True),      # 14/11 15:37: janela 12 fabricada
+    ("Aac Efapel total (inc OT)", True), ("San Antonio Spurs total (inc OT)", True),
+])
+def test_total_de_equipe_pela_forma_do_titulo(titulo, equipe):
+    assert P._e_total_de_equipe(titulo) is equipe
+
+
+def test_par_fabricado_barcelos_14_11(cfg):
+    """O sinal chama 'Barcelos Hotel Terco'; a 1aWin, 'Basquete De Barcelos'. O total do time no
+    2º quarto (19.5) não pode virar oferta de total do 2º quarto."""
+    times = ["Academica Efapel Coimbra", "Barcelos Hotel Terco"]
+    it = item("Acima De 19.5 2.05", "2.05", ["Menos Mais", "2º quarto. Basquete De Barcelos total"])
+    assert P.ofertas_de_enumeracao([it], "1awin", times, quarto=2) == []
+    it = item("Acima De 32.5 1.95", "1.95", ["Menos Mais", "Totais. 2º quarto"])
+    assert P.ofertas_de_enumeracao([it], "1awin", times, quarto=2)[0]["periodo"] == "q2"

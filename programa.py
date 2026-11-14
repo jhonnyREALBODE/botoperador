@@ -885,7 +885,8 @@ def _cab_familia(heads, times):
         if i < 2 or (fam is None and i < 3):
             if _RX_NAO_LINHA.search(hn):
                 return None, None, True
-            if times and re.search(r"\btotal", hn, re.I) and any(_nome_bate(h2, t) for t in times for h2 in _pedacos(h)):
+            if _e_total_de_equipe(h) or (times and re.search(r"\btotal", hn, re.I)
+                                           and any(_nome_bate(h2, t) for t in times for h2 in _pedacos(h))):
                 return None, None, True  # total de equipe
             if _RX_FAM_HCP.search(hn):
                 fam = "handicap"
@@ -898,6 +899,25 @@ def _cab_familia(heads, times):
         if fam and per:
             break
     return fam, per or "jogo", False
+
+
+_PALAVRAS_TOTAL_JOGO = {"total", "totais", "totals", "pontos", "points", "jogo", "game", "match", "partida",
+                        "inc", "incl", "ot", "prorrogacao", "prorrogacoes", "overtime", "mais", "menos", "over",
+                        "under", "acima", "abaixo", "do", "da", "de", "of", "the", "e", "and", "o", "a",
+                        "quarto", "quarter", "tempo", "half", "metade", "periodo", "period", "1", "2", "3", "4",
+                        "1o", "2o", "3o", "4o", "1a", "2a", "1st", "2nd", "3rd", "4th", "q1", "q2", "q3", "q4",
+                        "h1", "h2", "linha", "linhas", "asiatico", "asiaticos", "asiatica", "asiaticas", "asian", "alternativo", "alternativos", "alternativas", "principal", "main"}
+
+
+def _e_total_de_equipe(titulo):
+    """Título de total com qualquer coisa além de 'Total(is)', período e '(inc OT)' = total de UM time
+    ('2º quarto. Basquete De Barcelos total' — caso 14/11 15:37, janela 12 fabricada).
+    Não depende de o nome do time bater com o do sinal."""
+    n = _norm(_sem_acento(titulo).replace("º", "o").replace("°", "o").replace("ª", "a"))
+    if not re.search(r"\btota(l|is|ls)\b", n):
+        return False
+    resto = [w for w in n.split() if w not in _PALAVRAS_TOTAL_JOGO]
+    return bool(resto)
 
 
 def _pedacos(h):
