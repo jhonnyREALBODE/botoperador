@@ -527,3 +527,15 @@ def test_1awin_desfaz_pela_lixeira_quando_o_x_nao_funciona(casas):
     assert c1.executar(c1.montar, dict(o1, stake=26.57), TIMES)["ok"]
     assert c1.executar(c1.desfazer, dict(o1, _mid=None))["ok"]
     assert c1.executar(c1.itens_cupom) == []
+
+
+def test_1awin_cupom_so_e_vazio_com_a_prova_da_casa(casas):
+    """14/11 18:40: o painel disse 'cupom vazio' com seleções presas. Sem 'Selecione um resultado'
+    e com cara de seleção, o cupom é SUJO — e a montagem não vai por cima."""
+    servidor.ESTADO["cartao_estranho"] = True
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
+    assert c1.executar(c1.itens_cupom)  # não diz que está vazio
+    servidor.ESTADO.clear()
+    recarregar(c1)
+    assert c1.executar(c1.itens_cupom) == []  # 'Selecione um resultado' = vazio de verdade

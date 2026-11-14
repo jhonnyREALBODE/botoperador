@@ -1277,6 +1277,8 @@ _RX_LIMITE = re.compile(r"excesso de requisi|too many requests|rate limit", re.I
 _RX_DESLOGADO = re.compile(r"\b(entrar|login|iniciar sess[aã]o|fazer login|sign in|log in)\b", re.I)
 _RX_ODD_MUDOU = re.compile(r"odds? (have |has )?changed|odds? (mudou|mudaram|alterad)|cota[cç](ao|oes) (mudou|mudaram|alterad)|"
                            r"coeficiente (mudou|alterad)|price changed", re.I)
+_RX_CUPOM_VAZIO = re.compile(r"selecione um resultado|nenhuma aposta selecionada|no (bets|selections) (selected|yet)|"
+                             r"bet ?slip is empty|cupom (esta )?vazio|adicione (uma )?sele", re.I)
 _RX_INDISPONIVEL = re.compile(r"sele[cç][aã]o indispon[ií]vel|selection (is )?(currently )?unavailable|"
                               r"indispon[ií]vel para apostas|aposta m[ií]nima [eé] maior que a aposta m[aá]xima", re.I)
 _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado (fechado|encerrado)|market closed", re.I)
@@ -1663,7 +1665,18 @@ class Casa:
         rótulo de mercado E uma odd. Cupom vazio ('Selecione um resultado') = [].
         PS: abre a aba do boletim antes — boletim escondido NÃO é boletim vazio."""
         self.mostrar_boletim()
-        return self._eval(JS_ITENS_CUPOM, [self.sel_cupom, self.sel_item])
+        itens = self._eval(JS_ITENS_CUPOM, [self.sel_cupom, self.sel_item]) or []
+        if itens:
+            return itens
+        # 'vazio' só com a PROVA da casa ('Selecione um resultado…' / 'Nenhuma aposta selecionada');
+        # sem a frase e com cara de seleção = sujo, mesmo sem reconhecer o cartão
+        # (caso 14/11 18:40: painel disse 'cupom vazio' com várias seleções presas na 1aWin)
+        tx = self.texto_cupom() or ""
+        if _RX_CUPOM_VAZIO.search(tx):
+            return []
+        if re.search(r"\b(acima|abaixo|mais|menos|over|under)\s+de\b|@\s*\d|\bevento exclu", _sem_acento(tx), re.I):
+            return ["(seleção não reconhecida no cupom) " + " ".join(tx.split())[:120]]
+        return []
 
     def texto_cupom(self):
         return self._eval("""(sc) => Array.from(document.querySelectorAll(sc))
@@ -1856,6 +1869,10 @@ class Casa:
                     return True
             self.dump_diag("desfazer_falhou")
             return False
+        if len(self.itens_cupom()) > 1 and self._clicar_lixeira_1w():  # várias presas: lixeira apaga tudo
+            self._modal_ok()
+            if self.esperar_cupom_vazio(2.0):
+                return True
         for _ in range(5):
             if not self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|cancelar|remove|delete|cancel|limpar tudo|remover tudo)$", True):
                 self._clicar_icone_do_item()
@@ -2225,7 +2242,9 @@ class Casa:
             r["motivo"] = mot
             r["foto"] = self.foto("falha")
             self.dump("falha")
-            self.limpar_cupom(perna)
+            if not self.limpar_cupom(perna):
+                r["motivo"] += " — e o cupom NÃO esvaziou: limpe à mão"
+                log("‼ %s: cupom NÃO esvaziou depois da falha — limpe à mão" % self.rotulo)
             return r
         valor = perna["stake"] / self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else perna["stake"]
         ok, mot = self.preencher_stake(round(valor, 2))
@@ -2242,7 +2261,9 @@ class Casa:
             r["motivo"] = mot
             r["foto"] = self.foto("falha")
             self.dump("falha")
-            self.limpar_cupom(perna)
+            if not self.limpar_cupom(perna):
+                r["motivo"] += " — e o cupom NÃO esvaziou: limpe à mão"
+                log("‼ %s: cupom NÃO esvaziou depois da falha — limpe à mão" % self.rotulo)
             return r
         r.update(ok=True, foto=self.foto("montado"))
         return r
