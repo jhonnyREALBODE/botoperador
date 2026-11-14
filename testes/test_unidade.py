@@ -624,3 +624,22 @@ def test_nomes_krosno_14_11():
     assert P._nome_bate("Notes Inowroclaw", "Notec Inowroclaw")
     assert P.ordenar_ligas([{"nome": "Sérvia. KLS", "url": "a"}, {"nome": "Polônia. 1ª Liga", "url": "b"}],
                            "Poland - 1. Liga")[0]["url"] == "b"
+
+
+@pytest.mark.parametrize("a,b,esperado", [
+    ("Joensuun Kataja Basket", "Fryshuset Basketbollklubb", False),   # 14/11 12:53: jogo errado na PS
+    ("KTP Basket Kotka", "Ockelbo Basket", False),
+    ("Co Basketbol", "Cedi Osman Basketbol", True),                    # sigla = iniciais
+    ("Pizza Bulls Cedi Osman Basketbol Spor Kulubu", "Co Basketbol", True),
+    ("KFUM Fryshuset", "Fryshuset Basketbollklubb", True),
+    ("Ockelbo BBK", "Ockelbo Basket", True),
+    ("MOSiR Miasto Szkla Krosno", "KKK MOSiR Krosno", True),
+])
+def test_palavra_generica_nao_identifica_time(a, b, esperado):
+    assert P._nome_bate(a, b) is esperado
+
+
+def test_memoria_de_url_nao_confunde_jogo_por_basket():
+    P.memorizar_url("ps3838", ["Fryshuset Basketbollklubb", "Ockelbo Basket"], "https://x/pt/a/matchup/1")
+    assert P.url_memorizada("ps3838", ["Joensuun Kataja Basket", "KTP Basket Kotka"]) is None
+    assert P._e_liga_virtual("Replays. NBA")

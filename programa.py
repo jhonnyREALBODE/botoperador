@@ -243,9 +243,35 @@ def _marcas(s):
     return {nome for rx, nome in _MARCA_IDENTIDADE if rx.search(n)}
 
 
+# palavras que quase todo time tem — NUNCA identificam um time (caso 14/11: "Joensuun Kataja
+# Basket" bateu com "Fryshuset Basketbollklubb" só por "basket")
+_GENERICOS = {"club", "clube", "klub", "klubb", "spor", "kulubu", "sport", "sports", "team", "basquete",
+              "baloncesto", "pallacanestro", "kosarka", "kosarkaski", "koszykowka", "sportclub", "sportverein",
+              "athletic", "atletico", "esporte", "esportes", "associacao", "associazione", "societa",
+              "bc", "bk", "bbk", "kk", "kkk", "ks", "sk", "sc", "fc", "ac", "cb", "cd", "ud", "bv", "tv", "vfl",
+              "women", "feminino", "feminina", "fem", "ladies"}
+
+
+def _generico(t):
+    return t in _GENERICOS or t.startswith(("basket", "basquet", "koszyk", "kosark"))
+
+
 def _tokens(s):
     toks = [_ALIAS_TOKENS.get(t, t) for t in _norm(s).split()]
-    return [t for t in toks if len(t) >= 4 or t == "san"]
+    return [t for t in toks if (len(t) >= 4 or t == "san") and not _generico(t)]
+
+
+def _iniciais(s):
+    return "".join(t[0] for t in _norm(s).split() if len(t) >= 3 and not _generico(t))
+
+
+def _sigla_bate(a, b):
+    """'Co Basketbol' x 'Cedi Osman Basketbol': a sigla curta de um = iniciais seguidas do outro."""
+    for w in _norm(a).split():
+        if 2 <= len(w) <= 4 and not _generico(w) and len(w) <= len(_iniciais(b)) and w in _iniciais(b) \
+                and not [t for t in _tokens(a) if len(t) >= 4]:
+            return True
+    return False
 
 
 def _token_bate(a, b):
@@ -269,6 +295,9 @@ def _nome_bate(a, b):
         return True
     ta = [t for t in _tokens(a) if t != "san"] or _tokens(a)
     tb = [t for t in _tokens(b) if t != "san"] or _tokens(b)
+    if not ta or not tb:
+        if _sigla_bate(a, b) or _sigla_bate(b, a):
+            return True
     if ta and tb:
         menor, maior = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
         bate = sum(1 for t in menor if any(_token_bate(t, u) for u in maior))
@@ -1196,7 +1225,7 @@ def trocar_origem(url, base):
     return "%s://%s%s%s" % (b.scheme, b.netloc, u.path, ("?" + u.query) if u.query else "")
 
 
-_RX_VIRTUAL = re.compile(r"(cyber|e-?basket|ebasketball|\b2k\b|nba ?2k|virtual|simulad|simulated|esport|e-sport|"
+_RX_VIRTUAL = re.compile(r"(replay|reprise|cyber|e-?basket|ebasketball|\b2k\b|nba ?2k|virtual|simulad|simulated|esport|e-sport|"
                          r"fifa|h2h gg|battle|\bgt league\b|\bvbl\b)", re.I)
 
 
