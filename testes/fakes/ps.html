@@ -72,6 +72,11 @@ if (ESTADO.limite) {
     let rot, mk;
     if (mer === '3') { rot = (lado === '3' ? 'Mais de ' : 'Menos de ') + l.toFixed(1); mk = 'OU'; }
     else { rot = (lado === '0' ? j.t1 : j.t2) + ' ' + (l > 0 ? '+' : '') + l; mk = 'HDP'; }
+    if (ESTADO.indisponivel) {  // janela real da PS que bloqueia a página
+      const m = document.createElement('div'); m.className = 'modal';
+      m.innerHTML = '<h3>Seleção Indisponível</h3><p>A seleção atual está indisponível para apostas porque a aposta mínima é maior que a aposta máxima</p><button class="okbtn">OK</button>';
+      m.querySelector('.okbtn').onclick = () => m.remove(); document.body.appendChild(m); return;
+    }
     sel = {aid: a.id, t1: j.t1, t2: j.t2, per: PERS[per] || per, mk, rot, odd}; render();
     if (ESTADO.odd_muda) setTimeout(() => { if (!sel) return; const de = sel.odd; sel.odd = '1.675';
       const o = document.querySelector('.BetItemComponent .odds-info .odds'); if (o) o.textContent = ' 1.675';

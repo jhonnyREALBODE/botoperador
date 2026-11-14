@@ -501,3 +501,16 @@ def test_aviso_de_odd_velho_nao_reprova(casas):
     ok, mot = cps.executar(com_aviso_velho)
     assert ok, mot
     limpar_cupons(casas)
+
+
+def test_ps_selecao_indisponivel_fecha_janela_e_falha(casas):
+    """14/11 ~18h: janela 'Seleção Indisponível' (mínimo > máximo) bloqueava a PS."""
+    servidor.ESTADO["indisponivel"] = True
+    _, cps = ir_jogo(casas)
+    recarregar(cps)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    r = cps.executar(cps.montar, dict(o, stake=31.0), TIMES)
+    assert not r["ok"] and "indisponível" in r["motivo"]
+    assert "Seleção Indisponível" not in cps.executar(cps.texto)  # janela fechada: a página volta a funcionar

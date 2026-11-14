@@ -1277,6 +1277,8 @@ _RX_LIMITE = re.compile(r"excesso de requisi|too many requests|rate limit", re.I
 _RX_DESLOGADO = re.compile(r"\b(entrar|login|iniciar sess[aã]o|fazer login|sign in|log in)\b", re.I)
 _RX_ODD_MUDOU = re.compile(r"odds? (have |has )?changed|odds? (mudou|mudaram|alterad)|cota[cç](ao|oes) (mudou|mudaram|alterad)|"
                            r"coeficiente (mudou|alterad)|price changed", re.I)
+_RX_INDISPONIVEL = re.compile(r"sele[cç][aã]o indispon[ií]vel|selection (is )?(currently )?unavailable|"
+                              r"indispon[ií]vel para apostas|aposta m[ií]nima [eé] maior que a aposta m[aá]xima", re.I)
 _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado (fechado|encerrado)|market closed", re.I)
 _RX_REMOVER_TUDO = re.compile(r"^\s*(remover tudo|remove all|limpar tudo|clear all|apagar tudo)\s*$", re.I)
 _RX_OK_MODAL = re.compile(r"^\s*(ok|sim|confirmar|yes)\s*$", re.I)
@@ -1620,6 +1622,26 @@ class Casa:
             self.base = nova
 
     # -------------------------------------------------- cupom / boletim
+    def fechar_aviso_indisponivel(self):
+        """PS: janela 'Seleção Indisponível — a aposta mínima é maior que a aposta máxima'.
+        Ela BLOQUEIA a página até alguém clicar OK. Fecha e devolve o texto (ou '')."""
+        if self.nome != CASA_PS:
+            return ""
+        try:
+            tx = self.texto()
+            m = _RX_INDISPONIVEL.search(tx)
+            if not m:
+                return ""
+            self._modal_ok()
+            self.page.wait_for_timeout(300)
+            if _RX_INDISPONIVEL.search(self.texto()):  # plano B: o X da janela
+                self._eval("""() => { for (const e of document.querySelectorAll('[class*="modal" i] [class*="close" i], [role=dialog] button'))
+                    { const r = e.getBoundingClientRect(); if (r.width > 0) { e.click(); return; } } }""")
+            log("PS: fechei a janela 'Seleção Indisponível'")
+            return m.group(0)
+        except Exception:
+            return ""
+
     def mostrar_boletim(self):
         """PS: o boletim mora numa aba da barra da esquerda ('BOLETIM DE APOSTAS'); com
         a aba 'Todos os eventos' ativa ele fica escondido."""
@@ -1841,6 +1863,8 @@ class Casa:
             r.update(limitada=True, motivo="casa limitada (Excesso de requisições)")
             return r
         if self.nome == CASA_PS:
+            if self.fechar_aviso_indisponivel():
+                tx = self.texto()
             if not ps_e_o_jogo(tx, times):
                 r["motivo"] = "a página da PS não é o matchup deste jogo"
                 self.dump_diag("ps_nao_e_jogo")
@@ -2009,6 +2033,8 @@ class Casa:
         tx = self.texto_cupom()
         if _RX_EXCLUIDO.search(tx):
             return False, "cupom mostra 'Evento excluído' — mercado encerrado, perna morta"
+        if _RX_INDISPONIVEL.search(tx):
+            return False, "a casa marcou a seleção como indisponível no cupom"
         m = _RX_ODD_MUDOU.search(_sem_acento(tx))
         if m:
             linha = next((l for l in tx.splitlines() if _RX_ODD_MUDOU.search(_sem_acento(l))), m.group(0))
@@ -2091,6 +2117,7 @@ class Casa:
         if self.nome == CASA_PS and not ps_e_o_jogo(tx, times):
             r["motivo"] = "PS não está no matchup deste jogo (a página é lista) — montagem abortada"
             return r
+        self.fechar_aviso_indisponivel()
         self.mostrar_boletim()
         if self.itens_cupom():  # quarentena
             log("%s: cupom sujo antes de montar — limpando primeiro" % self.rotulo)
@@ -2134,6 +2161,9 @@ class Casa:
         fim = time.time() + (7 if self.nome == CASA_PS else 4)
         while time.time() < fim:
             self.page.wait_for_timeout(250)
+            if self.fechar_aviso_indisponivel():
+                ok, mot = False, "a PS marcou a seleção como indisponível (aposta mínima maior que a máxima)"
+                break
             self.mostrar_boletim()
             if _RX_EXCLUIDO.search(self.texto_cupom() or ""):
                 ok, mot = False, "cupom mostra 'Evento excluído' — mercado encerrado, perna morta"
