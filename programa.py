@@ -2464,8 +2464,13 @@ class Casa:
                 self._logou_novas = True
             if _RX_SUCESSO.search(tx):
                 return {"ok": True, "motivo": "", "foto": self.foto("confirmado")}
+            # PS ao vivo: 'Aguarde… sendo processada… Aguardando -> Pendente' — o saldo JÁ desconta e
+            # a aposta ainda pode ser rejeitada depois (15/11 15:57). Espera o resultado final.
+            if re.search(r"sendo processada|aguardando|being processed|pending acceptance", tx, re.I):
+                fim = max(fim, t_clique + 45)
+                continue
             s1 = self._saldo()
-            if saldo0 is not None and s1 is not None and valor and saldo0 - s1 >= valor * 0.9:
+            if self.nome == CASA_1W and saldo0 is not None and s1 is not None and valor and saldo0 - s1 >= valor * 0.9:
                 return {"ok": True, "motivo": "saldo %s -> %s" % (_br(saldo0), _br(s1)), "foto": self.foto("confirmado")}
             depois = self._pendentes()
             if antes is not None and depois is not None and depois > antes:

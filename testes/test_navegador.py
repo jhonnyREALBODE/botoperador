@@ -722,3 +722,20 @@ def test_ps_rejeita_e_programa_tenta_de_novo(casas, cfgc):
         servidor.ESTADO.clear()
         for c in casas.values():
             recarregar(c)
+
+
+@pytest.mark.parametrize("final,esperado", [("aceita", True), ("rejeita", False)])
+def test_ps_aguardando_processamento(casas, final, esperado):
+    """15/11 15:57: PS 'Aguarde… sendo processada' — espera o resultado final (aceita ou rejeitada)."""
+    servidor.ESTADO["processando"] = final
+    _, cps = ir_jogo(casas)
+    recarregar(cps)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    p = dict(o, stake=31.0)
+    assert cps.executar(cps.montar, p, TIMES)["ok"]
+    r = cps.executar(cps.confirmar, p, timeout=90)
+    assert r["ok"] is esperado, r
+    servidor.ESTADO.clear()
+    recarregar(cps)
