@@ -2388,6 +2388,8 @@ class Casa:
         if b.get("desabilitado"):
             return {"ok": False, "motivo": "botão de apostar desabilitado — não cliquei", "foto": self.foto("confirmar")}
         antes = self._pendentes()
+        self._texto_antes = self.texto()
+        self._logou_novas = False
         saldo0 = self._saldo()
         valor = (perna or {}).get("stake", 0) / (self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else 1)
         log("%s: saldo antes de apostar = %s" % (self.rotulo, saldo0))
@@ -2397,10 +2399,24 @@ class Casa:
         except Exception as e:
             return {"ok": False, "motivo": "o clique em apostar não aconteceu (%s)" % str(e)[:80], "foto": self.foto("confirmar")}
         log("%s: cliquei em APOSTAR" % self.rotulo)
+        linhas0 = set(l.strip() for l in (getattr(self, "_texto_antes", "") or "").splitlines())
+        novas, fotos_rapidas = [], 0
+        t_clique = time.time()
         fim = time.time() + 25  # ao vivo tem atraso de aceitação
         while time.time() < fim:
             self.page.wait_for_timeout(400)
             tx = self.texto()
+            # registra TODO texto novo que aparecer (avisos/toasts somem rápido) — diagnóstico
+            for l in tx.splitlines():
+                l = l.strip()
+                if l and l not in linhas0 and l not in novas and len(l) < 160 and not re.fullmatch(r"[\d.,:\s'`´-]+", l):
+                    novas.append(l)
+            if fotos_rapidas < 2 and time.time() - t_clique > (1.0 if fotos_rapidas == 0 else 3.0):
+                self.foto("apos_clique_%d" % (fotos_rapidas + 1))
+                fotos_rapidas += 1
+            if novas and not getattr(self, "_logou_novas", False) and time.time() - t_clique > 3:
+                log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:12])))
+                self._logou_novas = True
             if _RX_SUCESSO.search(tx):
                 return {"ok": True, "motivo": "", "foto": self.foto("confirmado")}
             s1 = self._saldo()
@@ -2413,6 +2429,8 @@ class Casa:
                 m = _RX_RECUSA.search(tx)
                 if self.itens_cupom():  # recusou e a seleção continua no cupom: nada foi apostado
                     return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar")}
+        if novas:
+            log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:20])))
         vazio = not self.itens_cupom()
         s1 = self._saldo()
         if vazio and saldo0 is not None and s1 is not None and abs(saldo0 - s1) < 0.01:
