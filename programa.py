@@ -1396,7 +1396,9 @@ class Casa:
         self.sel_cupom = cfg.get("seletor_cupom_" + ("1awin" if nome == CASA_1W else "ps")) or SEL_CUPOM_PADRAO[nome]
         # PS real: cada seleção é um .BetItemComponent (data-id = id do botão). 1aWin: classes
         # embaralhadas -> sem seletor, vale a heurística (menor bloco com mercado + odd).
-        self.sel_item = ('[class*="BetItemComponent"], [class*="slip-sel" i]' if nome == CASA_PS else "")
+        # 1aWin real (HTML de 14/11 23:58): cada seleção é um [data-scope="CouponCard"]
+        self.sel_item = ('[class*="BetItemComponent"], [class*="slip-sel" i]' if nome == CASA_PS
+                         else '[data-scope="CouponCard"]')
         self.thread = threading.Thread(target=self._laco, name="casa-" + nome, daemon=True)
 
     @property
@@ -1766,6 +1768,12 @@ class Casa:
         n = self._eval("""() => {
             document.querySelectorAll('[data-alvo-x]').forEach(e => e.removeAttribute('data-alvo-x'));
             let n = 0;
+            // 1aWin real: o X é o <svg> do cabeçalho do [data-scope="SelectionInfo"]
+            for (const card of document.querySelectorAll('[data-scope="CouponCard"]')) {
+                const x = card.querySelector('[data-scope="SelectionInfo"] [class*="header" i] > svg, [data-scope="SelectionInfo"] svg');
+                if (x && x.getBoundingClientRect().width > 0) { n++; x.setAttribute('data-alvo-x', String(n)); }
+            }
+            if (n) return n;
             for (const card of document.querySelectorAll('[data-item-cupom]')) {
                 // o X é o ícone MAIS À DIREITA do cartão (à esquerda fica o ícone de 'ao vivo' —
                 // caso 14/11 18:21: o programa clicava nele e o cupom não esvaziava)

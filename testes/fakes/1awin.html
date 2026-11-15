@@ -19,15 +19,15 @@ function renderCupom() {
       '<form><input class="_input_1yqxh_36" placeholder="Código da aposta"><button type="submit" disabled>Ver aposta</button></form></div>';
     return;
   }
-  const d = document.createElement('div'); d.className = '_card_c7';
+  const d = document.createElement('div'); d.className = '_card_c7'; d.setAttribute('data-scope', 'CouponCard');
   if (sel.morto) {
     d.innerHTML = '<div>' + sel.jogo + '</div><div>Evento excluído</div><button class="_b_m1">Cancelar</button>';
     d.querySelector('button').onclick = () => { sel = null; renderCupom(); };
     s.appendChild(d);
     return;
   }
-  d.innerHTML = '<div class="_head_p2"><span class="_live_k1"><svg width="10" height="10"><circle cx="5" cy="5" r="4"/></svg></span><span>77 : 49</span> <span>' + sel.jogo + '</span><button type="button" class="_ico_z3"><svg width="10" height="10"><path d="M0 0L10 10"/></svg></button></div>' +
-    '<div><span>' + sel.mk + ', ' + sel.rot + '</span> <span class="_cf_17if8_2">' + sel.odd + '</span></div>';
+  d.innerHTML = '<div data-scope="SelectionInfo"><div class="_head_p2"><span class="_live_k1"><svg width="10" height="10"><circle cx="5" cy="5" r="4"/></svg></span><span>77 : 49</span> <span>' + sel.jogo + '</span><button type="button" class="_ico_z3"><svg width="10" height="10"><path d="M0 0L10 10"/></svg></button></div>' +
+    '<div><span>' + sel.mk + ', ' + sel.rot + '</span> <span class="_cf_17if8_2">' + sel.odd + '</span></div></div>';
   d.querySelector('button').onclick = () => { if (!ESTADO.x_morto) { sel = null; renderCupom(); } };
   s.appendChild(d);
   const f = document.createElement('div');
