@@ -112,7 +112,7 @@ DEFAULTS = {
     "janela_min": 1.0,
     "custo_max": 4.0,            # ordem do operador 13/11 14:54 (era 3,0)
     # tabela do operador 15/11: [janela de, janela até (exclusiva), perda máxima %]
-    "custo_por_janela": [[1, 2, 2.0], [2, 3, 3.8], [3, 7, 3.99], [7, 11, 4.0]],
+    "custo_por_janela": [[1, 2, 2.0], [2, 3, 3.8], [3, 7, 3.99], [7, 11, 7.0]],  # 7–10: 7% (ordem 15/11)
     "perna_ps_eur": 5.0,         # 0 = volta ao total fixo
     "total_operacao": 600.0,
     "cambio_brl_eur": 6.20,
@@ -570,8 +570,7 @@ def _calcular(oferta_1w, oferta_ps, cfg):
 
 def custo_max_para(janela, cfg):
     """Perda máxima conforme a janela (tabela do operador 15/11):
-    1 ponto até 2%; 2 pontos até 3,8%; 3–6 pontos abaixo de 4%; 7–10 'acima de 4%' (teto ainda
-    não definido: usa custo_max). Meio ponto fica na faixa de baixo (1,5 = faixa do 1)."""
+    1 ponto até 2%; 2 pontos até 3,8%; 3–6 pontos abaixo de 4%; 7–10 pontos até 7%. Meio ponto fica na faixa de baixo (1,5 = faixa do 1)."""
     tab = cfg.get("custo_por_janela")
     if not tab:
         return cfg["custo_max"]

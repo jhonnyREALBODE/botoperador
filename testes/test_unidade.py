@@ -753,7 +753,7 @@ def test_tabela_perda_por_janela_15_11(cfg):
     assert f(1.0, cfg) == 2.0 and f(1.5, cfg) == 2.0
     assert f(2.0, cfg) == 3.8 and f(2.5, cfg) == 3.8
     assert f(3.0, cfg) == 3.99 and f(6.5, cfg) == 3.99
-    assert f(7.0, cfg) == 4.0 and f(10.5, cfg) == 4.0
+    assert f(7.0, cfg) == 7.0 and f(10.5, cfg) == 7.0
     a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.81)
     b = oferta("ps3838", "total", "jogo", "acima", 213.5, 2.09)   # janela 1, custo ~3%
     assert P.achar_par([a], [b], SINAL, cfg)[0] is None            # 1 ponto só aceita até 2%
