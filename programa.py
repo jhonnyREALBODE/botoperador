@@ -2205,6 +2205,14 @@ class Casa:
         return False, "stake lida de volta %s ≠ %s — não segue" % (lido, _fmt(valor))
 
     def montar(self, perna, times):
+        """Monta UMA perna e registra quanto tempo levou (a casa mexe rápido no ao vivo)."""
+        t0 = time.time()
+        r = self._montar(perna, times)
+        r["segundos"] = round(time.time() - t0, 1)
+        log("%s: montagem levou %.1fs" % (self.rotulo, r["segundos"]))
+        return r
+
+    def _montar(self, perna, times):
         """Monta UMA perna, no mesmo fôlego da leitura. Retorna {ok, motivo, foto}."""
         r = {"ok": False, "motivo": "", "foto": ""}
         tx = self.texto()
