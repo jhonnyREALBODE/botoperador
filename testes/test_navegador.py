@@ -633,3 +633,24 @@ def test_1awin_aceita_pelo_saldo(casas, cfgc):
     servidor.ESTADO.clear()
     for c in casas.values():
         recarregar(c)
+
+
+def test_1awin_recibo_de_aposta_aceita(casas, cfgc):
+    """Tela real da 1aWin (15/11): 'Aposta aceita / Ir para o histórico / Aberto • Simples' fica no cupom.
+    O programa reconhece como aceita e, depois, recarrega para o cupom voltar a ficar vazio."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["recibo"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "confirmado", bil["detalhe"]
+    c1 = casas[P.CASA_1W]
+    assert c1.executar(c1.limpar_cupom) is True
+    assert c1.executar(c1.itens_cupom) == []
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)

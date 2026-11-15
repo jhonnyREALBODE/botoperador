@@ -1286,7 +1286,7 @@ _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado
 _RX_REMOVER_TUDO = re.compile(r"^\s*(remover tudo|remove all|limpar tudo|clear all|apagar tudo)\s*$", re.I)
 _RX_OK_MODAL = re.compile(r"^\s*(ok|sim|confirmar|yes)\s*$", re.I)
 _RX_APOSTAR = re.compile(r"^\s*(fazer (a |uma )?aposta|apostar|place bet|confirmar aposta|realizar aposta)\b", re.I)
-_RX_SUCESSO = re.compile(r"aposta (aceita|feita|realizada|registrada|confirmada|efetuada)|apostas? (foi|foram) (aceita|feita|realizada)|"
+_RX_SUCESSO = re.compile(r"aposta (aceita|feita|realizada|registrada|confirmada|efetuada)|ir para o hist[oó]rico|apostas? (foi|foram) (aceita|feita|realizada)|"
                          r"bet (accepted|placed)|sua aposta foi|successfully placed|aceit[ao] com sucesso", re.I)
 _RX_RECUSA = re.compile(r"aposta (recusada|rejeitada|n[aã]o aceita)|bet (rejected|declined|not accepted)|saldo insuficiente|"
                         r"insufficient (funds|balance)|odds? (have |has )?changed|cota[cç](ao|oes) (mudou|mudaram)|"
@@ -1857,6 +1857,17 @@ class Casa:
         self.mostrar_boletim()
         if not self.itens_cupom():
             return True
+        # recibo de aposta já feita ('Aposta aceita' / 'Ir para o histórico' — 1aWin real 15/11):
+        # não é seleção pendente; recarregar a página devolve o cupom vazio
+        try:
+            if re.search(r"aposta aceita|ir para o hist", self.texto_cupom() or "", re.I):
+                log("%s: cupom mostra o recibo de aposta aceita — recarregando para esvaziar" % self.rotulo)
+                self.page.reload(wait_until="domcontentloaded")
+                self.page.wait_for_timeout(1500)
+                if self.esperar_cupom_vazio(4.0):
+                    return True
+        except Exception:
+            pass
         if self.nome == CASA_PS:
             for rodada in range(3):
                 # 1) "Remover tudo" -> "Quer limpar o seu boletim de apostas? CANCELAR / OK"
