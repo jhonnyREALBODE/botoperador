@@ -111,6 +111,8 @@ def log(msg):
 DEFAULTS = {
     "janela_min": 1.0,
     "custo_max": 4.0,            # ordem do operador 13/11 14:54 (era 3,0)
+    # tabela do operador 15/11: [janela de, janela até (exclusiva), perda máxima %]
+    "custo_por_janela": [[1, 2, 2.0], [2, 3, 3.8], [3, 7, 3.99], [7, 11, 4.0]],
     "perna_ps_eur": 5.0,         # 0 = volta ao total fixo
     "total_operacao": 600.0,
     "cambio_brl_eur": 6.20,
@@ -158,6 +160,9 @@ def carregar_config(caminho=None, avisar=True):
                 _fmt(cfg["janela_min"], 1), _fmt(cfg["custo_max"], 1), _fmt(cfg["perna_ps_eur"]),
                 _fmt(cfg["total_operacao"]), _fmt(cfg["cambio_brl_eur"]), int(cfg["monitor_intervalo_s"]),
                 cfg["modo_teste"], cfg["so_totais"], ",".join(cfg["totais_periodos"])))
+        if cfg.get("custo_por_janela"):
+            log("PERDA MÁXIMA POR JANELA: " + "; ".join("%s–%s pts: %s%%" % (_br(a, 1), _br(b - 0.5, 1), _br(c, 2))
+                                                       for a, b, c in cfg["custo_por_janela"]))
     return cfg
 
 
@@ -563,6 +568,20 @@ def _calcular(oferta_1w, oferta_ps, cfg):
             "ps_eur": round(s_ps / cambio, 3)}
 
 
+def custo_max_para(janela, cfg):
+    """Perda máxima conforme a janela (tabela do operador 15/11):
+    1 ponto até 2%; 2 pontos até 3,8%; 3–6 pontos abaixo de 4%; 7–10 'acima de 4%' (teto ainda
+    não definido: usa custo_max). Meio ponto fica na faixa de baixo (1,5 = faixa do 1)."""
+    tab = cfg.get("custo_por_janela")
+    if not tab:
+        return cfg["custo_max"]
+    for faixa in tab:  # [[janela_de, janela_ate_exclusiva, custo_max], ...]
+        de, ate, cmax = faixa
+        if de <= janela + 1e-9 and janela < ate - 1e-9:
+            return float(cmax)
+    return cfg["custo_max"]
+
+
 def _janela_total(a, b):
     """(acima, abaixo) -> janela = linha_do_abaixo - linha_do_acima."""
     return round(b["linha"] - a["linha"], 3)
@@ -641,7 +660,7 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None):
             if jan >= cfg["janela_min"]:
                 menor_custo_ok = c["custo"] if menor_custo_ok is None else min(menor_custo_ok, c["custo"])
             ps_ok = c["ps_eur"] + FOLGA_PS_EUR >= (cfg["perna_ps_eur"] or 5.0)
-            valido = jan >= cfg["janela_min"] and c["custo"] <= cfg["custo_max"] and ps_ok
+            valido = jan >= cfg["janela_min"] and c["custo"] <= custo_max_para(jan, cfg) and ps_ok
             candidatos.append((valido, jan, c, a, b))
 
     validos = [x for x in candidatos if x[0]]
@@ -2468,13 +2487,20 @@ class Casa:
             # PS ao vivo: 'Aguarde… sendo processada… Aguardando -> Pendente' — o saldo JÁ desconta e
             # a aposta ainda pode ser rejeitada depois (15/11 15:57). Espera o resultado final.
             if re.search(r"sendo processada|aguardando|being processed|pending acceptance", tx, re.I):
-                fim = max(fim, t_clique + 45)
+                fim = min(max(fim, time.time() + 10), t_clique + 60)
                 continue
-            s1 = self._saldo()
-            if self.nome == CASA_1W and saldo0 is not None and s1 is not None and valor and saldo0 - s1 >= valor * 0.9:
-                return {"ok": True, "motivo": "saldo %s -> %s" % (_br(saldo0), _br(s1)), "foto": self.foto("confirmado")}
+            # 1aWin processando (botão com spinner / aria-busy) — o saldo já cai e a aposta ainda pode
+            # não entrar (15/11 17:02: saldo 102,53 -> 66,73 e NADA no histórico). Só a mensagem prova.
+            try:
+                ocupado = self._eval("""() => !!document.querySelector('aside [aria-busy="true"], [data-scope="Betslip"] [aria-busy="true"]')""")
+            except Exception:
+                ocupado = False
+            if ocupado:
+                fim = min(max(fim, time.time() + 10), t_clique + 60)
+                continue
             depois = self._pendentes()
-            if antes is not None and depois is not None and depois > antes:
+            if antes is not None and depois is not None and depois > antes \
+                    and not re.search(r"sendo processada|aguardando", tx, re.I):
                 return {"ok": True, "motivo": "apostas pendentes %d -> %d" % (antes, depois), "foto": self.foto("confirmado")}
             # recusa: só texto NOVO depois do clique (o 'Odds have changed 2.080 to 2.100' que já estava
             # no boletim antes do clique fez a PS ser dada como recusada em 2s — caso 15/11 15:21)
@@ -3124,7 +3150,7 @@ class Operador:
                 self.estado.atualizar(bil, status=st, detalhe=detalhe, fotos=fotos)
                 return st
             # MODO REAL — frágil primeiro, com a outra já montada
-            r1 = c1.executar(c1.confirmar, p1, timeout=40)
+            r1 = c1.executar(c1.confirmar, p1, timeout=120)
             fotos.append(r1.get("foto", ""))
             if r1["ok"] is None:
                 detalhe["1aWin"] = r1["motivo"]
@@ -3139,7 +3165,7 @@ class Operador:
                 self.estado.atualizar(bil, status="falhou", detalhe=detalhe, fotos=fotos)
                 return "falhou"
             log("1aWin: aposta CONFIRMADA (%s) — confirmando a PS" % (r1["motivo"] or "mensagem da casa"))
-            r2 = cps.executar(cps.confirmar, p2, timeout=40)
+            r2 = cps.executar(cps.confirmar, p2, timeout=120)
             fotos.append(r2.get("foto", ""))
             # a 1aWin JÁ está apostada: se a PS recusou (atraso do ao vivo — caso 15/11 15:56,
             # 'Your bet has been rejected'), tenta de novo na hora, até 2 vezes, com a mesma conferência
@@ -3147,7 +3173,7 @@ class Operador:
                 if r2["ok"] is not False:
                     break
                 log("PS recusou (%s) — nova tentativa %d/2 com a 1aWin já apostada" % (r2["motivo"], tentativa))
-                r2 = cps.executar(cps.reapostar, p2, bil["times"], timeout=60)
+                r2 = cps.executar(cps.reapostar, p2, bil["times"], timeout=150)
                 fotos.append(r2.get("foto", ""))
             if r2["ok"] is None:
                 detalhe["1aWin"] = "confirmada"

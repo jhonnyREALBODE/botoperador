@@ -146,6 +146,7 @@ def test_par_phoenix_marco_00h43(cfg):
 
 
 def test_custo_ate_4_vale_e_acima_nao(cfg):
+    cfg["custo_por_janela"] = None
     a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.10)
     b = oferta("ps3838", "total", "jogo", "acima", 211.5, 1.80)
     bil, _ = P.achar_par([a], [b], SINAL, cfg)
@@ -744,3 +745,15 @@ def test_ironia_maccabi_ramat_gan_15_11():
                              ["Maccabi Ironi Ramat Gan", "Ironi Ness Ziona"])
     assert not P._nome_bate("Hapoel Tel Aviv", "Maccabi Tel Aviv")
     assert not P._nome_bate("Maccabi Ironi Ramat Gan", "Ironi Ness Ziona")
+
+
+def test_tabela_perda_por_janela_15_11(cfg):
+    """Tabela do operador: 1 pt até 2%; 2 pts até 3,8%; 3–6 abaixo de 4%."""
+    f = P.custo_max_para
+    assert f(1.0, cfg) == 2.0 and f(1.5, cfg) == 2.0
+    assert f(2.0, cfg) == 3.8 and f(2.5, cfg) == 3.8
+    assert f(3.0, cfg) == 3.99 and f(6.5, cfg) == 3.99
+    assert f(7.0, cfg) == 4.0 and f(10.5, cfg) == 4.0
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.81)
+    b = oferta("ps3838", "total", "jogo", "acima", 213.5, 2.09)   # janela 1, custo ~3%
+    assert P.achar_par([a], [b], SINAL, cfg)[0] is None            # 1 ponto só aceita até 2%

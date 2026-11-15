@@ -618,8 +618,8 @@ def test_1awin_limpa_sem_apostar_nao_e_incerto(casas, cfgc):
     assert casas[P.CASA_PS].executar(casas[P.CASA_PS].itens_cupom) == []
 
 
-def test_1awin_aceita_pelo_saldo(casas, cfgc):
-    """Sem mensagem, mas o saldo caiu o valor da aposta = aceita -> confirma a PS."""
+def test_1awin_saldo_sozinho_nao_prova(casas, cfgc):
+    """15/11 17:02: o saldo caiu e a aposta NÃO existia. Saldo sozinho não confirma: não aposta a PS."""
     cfgc["modo_teste"] = False
     servidor.ESTADO["so_saldo"] = True
     ir_jogo(casas)
@@ -629,7 +629,8 @@ def test_1awin_aceita_pelo_saldo(casas, cfgc):
     bil = achar(casas, cfgc)
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
-    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "confirmado", bil["detalhe"]
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "incerto", bil["detalhe"]
+    assert "Aposta aceita" not in casas[P.CASA_PS].executar(casas[P.CASA_PS].texto)
     servidor.ESTADO.clear()
     for c in casas.values():
         recarregar(c)
@@ -739,3 +740,23 @@ def test_ps_aguardando_processamento(casas, final, esperado):
     assert r["ok"] is esperado, r
     servidor.ESTADO.clear()
     recarregar(cps)
+
+
+def test_1awin_processa_e_nao_entra(casas, cfgc):
+    """15/11 17:02: spinner, saldo cai, depois volta e o cupom limpa — NÃO entrou. A PS não é apostada."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["processa_e_some"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    try:
+        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "falhou", bil["detalhe"]
+        assert "Aposta aceita" not in casas[P.CASA_PS].executar(casas[P.CASA_PS].texto)
+    finally:
+        servidor.ESTADO.clear()
+        for c in casas.values():
+            recarregar(c)

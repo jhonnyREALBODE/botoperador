@@ -36,6 +36,13 @@ function renderCupom() {
     '<button type="button" class="_acc_x1">Fazer uma aposta</button><div id="msg"></div>';
   f.querySelector('._acc_x1').onclick = () => {
     if (ESTADO.limpa_sem_apostar) { sel = null; renderCupom(); return; }
+    if (ESTADO.processa_e_some) {  // 1aWin real 15/11 17:02: spinner, saldo cai, e a aposta NÃO entra
+      const b = f.querySelector('._acc_x1'); b.setAttribute('aria-busy', 'true');
+      const v = parseFloat(f.querySelector('input').value.replace(',', '.'));
+      document.getElementById('saldo').textContent = 'BRL ' + (120 - v).toFixed(2).replace('.', ',');
+      setTimeout(() => { b.setAttribute('aria-busy', 'false'); document.getElementById('saldo').textContent = 'BRL 120,00'; sel = null; renderCupom(); }, 4000);
+      return;
+    }
     if (ESTADO.so_saldo) { const v = parseFloat(f.querySelector('input').value.replace(',', '.')); document.getElementById('saldo').textContent = 'BRL ' + (120 - v).toFixed(2).replace('.', ','); sel = null; renderCupom(); return; }
     if (ESTADO.recibo) { document.getElementById('slip').innerHTML = '<div class="_ok_r1"><p>Aposta aceita</p><a>Ir para o histórico</a></div><div data-scope="CouponCard"><span>Aberto • Simples</span><span>1.4</span><div>' + sel.mk + ', ' + sel.rot + '</div></div>'; return; }
     if (!ESTADO.confirma_mudo) document.getElementById('msg').textContent = 'Aposta aceita'; };
