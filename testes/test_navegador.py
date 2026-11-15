@@ -766,6 +766,8 @@ def test_monitoramento_pos_entrada_cobertura_simulada(casas, cfgc):
     """Middle testado -> posição aberta em aba separada -> acha Under ≥ 4 pts acima do Over original
     que melhora a posição inteira -> cobertura (simulada no modo teste)."""
     ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
     limpar_cupons(casas)
     est = P.Estado(cfgc)
     op = P.Operador(cfgc, est, casas)

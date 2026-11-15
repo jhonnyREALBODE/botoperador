@@ -2161,6 +2161,9 @@ class Casa:
         if self.nome == CASA_PS:
             if self.fechar_aviso_indisponivel():
                 tx = self.texto()
+            if not ps_e_o_jogo(tx, times):  # página pode estar carregando (aba recém-aberta)
+                if self._sondar(lambda: ps_e_o_jogo(self.texto(), times), 6):
+                    tx = self.texto()
             if not ps_e_o_jogo(tx, times):
                 r["motivo"] = "a página da PS não é o matchup deste jogo"
                 self.dump_diag("ps_nao_e_jogo")
@@ -2181,6 +2184,9 @@ class Casa:
                     r.update(ok=True, ofertas=[], quarto=q, motivo="PS: mercado travado (cadeado em %d odds)" % travados)
                     return r
         else:
+            if not linha_confronto(tx, times):  # página pode estar carregando (aba recém-aberta)
+                if self._sondar(lambda: linha_confronto(self.texto(), times), 6):
+                    tx = self.texto()
             if not linha_confronto(tx, times):
                 r["motivo"] = "a página da 1aWin não é a deste jogo"
                 self.dump_diag("1w_nao_e_jogo")
