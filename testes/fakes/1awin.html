@@ -5,7 +5,7 @@
 ._card_c7{border:1px solid #888;margin:4px 0;padding:4px}._ico_z3{width:16px;height:16px;cursor:pointer;float:right;border:0;background:#eee}</style>
 <script>const ESTADO = __ESTADO__;</script><script src="/fakes/dados.js"></script></head><body>
 <div id="app"></div>
-<aside class="_side_x9"><p class="_title_16m5v_36">Cupom de apostas</p><div class="_amount_1ch79_13">BRL&nbsp;0,00</div>
+<aside class="_side_x9"><p class="_title_16m5v_36">Cupom de apostas</p><div class="_amount_1ch79_13" id="saldo">BRL&nbsp;120,00</div>
 <div class="_tabs_c2"><span>Simples</span> <span>Múltipla</span> <span>Série</span> <button type="button" class="_lix_t9" id="lix"><svg width="10" height="10"><path d="M0 0L10 10"/></svg></button></div>
 <div data-scope="Betslip" class="_root_1j176_2" id="slip"></div></aside>
 <script>
@@ -34,7 +34,10 @@ function renderCupom() {
   f.innerHTML = '<div class="_x_b2">Adicione 4 resultados com cotações a partir de 1.25 para receber um bônus de ganho de 7%</div>' +
     '<div><input class="_input_q8" placeholder="Quantia da aposta" type="text"> <span>MAX</span></div><div>Possível vitória BRL 0,00</div>' +
     '<button type="button" class="_acc_x1">Fazer uma aposta</button><div id="msg"></div>';
-  f.querySelector('._acc_x1').onclick = () => { if (!ESTADO.confirma_mudo) document.getElementById('msg').textContent = 'Aposta aceita'; };
+  f.querySelector('._acc_x1').onclick = () => {
+    if (ESTADO.limpa_sem_apostar) { sel = null; renderCupom(); return; }
+    if (ESTADO.so_saldo) { const v = parseFloat(f.querySelector('input').value.replace(',', '.')); document.getElementById('saldo').textContent = 'BRL ' + (120 - v).toFixed(2).replace('.', ','); sel = null; renderCupom(); return; }
+    if (!ESTADO.confirma_mudo) document.getElementById('msg').textContent = 'Aposta aceita'; };
   s.appendChild(f);
 }
 renderCupom();

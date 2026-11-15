@@ -599,3 +599,37 @@ def test_botao_ps_fazer_1_aposta_e_clique_unico(casas):
     assert cps.executar(cps.montar, dict(o, stake=31.0), TIMES)["ok"]
     assert cps.executar(cps._marcar_botao_apostar)["n"] == 1
     limpar_cupons(casas)
+
+
+def test_1awin_limpa_sem_apostar_nao_e_incerto(casas, cfgc):
+    """14/11 23:58: a 1aWin limpou o cupom sem apostar (saldo igual, histórico vazio).
+    Agora é 'falhou' (nada apostado) e a PS é desfeita — não fica INCERTO."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["limpa_sem_apostar"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "falhou"
+    assert "saldo continua" in bil["detalhe"]["1aWin"]
+    assert casas[P.CASA_PS].executar(casas[P.CASA_PS].itens_cupom) == []
+
+
+def test_1awin_aceita_pelo_saldo(casas, cfgc):
+    """Sem mensagem, mas o saldo caiu o valor da aposta = aceita -> confirma a PS."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["so_saldo"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "confirmado", bil["detalhe"]
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)

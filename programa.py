@@ -2339,6 +2339,21 @@ class Casa:
         except Exception:
             return None
 
+    def _saldo(self):
+        """Saldo mostrado pela casa (1aWin: 'BRL 120,00' no cupom/topo; PS: '20.87 EUR')."""
+        try:
+            t = self._eval(r"""() => {
+                const sels = ['.AccountInfoComponent .balance .total', '.balance .total', '[class*="amount" i]', '[class*="balance" i]'];
+                for (const q of sels) for (const e of document.querySelectorAll(q)) {
+                    const r = e.getBoundingClientRect(); const t = (e.innerText || '').trim();
+                    if (r.width > 0 && /\d/.test(t) && t.length < 30) return t;
+                }
+                return '';
+            }""")
+            return _num(t) if t else None
+        except Exception:
+            return None
+
     def _marcar_botao_apostar(self):
         """Marca UM único botão de apostar, perto do cupom. Nunca dois (dois cliques = duas apostas)."""
         return self._eval(r"""(sc) => {
@@ -2373,18 +2388,24 @@ class Casa:
         if b.get("desabilitado"):
             return {"ok": False, "motivo": "botão de apostar desabilitado — não cliquei", "foto": self.foto("confirmar")}
         antes = self._pendentes()
+        saldo0 = self._saldo()
+        valor = (perna or {}).get("stake", 0) / (self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else 1)
+        log("%s: saldo antes de apostar = %s" % (self.rotulo, saldo0))
         self.dump("antes_confirmar")
         try:
             self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=3000)
         except Exception as e:
             return {"ok": False, "motivo": "o clique em apostar não aconteceu (%s)" % str(e)[:80], "foto": self.foto("confirmar")}
         log("%s: cliquei em APOSTAR" % self.rotulo)
-        fim = time.time() + 15
+        fim = time.time() + 25  # ao vivo tem atraso de aceitação
         while time.time() < fim:
             self.page.wait_for_timeout(400)
             tx = self.texto()
             if _RX_SUCESSO.search(tx):
                 return {"ok": True, "motivo": "", "foto": self.foto("confirmado")}
+            s1 = self._saldo()
+            if saldo0 is not None and s1 is not None and valor and saldo0 - s1 >= valor * 0.9:
+                return {"ok": True, "motivo": "saldo %s -> %s" % (_br(saldo0), _br(s1)), "foto": self.foto("confirmado")}
             depois = self._pendentes()
             if antes is not None and depois is not None and depois > antes:
                 return {"ok": True, "motivo": "apostas pendentes %d -> %d" % (antes, depois), "foto": self.foto("confirmado")}
@@ -2392,11 +2413,16 @@ class Casa:
                 m = _RX_RECUSA.search(tx)
                 if self.itens_cupom():  # recusou e a seleção continua no cupom: nada foi apostado
                     return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar")}
-        self.dump("incerto")
         vazio = not self.itens_cupom()
+        s1 = self._saldo()
+        if vazio and saldo0 is not None and s1 is not None and abs(saldo0 - s1) < 0.01:
+            # 1aWin 14/11 23:58: limpou o cupom SEM apostar (histórico vazio, saldo igual)
+            return {"ok": False, "foto": self.foto("confirmar"),
+                    "motivo": "a casa limpou o cupom sem aceitar (saldo continua %s) — nada foi apostado" % _br(s1)}
+        self.dump("incerto")
         return {"ok": None, "foto": self.foto("incerto"),
                 "motivo": "INCERTO — sem mensagem de aceita/recusada em 15s (cupom %s). Confira em Apostas pendentes/Histórico" % (
-                    "esvaziou" if vazio else "ainda com a seleção")}
+                    "esvaziou" if vazio else "ainda com a seleção") + "; saldo %s -> %s" % (saldo0, s1)}
 
     def recarregar(self):
         try:
