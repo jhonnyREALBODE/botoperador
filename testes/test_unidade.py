@@ -735,3 +735,12 @@ def test_cidade_em_portugues_e_patrocinador_14_11():
     """1aWin: 'Divina Seguros Joventut x Saragoça' para 'Club Joventut Badalona x Zaragoza'."""
     assert P._nome_bate("Zaragoza", "Saragoça")
     assert P.linha_confronto("Divina Seguros Joventut\n43\nSaragoça\n46", ["Club Joventut Badalona", "Zaragoza"])
+
+
+def test_ironia_maccabi_ramat_gan_15_11():
+    """1aWin: 'Ironia Maccabi Ramat Gan' = PS/sinal 'Maccabi Ironi Ramat Gan'."""
+    assert P._nome_bate("Maccabi Ironi Ramat Gan", "Ironia Maccabi Ramat Gan")
+    assert P.linha_confronto("Ironia Maccabi Ramat Gan\n45\nIroni Ness Ziona\n52",
+                             ["Maccabi Ironi Ramat Gan", "Ironi Ness Ziona"])
+    assert not P._nome_bate("Hapoel Tel Aviv", "Maccabi Tel Aviv")
+    assert not P._nome_bate("Maccabi Ironi Ramat Gan", "Ironi Ness Ziona")

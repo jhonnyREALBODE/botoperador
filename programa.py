@@ -230,7 +230,7 @@ def _norm(s):
 
 
 _ALIAS_TOKENS = {"sao": "san", "santo": "san", "saint": "san", "st": "san", "sankt": "san",
-                 "lourenco": "lorenzo", "jose": "jose", "atletico": "atletico", "atl": "atletico",
+                 "lourenco": "lorenzo", "jose": "jose", "ironia": "ironi", "atletico": "atletico", "atl": "atletico",
                  # apelidos que a 1aWin traduz para o português (caso 'Ursos Stella Artois Leuven' = 'Leuven Bears')
                  "ursos": "bears", "urso": "bears", "aguias": "eagles", "aguia": "eagles", "leoes": "lions",
                  "leao": "lions", "lobos": "wolves", "lobo": "wolves", "tigres": "tigers", "tigre": "tigers",
@@ -302,6 +302,7 @@ def _norm_paises(n):
 
 def _tokens(s):
     toks = [_ALIAS_TOKENS.get(t, t) for t in _norm_paises(_norm(s)).split()]
+    toks = [t for t in toks if t not in _PREFIXOS_CLUBE]
     return [t for t in toks if (len(t) >= 4 or t == "san") and not _generico(t)]
 
 
@@ -364,10 +365,10 @@ def _nome_bate(a, b, leniente=False):
         # marca diferente dos dois lados continua barrada
         if not (leniente and (not ma or not mb) and (ma | mb) <= {"fem"}):
             return False
-    pa = {t for t in _norm(a).split() if t in _PREFIXOS_CLUBE}
-    pb = {t for t in _norm(b).split() if t in _PREFIXOS_CLUBE}
-    if pa and pb and pa != pb:
-        return False  # Hapoel Tel Aviv ≠ Maccabi Tel Aviv
+    pa = {_ALIAS_TOKENS.get(t, t) for t in _norm(a).split()} & _PREFIXOS_CLUBE
+    pb = {_ALIAS_TOKENS.get(t, t) for t in _norm(b).split()} & _PREFIXOS_CLUBE
+    if pa and pb and not (pa & pb):
+        return False  # Hapoel Tel Aviv ≠ Maccabi Tel Aviv (nenhum prefixo em comum)
     na, nb = _norm_paises(_norm(a)), _norm_paises(_norm(b))
     if na == nb:
         return True
@@ -1742,7 +1743,7 @@ class Casa:
                 // a lixeira mora no aside do cupom, na linha das abas Simples/Múltipla/Série
                 const raiz = Array.from(document.querySelectorAll(sc)).map(c => c.closest('aside') || c.parentElement || c);
                 for (const r of raiz) {
-                    const abas = Array.from(r.querySelectorAll('*')).find(e => /^\s*simples\s*$/i.test(e.innerText || '') && e.children.length <= 1);
+                    const abas = Array.from(r.querySelectorAll('*')).find(e => /^\\s*simples\\s*$/i.test(e.innerText || '') && e.children.length <= 1);
                     let linha = abas;
                     for (let k = 0; linha && k < 4; k++, linha = linha.parentElement) {
                         const bts = Array.from(linha.querySelectorAll('button, [role=button]')).filter(b => vis(b) && !(b.innerText || '').trim());
