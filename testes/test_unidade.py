@@ -849,3 +849,19 @@ def test_painel_troca_modo_da_cobertura(cfg):
         assert "posmodo" in html
     finally:
         srv.shutdown()
+
+
+def test_placares_dupla_e_reentrada(cfg):
+    """Parceiro 15/11: Over 150/Under 151 e depois Over 151/Under 152 — cada nova entrada só vale
+    se aumentar a faixa de placares em que as duas ganham."""
+    ac = {"linha": 150.5}; ab = {"linha": 152.5}
+    assert P.placares_dupla(ac, ab) == {151, 152}
+    assert P.placares_dupla({"linha": 150.0}, {"linha": 152.0}) == {151}   # linha inteira: empate devolve
+    ja = {151, 152}
+    a = oferta("1awin", "total", "jogo", "abaixo", 152.5, 2.1)
+    b = oferta("ps3838", "total", "jogo", "acima", 150.5, 2.1)
+    exc = lambda x, y, j: not (P.placares_dupla(*(sorted([x, y], key=lambda o: o["lado"] != "acima"))) - ja)
+    assert P.achar_par([a], [b], SINAL, cfg, excluir=exc)[0] is None            # mesmo par: não reentra
+    a2 = oferta("1awin", "total", "jogo", "abaixo", 153.5, 2.1)
+    b2 = oferta("ps3838", "total", "jogo", "acima", 151.5, 2.1)
+    assert P.achar_par([a2], [b2], SINAL, cfg, excluir=exc)[0] is not None       # aumenta a faixa: 153

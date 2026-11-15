@@ -114,6 +114,9 @@ DEFAULTS = {
     # tabela do operador 15/11: [janela de, janela até (exclusiva), perda máxima %]
     "custo_por_janela": [[1, 2, 2.0], [2, 3, 3.8], [3, 7, 3.99], [7, 11, 7.0]],  # 7–10: 7% (ordem 15/11)
     # ---- monitoramento pós-entrada e cobertura dinâmica (ordem do operador 15/11)
+    # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
+    "reentrar_mesmo_jogo": True,
+    "max_entradas_por_jogo": 3,
     "pos_monitorar": True,
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_dist_min_under": 4.0,        # FILTRO: linha do Under novo − linha do Over ORIGINAL ≥ 4
@@ -620,7 +623,13 @@ def _fmt_linha(x):
     return ("%.1f" % x) if abs(x * 2 - round(x * 2)) < 1e-9 else ("%.2f" % x)
 
 
-def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None):
+def placares_dupla(acima, abaixo):
+    """Placares (inteiros) em que as DUAS pernas de um par de totais ganham: La < k < Lb."""
+    la, lb = acima["linha"], abaixo["linha"]
+    return {k for k in range(int(la) + 1, int(lb) + 1) if la < k < lb}
+
+
+def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None):
     """Pareia as escadas reais das duas casas. Retorna (bilhete, None) ou (None, motivo).
     Varre todos os mercados/períodos permitidos — o sinal é só a pista."""
     permitidos = set(cfg.get("totais_periodos") or PERIODOS_TODOS) - {"q4"}
@@ -665,6 +674,8 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None):
                 if jan > TETO_JANELA_HANDICAP:
                     suspeitos += 1
                     continue
+            if excluir and excluir(a, b, jan):
+                continue  # reentrada: par que não aumenta a faixa de dupla das entradas anteriores
             c = _calcular(a, b, cfg)
             if c["custo"] < CUSTO_MIN_SUSPEITO:
                 suspeitos += 1
@@ -3199,6 +3210,19 @@ class Operador:
         rodada = 0
         vazias = 0
         ultimo_motivo = None
+        entradas = []   # [(periodo, tipo, conjunto de placares de dupla | linhas)] já feitas neste jogo
+
+        def excluir(a, b, jan):
+            if a["tipo"] == "total":
+                ac, ab = (a, b) if a["lado"] == "acima" else (b, a)
+                novo = placares_dupla(ac, ab)
+                ja = set()
+                for per, tp, cj in entradas:
+                    if per == a["periodo"] and tp == "total":
+                        ja |= cj
+                return not (novo - ja)  # não cobre nenhum placar novo -> não vale reentrar
+            chave = frozenset([(a["casa"] if "casa" in a else "1w", a["linha"]), ("ps", b["linha"])])
+            return any(per == a["periodo"] and tp == "handicap" and cj == chave for per, tp, cj in entradas)
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
         while not cancel.is_set():
             try:
@@ -3261,7 +3285,8 @@ class Operador:
                     sinal["jogo"], rodada, tipo, n1, n2))
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
-                    bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, self.cfg, raiox)
+                    bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, self.cfg, raiox,
+                                            excluir=excluir if entradas else None)
                     self.estado.set_calc(raiox, rodada)
                     if bil:
                         log("✔ PAR: %s @%s × %s @%s | janela %s | custo %s%%" % (
@@ -3270,7 +3295,30 @@ class Operador:
                         self.estado.registrar_bilhete(bil, origem)
                         self.estado.atualizar(bil, status="executando")
                         st = self.executar_bilhete(bil)
-                        if st in ("testado", "confirmado", "incerto", "exposto"):
+                        if st in ("testado", "confirmado"):
+                            p1, p2 = bil["pernas"]
+                            if bil["tipo"] == "total":
+                                ac, ab = (p1, p2) if p1["lado"] == "acima" else (p2, p1)
+                                entradas.append((bil["periodo"], "total", placares_dupla(ac, ab)))
+                            else:
+                                entradas.append((bil["periodo"], "handicap",
+                                                 frozenset([(p1["casa"], p1["linha"]), ("ps", p2["linha"])])))
+                            maxe = int(self.cfg.get("max_entradas_por_jogo", 1))
+                            if not self.cfg.get("reentrar_mesmo_jogo") or len(entradas) >= maxe:
+                                self.estado.set_monitor("%s: %s — monitoramento encerrado (%d entrada(s))" % (
+                                    sinal["jogo"], st, len(entradas)))
+                                log("■ %s: rodada %s — monitoramento encerrado (%d entrada(s) neste jogo)" % (
+                                    sinal["jogo"], st, len(entradas)))
+                                return
+                            faixa = sorted(set().union(*[cj for _, tp, cj in entradas if tp == "total"]) or [])
+                            log("➕ %s: entrada %d de %d feita — continuo no jogo procurando nova brecha que aumente a "
+                                "faixa de dupla (hoje: %s)" % (sinal["jogo"], len(entradas), maxe,
+                                                              ", ".join(str(k) for k in faixa) or "—"))
+                            self.estado.set_monitor("%s: %d entrada(s) — procurando reentrada" % (sinal["jogo"], len(entradas)))
+                            ultimo_motivo = None
+                            cancel.wait(self.cfg["monitor_intervalo_s"])
+                            continue
+                        if st in ("incerto", "exposto"):
                             self.estado.set_monitor("%s: %s — monitoramento encerrado" % (sinal["jogo"], st))
                             log("■ %s: rodada %s — monitoramento encerrado" % (sinal["jogo"], st))
                             return
