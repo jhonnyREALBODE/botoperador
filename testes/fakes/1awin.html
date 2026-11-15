@@ -34,7 +34,7 @@ function renderCupom() {
   f.innerHTML = '<div class="_x_b2">Adicione 4 resultados com cotações a partir de 1.25 para receber um bônus de ganho de 7%</div>' +
     '<div><input class="_input_q8" placeholder="Quantia da aposta" type="text"> <span>MAX</span></div><div>Possível vitória BRL 0,00</div>' +
     '<button type="button" class="_acc_x1">Fazer uma aposta</button><div id="msg"></div>';
-  f.querySelector('._acc_x1').onclick = () => { document.getElementById('msg').textContent = 'Aposta aceita'; };
+  f.querySelector('._acc_x1').onclick = () => { if (!ESTADO.confirma_mudo) document.getElementById('msg').textContent = 'Aposta aceita'; };
   s.appendChild(f);
 }
 renderCupom();

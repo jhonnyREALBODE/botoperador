@@ -569,3 +569,33 @@ def test_1awin_desmarca_pelo_mercado_quando_x_e_lixeira_falham(casas):
     d = c1.executar(c1.desfazer, dict(o1, _mid=None))
     assert d["ok"], d
     assert c1.executar(c1.itens_cupom) == []
+
+
+def test_modo_real_incerto_para_tudo_e_nao_desfaz(casas, cfgc, monkeypatch):
+    """Clicou em apostar e a casa não disse nada (nem aceita, nem recusada): INCERTO — para,
+    avisa, e NÃO confirma a outra casa nem desfaz nada."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["confirma_mudo"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "incerto"
+    assert bil["status"] == "INCERTO" and "NÃO confirmada" in bil["detalhe"]["PS3838"]
+    assert "Aposta aceita" not in casas[P.CASA_PS].executar(casas[P.CASA_PS].texto)
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+
+
+def test_botao_ps_fazer_1_aposta_e_clique_unico(casas):
+    _, cps = ir_jogo(casas)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    assert cps.executar(cps.montar, dict(o, stake=31.0), TIMES)["ok"]
+    assert cps.executar(cps._marcar_botao_apostar)["n"] == 1
+    limpar_cupons(casas)

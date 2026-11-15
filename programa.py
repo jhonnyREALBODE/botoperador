@@ -1286,7 +1286,11 @@ _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado
 _RX_REMOVER_TUDO = re.compile(r"^\s*(remover tudo|remove all|limpar tudo|clear all|apagar tudo)\s*$", re.I)
 _RX_OK_MODAL = re.compile(r"^\s*(ok|sim|confirmar|yes)\s*$", re.I)
 _RX_APOSTAR = re.compile(r"^\s*(fazer (a |uma )?aposta|apostar|place bet|confirmar aposta|realizar aposta)\b", re.I)
-_RX_SUCESSO = re.compile(r"aposta (aceita|feita|realizada|registrada)|bet (accepted|placed)", re.I)
+_RX_SUCESSO = re.compile(r"aposta (aceita|feita|realizada|registrada|confirmada|efetuada)|apostas? (foi|foram) (aceita|feita|realizada)|"
+                         r"bet (accepted|placed)|sua aposta foi|successfully placed|aceit[ao] com sucesso", re.I)
+_RX_RECUSA = re.compile(r"aposta (recusada|rejeitada|n[aã]o aceita)|bet (rejected|declined|not accepted)|saldo insuficiente|"
+                        r"insufficient (funds|balance)|odds? (have |has )?changed|cota[cç](ao|oes) (mudou|mudaram)|"
+                        r"sele[cç][aã]o indispon|limite excedido|max(imum)? stake", re.I)
 
 
 def ps_confrontos(texto):
@@ -2320,21 +2324,79 @@ class Casa:
         ok = self.limpar_cupom(perna)
         return {"ok": ok, "foto": self.foto("desfeito"), "motivo": "" if ok else "cupom não esvaziou"}
 
+    def _pendentes(self):
+        """Contador de apostas pendentes (PS: 'APOSTAS PENDENTES' com o número ao lado)."""
+        try:
+            return self._eval(r"""() => {
+                for (const e of document.querySelectorAll('.PENDING_BETS, [title*="PENDENTES" i], [title*="pending" i]')) {
+                    const box = e.closest('.selection-button') || e.parentElement;
+                    const n = box && box.querySelector('.bet-count');
+                    if (n) return parseInt(n.innerText) || 0;
+                    return 0;
+                }
+                return null;
+            }""")
+        except Exception:
+            return None
+
+    def _marcar_botao_apostar(self):
+        """Marca UM único botão de apostar, perto do cupom. Nunca dois (dois cliques = duas apostas)."""
+        return self._eval(r"""(sc) => {
+            document.querySelectorAll('[data-alvo-apostar]').forEach(e => e.removeAttribute('data-alvo-apostar'));
+            const RX = /^\s*(fazer\s+(a\s+|uma\s+|\d+\s+)?apostas?|apostar|place\s+(\d+\s+)?bets?|confirmar\s+aposta|realizar\s+aposta)\s*$/i;
+            const raizes = [];
+            for (const c of document.querySelectorAll(sc)) { const r = c.closest('aside') || c; if (!raizes.includes(r)) raizes.push(r); }
+            for (const r of raizes) {
+                const bts = Array.from(r.querySelectorAll('button, [role=button]')).filter(b => {
+                    const rc = b.getBoundingClientRect();
+                    return rc.width > 0 && rc.height > 0 && RX.test(b.innerText || '');
+                });
+                if (bts.length === 1) { bts[0].setAttribute('data-alvo-apostar', '1');
+                    return {n: 1, desabilitado: bts[0].disabled || /disabled/.test(bts[0].className + '')}; }
+                if (bts.length > 1) return {n: bts.length};
+            }
+            return {n: 0};
+        }""", self.sel_cupom) or {"n": 0}
+
     def confirmar(self, perna=None):
-        """Só no modo real. Reconfere a perna e só então clica em apostar e espera a confirmação."""
+        """Só no modo real. Reconfere a perna, clica UM botão de apostar e decide por PROVAS:
+        ok=True (aceita), ok=False (recusada — nada apostado) ou ok=None (INCERTO: não sei se
+        entrou; quem chamou para tudo e avisa, sem desfazer nada)."""
         if perna is not None:
             ok, mot = self.conferir_cupom(perna)
             if not ok:
                 return {"ok": False, "motivo": "não confirmei — " + mot, "foto": self.foto("confirmar")}
-        if self._clicar_no_cupom(r"^(fazer (a |uma )?aposta|apostar|place bet|confirmar aposta|realizar aposta)") == 0:
-            return {"ok": False, "motivo": "botão de apostar não encontrado", "foto": self.foto("confirmar")}
-        self._modal_ok_rapido()
+        b = self._marcar_botao_apostar()
+        if b.get("n") != 1:
+            return {"ok": False, "motivo": "botão de apostar: achei %d (preciso de exatamente 1) — não cliquei" % b.get("n", 0),
+                    "foto": self.foto("confirmar")}
+        if b.get("desabilitado"):
+            return {"ok": False, "motivo": "botão de apostar desabilitado — não cliquei", "foto": self.foto("confirmar")}
+        antes = self._pendentes()
+        self.dump("antes_confirmar")
+        try:
+            self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=3000)
+        except Exception as e:
+            return {"ok": False, "motivo": "o clique em apostar não aconteceu (%s)" % str(e)[:80], "foto": self.foto("confirmar")}
+        log("%s: cliquei em APOSTAR" % self.rotulo)
         fim = time.time() + 15
         while time.time() < fim:
-            if _RX_SUCESSO.search(self.texto()):
+            self.page.wait_for_timeout(400)
+            tx = self.texto()
+            if _RX_SUCESSO.search(tx):
                 return {"ok": True, "motivo": "", "foto": self.foto("confirmado")}
-            self.page.wait_for_timeout(300)
-        return {"ok": False, "motivo": "sem confirmação da casa em 15s", "foto": self.foto("confirmar")}
+            depois = self._pendentes()
+            if antes is not None and depois is not None and depois > antes:
+                return {"ok": True, "motivo": "apostas pendentes %d -> %d" % (antes, depois), "foto": self.foto("confirmado")}
+            if _RX_RECUSA.search(tx):
+                m = _RX_RECUSA.search(tx)
+                if self.itens_cupom():  # recusou e a seleção continua no cupom: nada foi apostado
+                    return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar")}
+        self.dump("incerto")
+        vazio = not self.itens_cupom()
+        return {"ok": None, "foto": self.foto("incerto"),
+                "motivo": "INCERTO — sem mensagem de aceita/recusada em 15s (cupom %s). Confira em Apostas pendentes/Histórico" % (
+                    "esvaziou" if vazio else "ainda com a seleção")}
 
     def recarregar(self):
         try:
@@ -2864,7 +2926,7 @@ class Operador:
                         self.estado.registrar_bilhete(bil, origem)
                         self.estado.atualizar(bil, status="executando")
                         st = self.executar_bilhete(bil)
-                        if st in ("testado", "confirmado"):
+                        if st in ("testado", "confirmado", "incerto", "exposto"):
                             self.estado.set_monitor("%s: %s — monitoramento encerrado" % (sinal["jogo"], st))
                             log("■ %s: rodada %s — monitoramento encerrado" % (sinal["jogo"], st))
                             return
@@ -2949,14 +3011,29 @@ class Operador:
             # MODO REAL — frágil primeiro, com a outra já montada
             r1 = c1.executar(c1.confirmar, p1, timeout=40)
             fotos.append(r1.get("foto", ""))
+            if r1["ok"] is None:
+                detalhe["1aWin"] = r1["motivo"]
+                detalhe["PS3838"] = "NÃO confirmada (montada, parada esperando você)"
+                log("‼ 1aWin INCERTA — não sei se a aposta entrou. PAREI: confira 'Apostas pendentes' na 1aWin AGORA. "
+                    "A PS está montada e NÃO foi confirmada.")
+                self.estado.atualizar(bil, status="INCERTO", detalhe=detalhe, fotos=fotos)
+                return "incerto"
             if not r1["ok"]:
                 detalhe["1aWin"] = "não confirmou: " + r1["motivo"]
                 cps.executar(cps.desfazer, p2, timeout=30)
                 self.estado.atualizar(bil, status="falhou", detalhe=detalhe, fotos=fotos)
                 return "falhou"
+            log("1aWin: aposta CONFIRMADA (%s) — confirmando a PS" % (r1["motivo"] or "mensagem da casa"))
             r2 = cps.executar(cps.confirmar, p2, timeout=40)
             fotos.append(r2.get("foto", ""))
+            if r2["ok"] is None:
+                detalhe["1aWin"] = "confirmada"
+                detalhe["PS3838"] = r2["motivo"]
+                log("‼ PS INCERTA — a 1aWin está apostada; confira 'Apostas pendentes' na PS AGORA")
+                self.estado.atualizar(bil, status="INCERTO", detalhe=detalhe, fotos=fotos)
+                return "incerto"
             if not r2["ok"]:
+                detalhe["1aWin"] = "confirmada"
                 detalhe["PS3838"] = "NÃO CONFIRMOU com a 1aWin já apostada: " + r2["motivo"]
                 log("‼ ATENÇÃO: 1aWin confirmada e PS não — perna exposta, confira as casas AGORA")
                 self.estado.atualizar(bil, status="exposto", detalhe=detalhe, fotos=fotos)
