@@ -3111,8 +3111,11 @@ class Estado:
                     calc["par"] = _sem_privados(calc["par"])
             return {
                 "modo": "TESTE" if self.cfg["modo_teste"] else "REAL",
-                "params": {k: self.cfg[k] for k in ("janela_min", "custo_max", "perna_ps_eur", "cambio_brl_eur",
-                                                    "so_totais", "totais_periodos", "monitor_intervalo_s")},
+                "params": {k: self.cfg.get(k) for k in ("janela_min", "custo_max", "perna_ps_eur", "cambio_brl_eur",
+                                                        "so_totais", "totais_periodos", "monitor_intervalo_s",
+                                                        "pos_monitorar", "pos_modo", "pos_dist_min_under",
+                                                        "pos_max_por_cobertura_brl", "pos_max_total_coberturas_brl",
+                                                        "pos_perda_max_total_brl", "pos_max_coberturas")},
                 "bilhetes": [_sem_privados(b) for b in self.bilhetes[-60:]][::-1],
                 "backlog": list(self.backlog),
                 "sinais": self.sinais[-30:][::-1],
@@ -3533,6 +3536,9 @@ class GerentePosicoes:
 
     def _laco(self):
         while True:
+            if not self.cfg.get("pos_monitorar", True):  # desligado pelo painel/config
+                time.sleep(5)
+                continue
             for pos in [p for p in list(self.estado.posicoes) if p.get("aberta")]:
                 try:
                     self.rodada(pos)
@@ -3873,7 +3879,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0}
 <div class="card full" id="mon"></div>
 <div class="card" id="calc"><h2>🧮 Calculadora do motor</h2><div class="mut">aguardando a primeira rodada sadia…</div></div>
 <div class="card"><h2>📥 Sinais de backlog (só montam com clique)</h2><div id="backlog" class="mut">—</div></div>
-<div class="card full"><h2>📌 Posições (monitoramento pós-entrada)</h2><div id="pos" class="mut">—</div></div>
+<div class="card full"><h2>📌 Posições (monitoramento pós-entrada)</h2><div id="posmodo"></div><div id="pos" class="mut">—</div></div>
 <div class="card full"><h2>🎫 Bilhetes</h2><div id="bil"></div></div>
 <div class="card"><h2>🛰️ Sinais recebidos</h2><div id="sinais"></div></div>
 <div class="card"><h2>🏁 Resultados</h2><div id="res"></div></div>
@@ -3901,13 +3907,18 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
  document.getElementById('bil').innerHTML='<table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+d.bilhetes.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
+ {const on=pa.pos_monitorar, md=on?pa.pos_modo:'off';
+  const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];
+  const bt=(m,t)=>'<button style="margin-left:6px;'+(md==m?'background:#1e8e3e':'background:#555')+'" onclick="post(\'/api/pos_modo/'+m+'\')">'+t+'</button>';
+  document.getElementById('posmodo').innerHTML='<div style="margin-bottom:6px">Cobertura: <b class="'+(md=='off'?'no':'ok')+'">'+nome+'</b>'+(d.modo=='TESTE'&&on?' <span class="mut">— modo teste: só SIMULA</span>':'')+bt('auto','Automático')+bt('manual','Manual')+bt('off','Desligar')+
+   '</div><div class="mut" style="margin-bottom:6px">Regras: Under só se ≥ '+pa.pos_dist_min_under+' pts acima do Over original · até '+R(pa.pos_max_por_cobertura_brl)+' por cobertura · '+R(pa.pos_max_total_coberturas_brl)+' no total · pior caso até −'+R(pa.pos_perda_max_total_brl)+' · máx. '+pa.pos_max_coberturas+' coberturas</div>';}
  document.getElementById('pos').innerHTML=(d.posicoes||[]).map(p=>{const r=p.resumo||{};
   let h='<div style="border-bottom:1px solid var(--ln);padding:6px 0"><b>#'+p.id+' '+esc(p.jogo)+'</b> <span class="mut">('+esc(p.periodo)+')'+(p.simulada?' SIMULADA':'')+' — '+esc(p.status)+(p.atualizada?' · '+p.atualizada:'')+'</span>';
   h+='<div>'+p.pernas.map(l=>(l.origem=='entrada'?'entrada':'<b>cobertura</b>')+': '+(l.casa=='1awin'?'1aWin':'PS')+' '+(l.lado=='acima'?'Acima':'Abaixo')+' de '+l.linha+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</div>';
   if(r.pior!=null)h+='<div>pior '+R(r.pior)+' · melhor '+R(r.melhor)+(r.ev!=null?' · EV '+R(r.ev)+' · P(lucro) '+P(100*r.p_lucro,0)+'% · P(prejuízo) '+P(100*r.p_preju,0)+'%':'')+' · lucro se terminar em: '+(r.faixas_lucro||[]).map(f=>f[0]==f[1]?f[0]:f[0]+'–'+f[1]).join(', ')+'</div>';
   if(p.candidatos&&p.candidatos.length)h+='<div class="mut">candidatos: '+p.candidatos.slice(0,3).map(c=>(c.ok?'✅':'✖')+' Abaixo '+c.linha+' @'+c.odd+' '+R(c.stake)+' (+'+c.dist+' pts) EV '+R(c.depois.ev)+' pior '+R(c.depois.pior)).join(' | ')+'</div>';
   if(p.pendente)h+='<div class="am">Oportunidade: '+esc(p.pendente.descricao)+' <button onclick="post(\'/api/cobertura/'+p.id+'\')">APOSTAR COBERTURA</button></div>';
-  return h+'</div>'}).join('')||'—';
+  return h+'</div>'}).join('')||'Nenhuma posição aberta. Ela abre sozinha logo depois de um middle (confirmado no real, ou testado no modo teste).';
  document.getElementById('sinais').innerHTML=d.sinais.map(s=>'<div>'+s.hora+' '+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+' ('+s.origem+')</span></div>').join('')||'—';
  document.getElementById('res').innerHTML=d.resultados.map(r=>'<div>'+esc(r.quando)+' '+esc(r.jogo)+' — <b>'+esc(r.desfecho)+'</b></div>').join('')||'—';
  const lg=document.getElementById('log');const fim=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=d.log.join('\n');if(fim)lg.scrollTop=lg.scrollHeight;
@@ -3960,6 +3971,16 @@ def criar_painel(estado, operador, porta):
             if m2 and operador and getattr(operador, "gerente", None):
                 ok = operador.gerente.confirmar_manual(int(m2.group(1)))
                 return self._env(200, json.dumps({"ok": ok}))
+            m3 = re.match(r"^/api/pos_modo/(auto|manual|off)$", p)
+            if m3:
+                modo = m3.group(1)
+                with _TRAVA:
+                    estado.cfg["pos_monitorar"] = modo != "off"
+                    if modo != "off":
+                        estado.cfg["pos_modo"] = modo
+                log("📌 cobertura pós-entrada: %s (pelo painel; para ficar fixo, ajuste pos_modo/pos_monitorar no config.json)" % {
+                    "auto": "AUTOMÁTICA", "manual": "MANUAL", "off": "DESLIGADA"}[modo])
+                return self._env(200, '{"ok":true}')
             if p == "/api/calibrar" and operador:
                 operador.calibrar()
                 return self._env(200, '{"ok":true}')
@@ -4086,8 +4107,8 @@ def main(argv):
     estado = Estado(cfg)
     casas = {CASA_PS: Casa(CASA_PS, cfg).iniciar(), CASA_1W: Casa(CASA_1W, cfg).iniciar()}
     operador = Operador(cfg, estado, casas)
+    operador.gerente = GerentePosicoes(cfg, estado, casas).iniciar()  # sempre (o painel liga/desliga)
     if cfg.get("pos_monitorar", True):
-        operador.gerente = GerentePosicoes(cfg, estado, casas).iniciar()
         log("📌 monitoramento pós-entrada LIGADO (modo %s; Under só se ≥ %s pts acima do Over original)" % (
             cfg.get("pos_modo", "auto"), _br(cfg["pos_dist_min_under"], 1)))
     if cfg.get("url_grok"):

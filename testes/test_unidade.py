@@ -832,3 +832,20 @@ def test_modelo_da_escada_ps():
                 {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": L, "odd": ou}]
     m, sg = P.modelo_total(ofs, "jogo")
     assert 211 < m < 214 and 3 < sg < 30
+
+
+def test_painel_troca_modo_da_cobertura(cfg):
+    est = P.Estado(cfg)
+    srv = P.criar_painel(est, None, 0)
+    porta = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/pos_modo/manual" % porta, method="POST"))
+        d = json.load(urllib.request.urlopen("http://127.0.0.1:%d/api/estado" % porta))
+        assert d["params"]["pos_modo"] == "manual" and d["params"]["pos_monitorar"] is True
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/pos_modo/off" % porta, method="POST"))
+        assert json.load(urllib.request.urlopen("http://127.0.0.1:%d/api/estado" % porta))["params"]["pos_monitorar"] is False
+        html = urllib.request.urlopen("http://127.0.0.1:%d/" % porta).read().decode()
+        assert "posmodo" in html
+    finally:
+        srv.shutdown()
