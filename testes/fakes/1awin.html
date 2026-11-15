@@ -27,7 +27,7 @@ function renderCupom() {
     return;
   }
   d.innerHTML = '<div data-scope="SelectionInfo"><div class="_head_p2"><span class="_live_k1"><svg width="10" height="10"><circle cx="5" cy="5" r="4"/></svg></span><span>77 : 49</span> <span>' + sel.jogo + '</span><button type="button" class="_ico_z3"><svg width="10" height="10"><path d="M0 0L10 10"/></svg></button></div>' +
-    '<div><span>' + sel.mk + ', ' + sel.rot + '</span> <span class="_cf_17if8_2">' + sel.odd + '</span></div></div>';
+    '<div><span>' + sel.mk + ', ' + sel.rot + '</span> <div data-scope="SelectionCfBadge"><span>' + sel.odd + '</span></div></div></div>';
   d.querySelector('button').onclick = () => { if (!ESTADO.x_morto) { sel = null; renderCupom(); } };
   s.appendChild(d);
   const f = document.createElement('div');

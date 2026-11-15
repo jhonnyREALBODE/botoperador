@@ -2163,7 +2163,7 @@ class Casa:
             mm = re.search(r"(\d+[.,]\d+)\D+(\d+[.,]\d+)", linha)
             antiga, nova = (_num(mm.group(1)), _num(mm.group(2))) if mm else (None, None)
             desta = antiga is None or abs(antiga - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9
-            if desta and (nova is None or abs(nova - perna["odd"]) > TOL_ODD_CUPOM + 1e-9):
+            if desta and (nova is None or nova < perna["odd"] - TOL_ODD_CUPOM - 1e-9):
                 return False, "a casa avisou no cupom que a odd mudou (%s)" % linha.strip()[:80]
             # aviso de OUTRA seleção (o "de X" não é a odd clicada): ignora; a odd do item é conferida abaixo
         itens = self.itens_cupom()
@@ -2180,8 +2180,16 @@ class Casa:
         if not _coexiste(perna["linha"], it, usar_abs=True):
             return False, "cupom sem a linha %s" % _fmt_linha(perna["linha"])
         odds = [v for v in _numeros(it) if 1.01 <= v <= 30 and abs(v - abs(perna["linha"])) > 1e-9]
+        # ordem do operador 15/11: odd que SUBIU é aceita (melhor para nós); que CAIU, só até 0,05.
+        # A odd 'subida' só vale lida do lugar exato da odd no cupom (senão placar/stake passariam).
+        exata = self._odd_do_cupom()
+        if exata is not None:
+            if exata < perna["odd"] - TOL_ODD_CUPOM - 1e-9:
+                return False, "odd do cupom caiu: %s -> %s" % (perna["odd"], exata)
+            if exata > perna["odd"] + TOL_ODD_CUPOM + 1e-9:
+                log("%s: odd subiu %s -> %s (melhor) — aceita" % (self.rotulo, perna["odd"], exata))
         # +1e-9: 2.0 - 1.95 = 0.0500000000000004 no computador — 0,05 exato é DENTRO da tolerância
-        if not any(abs(v - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9 for v in odds):
+        elif not any(abs(v - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9 for v in odds):
             return False, "odd do cupom difere de %s (lidas: %s)" % (perna["odd"], ", ".join(map(str, odds[:4])) or "nenhuma")
         if perna["tipo"] == "total":
             quer = r"\b(acima|mais|over)\b" if perna["lado"] == "acima" else r"\b(abaixo|menos|under)\b"
@@ -2190,6 +2198,16 @@ class Casa:
         elif perna.get("time") and not any(_nome_bate(l, perna["time"]) for l in re.split(r"[\n(]", itens[0]) if l.strip()):
             return False, "cupom não mostra o time %s" % perna["time"]
         return True, ""
+
+    def _odd_do_cupom(self):
+        """A odd no lugar exato do cupom (PS: '.odds-info .odds'; 1aWin: [data-scope=SelectionCfBadge])."""
+        try:
+            t = self._eval("""() => { const e = document.querySelector('.BetItemComponent .odds-info .odds, [data-scope="CouponCard"] [data-scope="SelectionCfBadge"]');
+                return e ? (e.innerText || '').trim() : ''; }""")
+            v = _num(t) if t else None
+            return v if v and 1.01 <= v <= 100 else None
+        except Exception:
+            return None
 
     def preencher_stake(self, valor):
         """PS: com PONTO e lido de volta (com vírgula a PS lê €500). 1aWin: idem + leitura de volta."""

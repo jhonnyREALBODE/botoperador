@@ -685,3 +685,21 @@ def test_ps_janela_confirmar_apostas_e_aviso_velho(casas, cfgc):
         servidor.ESTADO.clear()
         for c in casas.values():
             recarregar(c)
+
+
+def test_odd_que_sobe_e_aceita_e_que_cai_nao(casas):
+    """Ordem do operador 15/11: subiu (melhor) = aceita; caiu além de 0,05 = reprova."""
+    _, cps = ir_jogo(casas)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    def com_odd(nova):
+        cps.clicar_firme(cps.page.locator('[data-mid="%s"]' % o["_mid"]).first)
+        cps.page.wait_for_timeout(400)
+        cps.page.evaluate("(v) => { document.querySelector('.BetItemComponent .odds-info .odds').textContent = ' ' + v; }", nova)
+        r = cps.conferir_cupom(o)
+        cps.limpar_cupom()
+        return r
+    assert cps.executar(com_odd, "1.950")[0] is True        # subiu 1.80 -> 1.95
+    ok, mot = cps.executar(com_odd, "1.700")                 # caiu 1.80 -> 1.70
+    assert not ok and "caiu" in mot
