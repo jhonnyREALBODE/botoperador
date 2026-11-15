@@ -38,7 +38,7 @@ function renderCupom() {
   s.appendChild(f);
 }
 renderCupom();
-document.getElementById('lix').onclick = () => { sel = null; renderCupom(); };
+document.getElementById('lix').onclick = () => { if (!ESTADO.lixeira_morta) { sel = null; renderCupom(); } };
 if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
   app.innerHTML = '<h2>Basquete ao vivo</h2>' + (ESTADO.feed_vazio ? '' : LIGAS1W.map(l => '<div><a href="/betting/live/basketball-23/' + l[0] + '">' + l[1] + ' <span>' + l[2].length + '</span></a></div>').join(''));
 } else if (p.match(/\/betting\/live\/basketball-23\/(.+)$/)) {

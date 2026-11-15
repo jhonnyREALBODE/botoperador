@@ -855,6 +855,7 @@ JS_ITENS_CUPOM = r"""
       // sobe até o cartão: o maior ancestral que ainda contém só esta seleção
       let card = e;
       while (card.parentElement && !cups.includes(card.parentElement) &&
+             !card.parentElement.querySelector('input') &&
              cand.filter(o => card.parentElement.contains(o) && !cand.some(x => x !== o && o.contains(x))).length === 1 &&
              (card.parentElement.innerText || '').length < 400) card = card.parentElement;
       if (!out.some(o => o.contains(card) || card.contains(o))) out.push(card);
@@ -1874,7 +1875,10 @@ class Casa:
             self._modal_ok()
             if self.esperar_cupom_vazio(2.0):
                 return True
-        if perna and perna.get("_mid"):  # plano C: clicar a própria odd (desmarca)
+        # plano C: desmarcar pelo próprio mercado — o botão da seleção que está no cupom, na página
+        if self._desmarcar_pelo_mercado() and self.esperar_cupom_vazio(2.0):
+            return True
+        if perna and perna.get("_mid"):  # plano D: clicar a própria odd (desmarca)
             try:
                 loc = self.page.locator('[data-mid="%s"]' % perna["_mid"])
                 # só se o botão AINDA for a mesma seleção — senão o clique ADICIONA outra
@@ -1885,7 +1889,44 @@ class Casa:
                 pass
             if self.esperar_cupom_vazio(2.0):
                 return True
+        self.dump_diag("desfazer_falhou")
         return False
+
+    def _desmarcar_pelo_mercado(self):
+        """Lê no cupom '<Mercado>, <Acima De 235.5>' e clica de novo nesse botão da página
+        (clicar numa seleção já marcada a desmarca). Só clica botão cujo texto começa EXATAMENTE
+        pelo rótulo e cujo mercado (título da seção) é o mesmo — nunca outro."""
+        try:
+            n = self._eval(r"""(sc) => {
+                document.querySelectorAll('[data-alvo-desm]').forEach(e => e.removeAttribute('data-alvo-desm'));
+                const cups = Array.from(document.querySelectorAll(sc));
+                const nrm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                const sels = [];
+                for (const c of cups) for (const m of (c.innerText || '').matchAll(/([^\n,]{3,80}),\s*((?:acima|abaixo|mais|menos|over|under) de [\d.,]+)/gi))
+                    sels.push({mercado: nrm(m[1]), rotulo: nrm(m[2])});
+                let n = 0;
+                for (const s of sels) {
+                    for (const b of document.querySelectorAll('button, [role=button]')) {
+                        if (cups.some(c => c.contains(b))) continue;
+                        const t = nrm(b.innerText);
+                        if (!t.startsWith(s.rotulo + ' ') && t !== s.rotulo) continue;
+                        // mercado: título da seção onde o botão mora
+                        let titulo = '';
+                        for (let a = b.parentElement, k = 0; a && k < 8 && !titulo; a = a.parentElement, k++)
+                            for (const f of a.children) { if (f.contains(b)) break; const x = nrm(f.innerText); if (x && x.length < 90 && x.includes(s.mercado)) { titulo = x; break; } }
+                        if (!titulo) continue;
+                        n++; b.setAttribute('data-alvo-desm', String(n)); break;
+                    }
+                }
+                return n;
+            }""", self.sel_cupom) or 0
+            for i in range(1, n + 1):
+                log("%s: desmarcando a seleção pelo próprio mercado (o X do cupom não limpou)" % self.rotulo)
+                self.clicar_firme(self.page.locator('[data-alvo-desm="%d"]' % i).first)
+                self.page.wait_for_timeout(300)
+            return n > 0
+        except Exception:
+            return False
 
     def _modal_ok_rapido(self):
         """Só confirma janelinha de confirmação de verdade (mesma regra do _modal_ok)."""

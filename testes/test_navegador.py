@@ -555,3 +555,17 @@ def test_limpar_nunca_clica_sim_de_mercado(casas):
     assert d["ok"], d
     assert "prorroga" not in (c1.executar(c1.texto_cupom) or "")
     assert c1.executar(c1.itens_cupom) == []
+
+
+def test_1awin_desmarca_pelo_mercado_quando_x_e_lixeira_falham(casas):
+    """14/11 22:59: 'Totais (inc OT), Acima De 235.5' ficou preso com o X visível."""
+    servidor.ESTADO.update({"x_morto": True, "lixeira_morta": True})
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
+    limpar_cupons(casas)
+    l1, _ = ler(casas)
+    o1 = [x for x in l1["ofertas"] if x["linha"] == 214.5 and x["lado"] == "abaixo"][0]
+    assert c1.executar(c1.montar, dict(o1, stake=26.57), TIMES)["ok"]
+    d = c1.executar(c1.desfazer, dict(o1, _mid=None))
+    assert d["ok"], d
+    assert c1.executar(c1.itens_cupom) == []
