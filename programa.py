@@ -116,7 +116,7 @@ DEFAULTS = {
     # ---- monitoramento pós-entrada e cobertura dinâmica (ordem do operador 15/11)
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
-    "max_entradas_por_jogo": 3,
+    "max_entradas_por_jogo": 4,
     "pos_monitorar": True,
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_dist_min_under": 4.0,        # FILTRO: linha do Under novo − linha do Over ORIGINAL ≥ 4
