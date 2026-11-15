@@ -757,3 +757,78 @@ def test_tabela_perda_por_janela_15_11(cfg):
     a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.81)
     b = oferta("ps3838", "total", "jogo", "acima", 213.5, 2.09)   # janela 1, custo ~3%
     assert P.achar_par([a], [b], SINAL, cfg)[0] is None            # 1 ponto só aceita até 2%
+
+
+# ------------------------------------------------------------------ pós-entrada / cobertura
+def _pos(over=250.5, under=252.5, periodo="jogo"):
+    return {"id": 1, "periodo": periodo, "pernas": [
+        {"casa": "ps3838", "tipo": "total", "periodo": periodo, "lado": "acima", "linha": over, "odd": 1.95, "stake": 31.0, "origem": "entrada"},
+        {"casa": "1awin", "tipo": "total", "periodo": periodo, "lado": "abaixo", "linha": under, "odd": 2.05, "stake": 29.5, "origem": "entrada"}]}
+
+
+def _ofs(*linhas, lado="abaixo", odd=1.9, periodo="jogo"):
+    return [{"tipo": "total", "periodo": periodo, "lado": lado, "linha": L, "odd": odd} for L in linhas]
+
+
+def test_pagamento_e_devolucao_na_linha_inteira():
+    p = {"lado": "abaixo", "linha": 256.0, "odd": 1.9, "stake": 10.0}
+    assert P.pagamento_perna(p, 255) == 19.0 and P.pagamento_perna(p, 256) == 10.0 and P.pagamento_perna(p, 257) == 0
+
+
+def test_filtro_4_pontos_qualquer_linha(cfg):
+    """Under novo − Over ORIGINAL ≥ 4: 253.5 não (3), 254.5 sim (4) — para qualquer linha."""
+    mod = (251.5, 9.0)
+    for over, under, novas, deve in [(250.5, 252.5, [253.5], set()), (250.5, 252.5, [254.5], {254.5}),
+                                     (180.5, 182.5, [186.5], {186.5}), (160.5, 162.5, [163.5], set())]:
+        pos = _pos(over, under)
+        _, av = P.avaliar_cobertura(pos, {"1awin": _ofs(*novas)}, (over + 1, 9.0), cfg)
+        assert {c["linha"] for c in av} == deve, (over, novas)
+
+
+def test_referencia_e_o_over_original_nao_o_under(cfg):
+    pos = _pos(250.5, 252.5)
+    # 255.0 está a 2.5 do Under 252.5 mas a 4.5 do Over original 250.5 -> avalia
+    _, av = P.avaliar_cobertura(pos, {"1awin": _ofs(255.0)}, (251.5, 9.0), cfg)
+    assert av and av[0]["dist"] == 4.5
+
+
+def test_nunca_mistura_periodo_nem_over_nem_repete(cfg):
+    pos = _pos(250.5, 252.5)
+    ofs = {"1awin": _ofs(256.5, periodo="q3") + _ofs(256.5, lado="acima") + _ofs(252.5)}
+    _, av = P.avaliar_cobertura(pos, ofs, (251.5, 9.0), cfg)
+    assert av == []
+    pos["pernas"].append(dict(pos["pernas"][1], linha=256.5, origem="cobertura"))
+    _, av = P.avaliar_cobertura(pos, {"1awin": _ofs(256.5)}, (251.5, 9.0), cfg)
+    assert av == []  # mesma casa/lado/linha já apostada
+
+
+def test_cobertura_so_quando_a_posicao_inteira_melhora(cfg):
+    pos = _pos(250.5, 252.5)
+    mod = (251.5, 9.0)
+    melhor, av = P.avaliar_cobertura(pos, {"1awin": _ofs(256.5, odd=1.95)}, mod, cfg)
+    assert melhor and melhor["depois"]["p_preju"] < melhor["antes"]["p_preju"]
+    assert melhor["depois"]["pior"] >= -cfg["pos_perda_max_total_brl"]
+    # todas as pernas entram na conta (nada substitui a entrada)
+    res = P.resumo_posicao(pos["pernas"] + [dict(melhor["oferta"], casa="1awin", stake=melhor["stake"])], mod)
+    assert res["gasto"] == round(31.0 + 29.5 + melhor["stake"], 2)
+    # odd ruim (EV caindo) não entra
+    melhor2, _ = P.avaliar_cobertura(pos, {"1awin": _ofs(256.5, odd=1.15)}, mod, cfg)
+    assert melhor2 is None
+
+
+def test_limites_de_perda_e_orcamento(cfg):
+    pos = _pos(250.5, 252.5)
+    cfg = dict(cfg, pos_perda_max_total_brl=3.0)
+    melhor, _ = P.avaliar_cobertura(pos, {"1awin": _ofs(256.5, odd=1.95)}, (251.5, 9.0), cfg)
+    assert melhor is None  # qualquer stake estoura a perda máxima
+    cfg = dict(cfg, pos_perda_max_total_brl=15.0, pos_max_total_coberturas_brl=0.0)
+    assert P.avaliar_cobertura(pos, {"1awin": _ofs(256.5, odd=1.95)}, (251.5, 9.0), cfg)[0] is None
+
+
+def test_modelo_da_escada_ps():
+    ofs = []
+    for L, oa, ou in [(208.5, 1.55, 2.40), (210.5, 1.70, 2.15), (212.5, 1.90, 1.92)]:
+        ofs += [{"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": L, "odd": oa},
+                {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": L, "odd": ou}]
+    m, sg = P.modelo_total(ofs, "jogo")
+    assert 211 < m < 214 and 3 < sg < 30

@@ -760,3 +760,25 @@ def test_1awin_processa_e_nao_entra(casas, cfgc):
         servidor.ESTADO.clear()
         for c in casas.values():
             recarregar(c)
+
+
+def test_monitoramento_pos_entrada_cobertura_simulada(casas, cfgc):
+    """Middle testado -> posição aberta em aba separada -> acha Under ≥ 4 pts acima do Over original
+    que melhora a posição inteira -> cobertura (simulada no modo teste)."""
+    ir_jogo(casas)
+    limpar_cupons(casas)
+    est = P.Estado(cfgc)
+    op = P.Operador(cfgc, est, casas)
+    op.gerente = P.GerentePosicoes(cfgc, est, casas)
+    bil = achar(casas, cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert op.executar_bilhete(bil) == "testado"
+    pos = est.posicoes[-1]
+    assert pos["aberta"] and P.over_original(pos) == 211.5
+    op.gerente.rodada(pos)
+    cob = [p for p in pos["pernas"] if p["origem"] == "cobertura"]
+    assert cob and cob[0]["lado"] == "abaixo" and cob[0]["linha"] - 211.5 >= 4 and cob[0]["simulada"], pos.get("candidatos")
+    assert pos["resumo"]["gasto"] > 0 and len(pos["pernas"]) == 3
+    for c in casas.values():
+        assert c.executar(c.itens_cupom) == []
+        c.executar(c.fechar_aba, "pos%d" % pos["id"])

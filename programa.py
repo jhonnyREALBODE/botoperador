@@ -113,6 +113,20 @@ DEFAULTS = {
     "custo_max": 4.0,            # ordem do operador 13/11 14:54 (era 3,0)
     # tabela do operador 15/11: [janela de, janela até (exclusiva), perda máxima %]
     "custo_por_janela": [[1, 2, 2.0], [2, 3, 3.8], [3, 7, 3.99], [7, 11, 7.0]],  # 7–10: 7% (ordem 15/11)
+    # ---- monitoramento pós-entrada e cobertura dinâmica (ordem do operador 15/11)
+    "pos_monitorar": True,
+    "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
+    "pos_dist_min_under": 4.0,        # FILTRO: linha do Under novo − linha do Over ORIGINAL ≥ 4
+    "pos_intervalo_s": 15,
+    "pos_max_coberturas": 3,          # por posição
+    "pos_max_por_cobertura_brl": 40.0,
+    "pos_max_total_coberturas_brl": 80.0,
+    "pos_perda_max_total_brl": 15.0,  # pior caso da posição inteira não pode passar disso
+    "pos_ev_min_brl": 0.0,            # valor esperado não pode cair
+    "pos_reducao_risco_min": 0.05,    # chance de prejuízo tem que cair pelo menos 5 pontos percentuais
+    "pos_cooldown_s": 20,
+    "pos_stake_min_1w_brl": 5.0,
+    "pos_duracao_max_min": 150,
     "perna_ps_eur": 5.0,         # 0 = volta ao total fixo
     "total_operacao": 600.0,
     "cambio_brl_eur": 6.20,
@@ -732,6 +746,149 @@ def cenarios(bil):
         {"nome": "só %s ganha" % p2["selecao"], "valor": round(r2 - tot, 2)},
         {"nome": "caiu no meio (as duas ganham)", "valor": round(r1 + r2 - tot, 2)},
     ]
+
+
+# ---------------------------------------------------------------- POSIÇÃO: resultado por placar
+from statistics import NormalDist as _ND
+
+
+def pagamento_perna(perna, k):
+    """Quanto a perna devolve se o total final for k (inteiro). Linha inteira empatada = devolve."""
+    L, st, od = perna["linha"], perna["stake"], perna["odd"]
+    if abs(k - L) < 1e-9:
+        return st
+    ganha = k > L if perna["lado"] == "acima" else k < L
+    return st * od if ganha else 0.0
+
+
+def liquido_por_placar(pernas, ks):
+    gasto = sum(p["stake"] for p in pernas)
+    return {k: sum(pagamento_perna(p, k) for p in pernas) - gasto for k in ks}
+
+
+def modelo_total(ofertas, periodo):
+    """Distribuição do total final a partir da escada (PS = casa afiada): (média, desvio).
+    Para cada linha com os dois lados: p_acima sem a margem; z = Φ⁻¹(1−p); linha = m + σ·z."""
+    pares = {}
+    for o in ofertas or []:
+        if o.get("tipo") == "total" and o.get("periodo") == periodo:
+            pares.setdefault(o["linha"], {})[o["lado"]] = o["odd"]
+    pts = []
+    for L, d in pares.items():
+        if "acima" in d and "abaixo" in d:
+            pa, pb = 1 / d["acima"], 1 / d["abaixo"]
+            p = pa / (pa + pb)
+            if 0.03 < p < 0.97:
+                pts.append((L, _ND().inv_cdf(1 - p)))
+    if not pts:
+        return None
+    sig_pad = 9.0 if periodo == "jogo" else (6.5 if periodo in ("t1", "t2") else 4.5)
+    if len(pts) == 1 or max(z for _, z in pts) - min(z for _, z in pts) < 0.05:
+        L, z = pts[0]
+        return (L - sig_pad * z, sig_pad)
+    n = len(pts)
+    mz = sum(z for _, z in pts) / n
+    mL = sum(L for L, _ in pts) / n
+    cov = sum((z - mz) * (L - mL) for L, z in pts)
+    var = sum((z - mz) ** 2 for _, z in pts)
+    sig = cov / var if var > 0 else sig_pad
+    if not (1.0 <= sig <= 40.0):
+        sig = sig_pad
+    return (mL - sig * mz, sig)
+
+
+def prob_placar(modelo, ks):
+    m, sg = modelo
+    d = _ND(m, sg)
+    return {k: d.cdf(k + 0.5) - d.cdf(k - 0.5) for k in ks}
+
+
+def faixa_placares(pernas, modelo):
+    ls = [p["linha"] for p in pernas]
+    m, sg = modelo if modelo else (sum(ls) / len(ls), 10.0)
+    lo = int(min(min(ls), m - 4 * sg)) - 3
+    hi = int(max(max(ls), m + 4 * sg)) + 3
+    return list(range(max(0, lo), hi + 1))
+
+
+def resumo_posicao(pernas, modelo):
+    ks = faixa_placares(pernas, modelo)
+    liq = liquido_por_placar(pernas, ks)
+    r = {"pior": round(min(liq.values()), 2), "melhor": round(max(liq.values()), 2),
+         "gasto": round(sum(p["stake"] for p in pernas), 2)}
+    lucro = [k for k in ks if liq[k] > 0.005]
+    r["faixas_lucro"] = _faixas(lucro)
+    if modelo:
+        pr = prob_placar(modelo, ks)
+        tot = sum(pr.values()) or 1.0
+        r["ev"] = round(sum(pr[k] * liq[k] for k in ks) / tot, 2)
+        r["p_preju"] = round(sum(pr[k] for k in ks if liq[k] < -0.005) / tot, 4)
+        r["p_lucro"] = round(sum(pr[k] for k in ks if liq[k] > 0.005) / tot, 4)
+        r["media"], r["desvio"] = round(modelo[0], 1), round(modelo[1], 1)
+    return r
+
+
+def _faixas(ks):
+    out, ini, ant = [], None, None
+    for k in ks:
+        if ini is None:
+            ini = ant = k
+        elif k == ant + 1:
+            ant = k
+        else:
+            out.append([ini, ant]); ini = ant = k
+    if ini is not None:
+        out.append([ini, ant])
+    return out
+
+
+def over_original(pos):
+    """Referência do filtro: o Over da ENTRADA ORIGINAL (nunca o Under já apostado)."""
+    ov = [p for p in pos["pernas"] if p.get("origem") == "entrada" and p["lado"] == "acima"]
+    return ov[0]["linha"] if ov else None
+
+
+def avaliar_cobertura(pos, ofertas_por_casa, modelo, cfg):
+    """Procura UM Under novo (mesmo mercado/período) que melhore a posição INTEIRA.
+    Filtro obrigatório: linha_under − linha_over_original ≥ pos_dist_min_under.
+    Devolve (melhor_candidato | None, lista_de_avaliados_para_o_painel)."""
+    ref = over_original(pos)
+    if ref is None or modelo is None:
+        return None, []
+    dist_min = float(cfg.get("pos_dist_min_under", 4.0))
+    pernas = pos["pernas"]
+    base = resumo_posicao(pernas, modelo)
+    gasto_cob = sum(p["stake"] for p in pernas if p.get("origem") == "cobertura")
+    resta = cfg["pos_max_total_coberturas_brl"] - gasto_cob
+    ja = {(p["casa"], p["lado"], round(p["linha"], 3)) for p in pernas}
+    avaliados, melhor = [], None
+    for casa, ofs in ofertas_por_casa.items():
+        for o in ofs or []:
+            if o.get("tipo") != "total" or o.get("periodo") != pos["periodo"] or o.get("lado") != "abaixo":
+                continue
+            if o["linha"] - ref < dist_min - 1e-9:
+                continue  # filtro dos 4 pontos
+            if (casa, "abaixo", round(o["linha"], 3)) in ja:
+                continue  # nada de repetir a mesma aposta
+            if casa == CASA_PS:
+                grade = [round(e * cfg["cambio_brl_eur"], 2) for e in (5.0, 6.0, 7.5, 10.0)]
+            else:
+                mn = cfg.get("pos_stake_min_1w_brl", 5.0)
+                grade = [round(mn + 5 * i, 2) for i in range(0, 9)]
+            for st in grade:
+                if st > cfg["pos_max_por_cobertura_brl"] + 1e-9 or st > resta + 1e-9:
+                    continue
+                nova = dict(o, casa=casa, stake=st, origem="cobertura")
+                r = resumo_posicao(pernas + [nova], modelo)
+                ok = (r["pior"] >= -cfg["pos_perda_max_total_brl"] - 1e-9
+                      and r["ev"] - base["ev"] >= cfg["pos_ev_min_brl"] - 1e-9
+                      and base["p_preju"] - r["p_preju"] >= cfg["pos_reducao_risco_min"] - 1e-9)
+                cand = {"casa": casa, "linha": o["linha"], "odd": o["odd"], "stake": st, "ok": ok,
+                        "dist": round(o["linha"] - ref, 1), "antes": base, "depois": r, "oferta": o}
+                avaliados.append(cand)
+                if ok and (melhor is None or (r["ev"], -r["p_preju"]) > (melhor["depois"]["ev"], -melhor["depois"]["p_preju"])):
+                    melhor = cand
+    return melhor, avaliados
 
 
 # ---------------------------------------------------------------- MOTOR-LEITOR (JS)
@@ -2538,6 +2695,32 @@ class Casa:
                 return {"ok": False, "motivo": mot, "foto": self.foto("confirmar")}
         return self.confirmar(perna)
 
+    def na_aba(self, chave, url, fn, *args):
+        """Roda fn numa ABA SEPARADA (posição aberta), sem mexer na aba principal dos sinais."""
+        if not hasattr(self, "abas_pos"):
+            self.abas_pos = {}
+        pg = self.abas_pos.get(chave)
+        if pg is None or pg.is_closed():
+            pg = self.ctx.new_page()
+            pg.set_default_timeout(15000)
+            self.abas_pos[chave] = pg
+        principal = self.page
+        self.page = pg
+        try:
+            if url and (not pg.url or pg.url == "about:blank"):
+                self.ir(url)
+            return fn(*args)
+        finally:
+            self.page = principal
+
+    def fechar_aba(self, chave):
+        pg = getattr(self, "abas_pos", {}).pop(chave, None)
+        try:
+            if pg and not pg.is_closed():
+                pg.close()
+        except Exception:
+            pass
+
     def recarregar(self):
         try:
             self.page.reload(wait_until="domcontentloaded")
@@ -2861,6 +3044,7 @@ class Estado:
         h = _ler_json(self.arquivo, {})
         self.bilhetes = h.get("bilhetes", [])
         self.resultados = h.get("resultados", [])
+        self.posicoes = h.get("posicoes", [])     # middles abertos sob monitoramento pós-entrada
         self.backlog = []          # cartões de sinal antigo (só montam com clique)
         self.sinais = []           # sinais frescos recebidos (histórico curto)
         self.calculadora = None    # raio-x da última rodada sadia
@@ -2869,7 +3053,8 @@ class Estado:
 
     def salvar(self):
         with _TRAVA:
-            dados = {"bilhetes": self.bilhetes[-300:], "resultados": self.resultados[-300:]}
+            dados = {"bilhetes": self.bilhetes[-300:], "resultados": self.resultados[-300:],
+                     "posicoes": self.posicoes[-100:]}
         _gravar_json(self.arquivo, dados)
 
     def registrar_bilhete(self, bil, origem):
@@ -2928,8 +3113,17 @@ class Estado:
                 "resultados": self.resultados[-30:][::-1],
                 "calculadora": calc,
                 "monitor": self.monitor,
+                "posicoes": [_pos_painel(p) for p in self.posicoes[-20:]][::-1],
                 "log": _LOG_MEM[-80:],
             }
+
+
+def _pos_painel(p):
+    out = {k: v for k, v in p.items() if k not in ("candidatos_raw",)}
+    out["pernas"] = [{k: v for k, v in x.items() if not k.startswith("_")} for x in p.get("pernas", [])]
+    if out.get("pendente"):
+        out["pendente"] = {k: v for k, v in out["pendente"].items() if k != "oferta"}
+    return out
 
 
 def _sem_privados(b):
@@ -2955,6 +3149,7 @@ class Operador:
         self.cfg = cfg
         self.estado = estado
         self.casas = casas
+        self.gerente = None         # GerentePosicoes (monitoramento pós-entrada), se ligado
         self._atual = None          # (thread, evento_cancelar, sinal)
         self._trava = threading.Lock()
         self._ultimo_por_id = {}
@@ -3143,10 +3338,18 @@ class Operador:
                 self._desfazer(res, bil, fotos, detalhe)
                 self.estado.atualizar(bil, status="falhou", detalhe=detalhe, fotos=fotos)
                 return "falhou"
+            urls = {}
+            for nome, c in self.casas.items():
+                try:
+                    urls[nome] = c.executar(lambda c=c: c.page.url, timeout=10)
+                except Exception:
+                    urls[nome] = ""
             if self.cfg["modo_teste"]:
                 ok = self._desfazer(res, bil, fotos, detalhe)
                 st = "testado" if ok else "falhou"
                 self.estado.atualizar(bil, status=st, detalhe=detalhe, fotos=fotos)
+                if ok and self.gerente:
+                    self.gerente.abrir(bil, urls, simulada=True)
                 return st
             # MODO REAL — frágil primeiro, com a outra já montada
             r1 = c1.executar(c1.confirmar, p1, timeout=120)
@@ -3188,6 +3391,8 @@ class Operador:
                 return "exposto"
             detalhe = {"1aWin": "confirmada", "PS3838": "confirmada"}
             self.estado.atualizar(bil, status="confirmado", detalhe=detalhe, fotos=fotos)
+            if self.gerente:
+                self.gerente.abrir(bil, urls, simulada=False)
             return "confirmado"
 
     def _conferencia_final(self, res, bil):
@@ -3280,6 +3485,183 @@ _RX_STATUS = re.compile(r"(quarto|quarter|tempo|half|intervalo|finalizado|encerr
 def _e_status_jogo(txt):
     """Relógio/situação do jogo ('4º Quarto 1`', 'Finalizado', 'Intervalo') nunca é nome de time."""
     return bool(_RX_STATUS.search(_sem_acento(txt or "")))
+
+
+# ---------------------------------------------------------------- MONITORAMENTO PÓS-ENTRADA
+class GerentePosicoes:
+    """Depois do middle, continua no jogo (aba separada em cada casa) e procura Unders novos
+    que melhorem a POSIÇÃO INTEIRA. Filtro obrigatório: linha do Under − linha do Over ORIGINAL ≥ 4.
+    Nunca troca/substitui aposta: só soma cobertura; recalcula tudo a cada rodada."""
+
+    def __init__(self, cfg, estado, casas):
+        self.cfg = cfg
+        self.estado = estado
+        self.casas = casas
+        self._trava = threading.Lock()
+        self._vazias = {}
+
+    def abrir(self, bil, urls, simulada):
+        if not self.cfg.get("pos_monitorar", True) or bil.get("tipo") != "total":
+            return None
+        pernas = []
+        for p in bil["pernas"]:
+            pernas.append({"casa": p["casa"], "tipo": "total", "periodo": p["periodo"], "lado": p["lado"],
+                           "linha": p["linha"], "odd": p.get("odd_viva") or p["odd"], "stake": p["stake"],
+                           "origem": "entrada", "simulada": simulada, "hora": agora()})
+        with _TRAVA:
+            pid = max([x.get("id", 0) for x in self.estado.posicoes] + [0]) + 1
+            pos = {"id": pid, "bilhete": bil.get("id"), "jogo": bil["jogo"], "times": bil["times"],
+                   "periodo": bil["periodo"], "urls": urls, "pernas": pernas, "aberta": True, "simulada": simulada,
+                   "aberta_em": time.time(), "aberta_hora": agora(), "ultima_cob": 0.0, "status": "monitorando",
+                   "eventos": ["%s entrada: %s" % (agora(), " × ".join(descricao_oferta(x) + " @" + str(x["odd"]) for x in pernas))]}
+            self.estado.posicoes.append(pos)
+        self.estado.salvar()
+        log("📌 posição %d aberta (%s%s) — monitorando Unders ≥ %s pts acima do Over %s" % (
+            pid, bil["jogo"], ", SIMULADA" if simulada else "", _br(self.cfg["pos_dist_min_under"], 1),
+            _fmt_linha(over_original(pos) or 0)))
+        return pos
+
+    def iniciar(self):
+        threading.Thread(target=self._laco, name="posicoes", daemon=True).start()
+        return self
+
+    def _laco(self):
+        while True:
+            for pos in [p for p in list(self.estado.posicoes) if p.get("aberta")]:
+                try:
+                    self.rodada(pos)
+                except Exception as e:
+                    log("posição %s: erro na rodada (segue): %s" % (pos.get("id"), str(e).split("\n")[0][:150]))
+            time.sleep(float(self.cfg.get("pos_intervalo_s", 15)))
+
+    def fechar(self, pos, motivo):
+        with _TRAVA:
+            pos["aberta"] = False
+            pos["status"] = "encerrada: " + motivo
+            pos["eventos"].append("%s encerrada — %s" % (agora(), motivo))
+        for c in self.casas.values():
+            try:
+                c.executar(c.fechar_aba, "pos%d" % pos["id"], timeout=20)
+            except Exception:
+                pass
+        self.estado.salvar()
+        log("📌 posição %d encerrada — %s" % (pos["id"], motivo))
+
+    def _ler(self, pos):
+        chave = "pos%d" % pos["id"]
+        lt = {}
+        for nome, c in self.casas.items():
+            url = (pos.get("urls") or {}).get(nome)
+            if not url:
+                continue
+            try:
+                r = c.executar(c.na_aba, chave, url, c.ler_escada, pos["times"], timeout=90)
+                if not r["ok"] and "não é" in (r.get("motivo") or ""):
+                    c.executar(c.na_aba, chave, url, c.ir, url, timeout=60)
+                    r = c.executar(c.na_aba, chave, url, c.ler_escada, pos["times"], timeout=90)
+            except Exception as e:
+                r = {"ok": False, "ofertas": [], "motivo": str(e)[:100], "quarto": None}
+            lt[nome] = r
+        return lt
+
+    def rodada(self, pos):
+        cfg = self.cfg
+        if time.time() - pos.get("aberta_em", time.time()) > cfg.get("pos_duracao_max_min", 150) * 60:
+            return self.fechar(pos, "tempo máximo de monitoramento")
+        if pos.get("status") == "PAUSADA":
+            return
+        lt = self._ler(pos)
+        quarto = next((l.get("quarto") for l in lt.values() if l.get("quarto") is not None), None)
+        if pos["periodo"] in periodos_encerrados(quarto):
+            return self.fechar(pos, "período %s acabou" % NOME_PERIODO.get(pos["periodo"], pos["periodo"]))
+        ofertas = {n: [o for o in l.get("ofertas", []) if o.get("tipo") == "total" and o.get("periodo") == pos["periodo"]]
+                   for n, l in lt.items()}
+        if not any(ofertas.values()):
+            self._vazias[pos["id"]] = self._vazias.get(pos["id"], 0) + 1
+            if self._vazias[pos["id"]] >= 20:
+                return self.fechar(pos, "mercado sumiu (jogo acabou ou foi retirado)")
+            return
+        self._vazias[pos["id"]] = 0
+        modelo = modelo_total(ofertas.get(CASA_PS), pos["periodo"]) or modelo_total(ofertas.get(CASA_1W), pos["periodo"])
+        with _TRAVA:
+            pos["resumo"] = resumo_posicao(pos["pernas"], modelo)
+            pos["atualizada"] = agora()
+        n_cob = len([p for p in pos["pernas"] if p.get("origem") == "cobertura"])
+        if n_cob >= cfg["pos_max_coberturas"]:
+            pos["status"] = "monitorando (limite de coberturas atingido)"
+            return
+        if time.time() - pos.get("ultima_cob", 0) < cfg["pos_cooldown_s"]:
+            return
+        melhor, avaliados = avaliar_cobertura(pos, ofertas, modelo, cfg)
+        with _TRAVA:
+            top = sorted(avaliados, key=lambda c: (-c["depois"].get("ev", -1e9)))[:5]
+            pos["candidatos"] = [{k: v for k, v in c.items() if k != "oferta"} for c in top]
+        if not melhor:
+            pos["status"] = "monitorando"
+            return
+        desc = "Abaixo de %s (%s) @%s R$ %s na %s" % (_fmt_linha(melhor["linha"]), NOME_PERIODO.get(pos["periodo"]),
+                                                     melhor["odd"], _br(melhor["stake"]), NOME_CASA[melhor["casa"]])
+        log("📌 posição %d: cobertura justificada — %s | pior %s → %s | EV %s → %s | P(prejuízo) %.0f%% → %.0f%%" % (
+            pos["id"], desc, _br(melhor["antes"]["pior"]), _br(melhor["depois"]["pior"]), _br(melhor["antes"]["ev"]),
+            _br(melhor["depois"]["ev"]), 100 * melhor["antes"]["p_preju"], 100 * melhor["depois"]["p_preju"]))
+        if not cfg["modo_teste"] and cfg.get("pos_modo", "auto") == "manual":
+            with _TRAVA:
+                pos["pendente"] = dict(melhor, descricao=desc, hora=agora())
+                pos["status"] = "AGUARDANDO SUA CONFIRMAÇÃO"
+            return
+        self.executar_cobertura(pos, melhor)
+
+    def executar_cobertura(self, pos, cand):
+        c = self.casas[cand["casa"]]
+        chave, url = "pos%d" % pos["id"], (pos.get("urls") or {}).get(cand["casa"])
+        perna = dict(cand["oferta"], casa=cand["casa"], stake=cand["stake"])
+        simulada = self.cfg["modo_teste"]
+        with _TRAVA_CLIQUES:
+            m = c.executar(c.na_aba, chave, url, c.montar, perna, pos["times"], timeout=90)
+            if not m["ok"]:
+                pos["eventos"].append("%s cobertura não montou: %s" % (agora(), m["motivo"]))
+                log("📌 posição %d: cobertura não montou — %s" % (pos["id"], m["motivo"]))
+                pos["ultima_cob"] = time.time()
+                return False
+            if simulada:
+                c.executar(c.na_aba, chave, url, c.desfazer, perna, timeout=40)
+                ok = True
+            else:
+                r = c.executar(c.na_aba, chave, url, c.confirmar, perna, timeout=120)
+                ok = r["ok"]
+                if ok is None:
+                    with _TRAVA:
+                        pos["status"] = "PAUSADA"
+                        pos["eventos"].append("%s cobertura INCERTA — confira a casa: %s" % (agora(), r["motivo"]))
+                    log("‼ posição %d: cobertura INCERTA na %s — confira a casa. Posição pausada." % (pos["id"], c.rotulo))
+                    self.estado.salvar()
+                    return False
+                if not ok:
+                    c.executar(c.na_aba, chave, url, c.limpar_cupom, timeout=40)
+                    pos["eventos"].append("%s cobertura recusada: %s" % (agora(), r["motivo"]))
+                    pos["ultima_cob"] = time.time()
+                    return False
+        with _TRAVA:
+            pos["pernas"].append({"casa": cand["casa"], "tipo": "total", "periodo": pos["periodo"], "lado": "abaixo",
+                                  "linha": cand["linha"], "odd": cand["odd"], "stake": cand["stake"],
+                                  "origem": "cobertura", "simulada": simulada, "hora": agora()})
+            pos["ultima_cob"] = time.time()
+            pos.pop("pendente", None)
+            pos["status"] = "monitorando"
+            pos["eventos"].append("%s cobertura %s: Abaixo de %s @%s R$ %s (%s)" % (
+                agora(), "SIMULADA" if simulada else "APOSTADA", _fmt_linha(cand["linha"]), cand["odd"],
+                _br(cand["stake"]), NOME_CASA[cand["casa"]]))
+        self.estado.salvar()
+        log("📌 posição %d: cobertura %s" % (pos["id"], "simulada (modo teste)" if simulada else "APOSTADA"))
+        return True
+
+    def confirmar_manual(self, pid):
+        pos = next((p for p in self.estado.posicoes if p.get("id") == pid and p.get("aberta")), None)
+        if not pos or not pos.get("pendente"):
+            return False
+        cand = pos["pendente"]
+        threading.Thread(target=self.executar_cobertura, args=(pos, cand), daemon=True).start()
+        return True
 
 
 def _calib_listar_jogos(c):
@@ -3485,6 +3867,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0}
 <div class="card full" id="mon"></div>
 <div class="card" id="calc"><h2>🧮 Calculadora do motor</h2><div class="mut">aguardando a primeira rodada sadia…</div></div>
 <div class="card"><h2>📥 Sinais de backlog (só montam com clique)</h2><div id="backlog" class="mut">—</div></div>
+<div class="card full"><h2>📌 Posições (monitoramento pós-entrada)</h2><div id="pos" class="mut">—</div></div>
 <div class="card full"><h2>🎫 Bilhetes</h2><div id="bil"></div></div>
 <div class="card"><h2>🛰️ Sinais recebidos</h2><div id="sinais"></div></div>
 <div class="card"><h2>🏁 Resultados</h2><div id="res"></div></div>
@@ -3512,6 +3895,13 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
  document.getElementById('bil').innerHTML='<table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+d.bilhetes.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
+ document.getElementById('pos').innerHTML=(d.posicoes||[]).map(p=>{const r=p.resumo||{};
+  let h='<div style="border-bottom:1px solid var(--ln);padding:6px 0"><b>#'+p.id+' '+esc(p.jogo)+'</b> <span class="mut">('+esc(p.periodo)+')'+(p.simulada?' SIMULADA':'')+' — '+esc(p.status)+(p.atualizada?' · '+p.atualizada:'')+'</span>';
+  h+='<div>'+p.pernas.map(l=>(l.origem=='entrada'?'entrada':'<b>cobertura</b>')+': '+(l.casa=='1awin'?'1aWin':'PS')+' '+(l.lado=='acima'?'Acima':'Abaixo')+' de '+l.linha+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</div>';
+  if(r.pior!=null)h+='<div>pior '+R(r.pior)+' · melhor '+R(r.melhor)+(r.ev!=null?' · EV '+R(r.ev)+' · P(lucro) '+P(100*r.p_lucro,0)+'% · P(prejuízo) '+P(100*r.p_preju,0)+'%':'')+' · lucro se terminar em: '+(r.faixas_lucro||[]).map(f=>f[0]==f[1]?f[0]:f[0]+'–'+f[1]).join(', ')+'</div>';
+  if(p.candidatos&&p.candidatos.length)h+='<div class="mut">candidatos: '+p.candidatos.slice(0,3).map(c=>(c.ok?'✅':'✖')+' Abaixo '+c.linha+' @'+c.odd+' '+R(c.stake)+' (+'+c.dist+' pts) EV '+R(c.depois.ev)+' pior '+R(c.depois.pior)).join(' | ')+'</div>';
+  if(p.pendente)h+='<div class="am">Oportunidade: '+esc(p.pendente.descricao)+' <button onclick="post(\'/api/cobertura/'+p.id+'\')">APOSTAR COBERTURA</button></div>';
+  return h+'</div>'}).join('')||'—';
  document.getElementById('sinais').innerHTML=d.sinais.map(s=>'<div>'+s.hora+' '+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+' ('+s.origem+')</span></div>').join('')||'—';
  document.getElementById('res').innerHTML=d.resultados.map(r=>'<div>'+esc(r.quando)+' '+esc(r.jogo)+' — <b>'+esc(r.desfecho)+'</b></div>').join('')||'—';
  const lg=document.getElementById('log');const fim=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=d.log.join('\n');if(fim)lg.scrollTop=lg.scrollHeight;
@@ -3560,6 +3950,10 @@ def criar_painel(estado, operador, porta):
                     log("operador clicou MONTAR no backlog: %s" % s["jogo"])
                     operador.novo_sinal(s, "backlog")
                 return self._env(200, '{"ok":true}')
+            m2 = re.match(r"^/api/cobertura/(\d+)$", p)
+            if m2 and operador and getattr(operador, "gerente", None):
+                ok = operador.gerente.confirmar_manual(int(m2.group(1)))
+                return self._env(200, json.dumps({"ok": ok}))
             if p == "/api/calibrar" and operador:
                 operador.calibrar()
                 return self._env(200, '{"ok":true}')
@@ -3686,6 +4080,10 @@ def main(argv):
     estado = Estado(cfg)
     casas = {CASA_PS: Casa(CASA_PS, cfg).iniciar(), CASA_1W: Casa(CASA_1W, cfg).iniciar()}
     operador = Operador(cfg, estado, casas)
+    if cfg.get("pos_monitorar", True):
+        operador.gerente = GerentePosicoes(cfg, estado, casas).iniciar()
+        log("📌 monitoramento pós-entrada LIGADO (modo %s; Under só se ≥ %s pts acima do Over original)" % (
+            cfg.get("pos_modo", "auto"), _br(cfg["pos_dist_min_under"], 1)))
     if cfg.get("url_grok"):
         Vigia(cfg, operador, estado).iniciar()
     else:
