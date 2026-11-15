@@ -2409,6 +2409,7 @@ class Casa:
         antes = self._pendentes()
         self._texto_antes = self.texto()
         self._logou_novas = False
+        self._ok_confirmar = False
         saldo0 = self._saldo()
         valor = (perna or {}).get("stake", 0) / (self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else 1)
         log("%s: saldo antes de apostar = %s" % (self.rotulo, saldo0))
@@ -2433,6 +2434,13 @@ class Casa:
             if fotos_rapidas < 2 and time.time() - t_clique > (1.0 if fotos_rapidas == 0 else 3.0):
                 self.foto("apos_clique_%d" % (fotos_rapidas + 1))
                 fotos_rapidas += 1
+            # PS real (15/11 15:21): janela 'Confirmar Apostas — Tem certeza de que deseja arriscar
+            # 5.00 EUR…? OK / CANCELAR' — sem o OK a aposta NÃO sai
+            if re.search(r"confirmar apostas?|tem certeza de que deseja arriscar|are you sure", tx, re.I) \
+                    and not getattr(self, "_ok_confirmar", False):
+                if self._modal_ok():
+                    self._ok_confirmar = True
+                    log("%s: cliquei OK em 'Confirmar Apostas'" % self.rotulo)
             if novas and not getattr(self, "_logou_novas", False) and time.time() - t_clique > 3:
                 log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:12])))
                 self._logou_novas = True
@@ -2444,8 +2452,10 @@ class Casa:
             depois = self._pendentes()
             if antes is not None and depois is not None and depois > antes:
                 return {"ok": True, "motivo": "apostas pendentes %d -> %d" % (antes, depois), "foto": self.foto("confirmado")}
-            if _RX_RECUSA.search(tx):
-                m = _RX_RECUSA.search(tx)
+            # recusa: só texto NOVO depois do clique (o 'Odds have changed 2.080 to 2.100' que já estava
+            # no boletim antes do clique fez a PS ser dada como recusada em 2s — caso 15/11 15:21)
+            m = _RX_RECUSA.search("\n".join(novas))
+            if m and time.time() - t_clique > 2:
                 if self.itens_cupom():  # recusou e a seleção continua no cupom: nada foi apostado
                     return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar")}
         if novas:

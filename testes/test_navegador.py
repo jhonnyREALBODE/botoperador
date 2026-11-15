@@ -654,3 +654,34 @@ def test_1awin_recibo_de_aposta_aceita(casas, cfgc):
     servidor.ESTADO.clear()
     for c in casas.values():
         recarregar(c)
+
+
+def test_ps_janela_confirmar_apostas_e_aviso_velho(casas, cfgc):
+    """15/11 15:21 (1ª real): a PS abriu 'Confirmar Apostas — Tem certeza…? OK/CANCELAR' e o programa
+    deu a PS como recusada em 2s por causa de um 'Odds have changed' que JÁ estava no boletim.
+    Resultado: 1aWin apostada e PS não (perna exposta). Agora clica OK e só lê recusa nova."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["modal_confirmar"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    cps = casas[P.CASA_PS]
+    real_montar = cps.montar
+
+    def montar_com_aviso(perna, times):
+        r = real_montar(perna, times)
+        cps.page.evaluate("""() => { const d = document.createElement('div');
+            d.textContent = 'Odds have changed from 1.780 to 1.800'; document.getElementById('sels').prepend(d); }""")
+        return r
+    cps.montar = montar_com_aviso
+    try:
+        est = P.Estado(cfgc)
+        est.registrar_bilhete(bil, "sinal")
+        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "confirmado", bil["detalhe"]
+    finally:
+        cps.montar = real_montar
+        servidor.ESTADO.clear()
+        for c in casas.values():
+            recarregar(c)

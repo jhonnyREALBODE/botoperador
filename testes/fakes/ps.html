@@ -42,7 +42,17 @@ const mostraSlip = (sim) => { document.getElementById('slip-box').style.display 
   document.getElementById('tab-slip').classList.toggle('active', sim); document.getElementById('tab-all').classList.toggle('active', !sim); };
 document.getElementById('tab-slip').onclick = () => mostraSlip(true);
 document.getElementById('tab-all').onclick = () => mostraSlip(false);
-document.getElementById('apostar').onclick = () => { if (sel && !ESTADO.confirma_mudo) document.getElementById('msg').textContent = 'Aposta aceita'; };
+document.getElementById('apostar').onclick = () => {
+  if (!sel || ESTADO.confirma_mudo) return;
+  if (ESTADO.modal_confirmar) {  // janela real da PS (15/11)
+    const m = document.createElement('div'); m.className = 'modal';
+    m.innerHTML = '<h3>Confirmar Apostas</h3><p>Tem certeza de que deseja arriscar 5.00 EUR para ganhar 5.50 EUR?</p><button id="okc">OK</button> <button id="canc2">CANCELAR</button>';
+    document.body.appendChild(m);
+    m.querySelector('#okc').onclick = () => { m.remove(); document.getElementById('msg').textContent = 'Aposta aceita #3846942995'; };
+    m.querySelector('#canc2').onclick = () => m.remove();
+    return;
+  }
+  document.getElementById('msg').textContent = 'Aposta aceita'; };
 const PERS = {0: 'Jogo', 1: '1º Tempo', 3: '1º Quarto', 4: '2º Quarto', 6: '4º Quarto'};
 if (ESTADO.limite) {
   app.innerHTML = '<h2>Excesso de requisições</h2><p>Tente novamente mais tarde.</p>';
