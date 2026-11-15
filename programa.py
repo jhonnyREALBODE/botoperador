@@ -1798,7 +1798,7 @@ class Casa:
                     if (b.width <= 0 || b.height <= 0) continue;
                     let perto = false;
                     for (let a = n.parentElement, k = 0; a && k < 6; a = a.parentElement, k++)
-                        if (/limpar|remover|clear|apagar/i.test(a.innerText || '') && (a.innerText || '').length < 300) { perto = true; break; }
+                        if (/limpar|remover|clear|apagar|excluir|tem certeza|deseja|indispon|unavailable/i.test(a.innerText || '') && (a.innerText || '').length < 300) { perto = true; break; }
                     achados.push({x: b.left + b.width / 2, y: b.top + b.height / 2, perto});
                 }
                 return achados.find(a => a.perto) || null;
@@ -1817,27 +1817,17 @@ class Casa:
                     vis(e) && /^\s*(ok|sim|yes|confirmar)\s*$/i.test(e.innerText || '') &&
                     !Array.from(e.children).some(c => /^\s*(ok|sim|yes|confirmar)\s*$/i.test(c.innerText || '')));
                 if (!oks.length) return 0;
-                const perto = oks.find(e => { for (let a = e; a; a = a.parentElement) if (/limpar|remover|clear|apagar/i.test(a.innerText || '') && (a.innerText || '').length < 300) return true; return false; });
-                (perto || oks[oks.length - 1]).setAttribute('data-alvo-ok', '1');
+                // SÓ dentro da janelinha de confirmação ('Quer limpar…'). NUNCA o 'Sim' de um mercado
+                // (caso 14/11 22:36: clicou 'A partida vai para a prorrogação? Sim' @14.6 na 1aWin)
+                const perto = oks.find(e => { for (let a = e, k = 0; a && k < 6; a = a.parentElement, k++)
+                    if (/limpar|remover|clear|apagar|excluir|tem certeza|deseja|indispon|unavailable/i.test(a.innerText || '') && (a.innerText || '').length < 300) return true; return false; });
+                if (!perto) return 0;
+                perto.setAttribute('data-alvo-ok', '1');
                 return 1;
             }""")
             if n:
                 if self.clicar_firme(self.page.locator('[data-alvo-ok="1"]').first):
                     return True
-            self.page.wait_for_timeout(150)
-        return False
-
-    def _modal_ok_antigo(self):
-        for _ in range(10):
-            btn = self.page.locator("button, [role=button], a").filter(has_text=re.compile(r"^\s*(OK|Sim|Confirmar|Yes)\s*$", re.I))
-            try:
-                for i in range(btn.count()):
-                    b = btn.nth(i)
-                    if b.is_visible():
-                        b.click(timeout=2000)
-                        return True
-            except Exception:
-                pass
             self.page.wait_for_timeout(150)
         return False
 
@@ -1898,14 +1888,23 @@ class Casa:
         return False
 
     def _modal_ok_rapido(self):
+        """Só confirma janelinha de confirmação de verdade (mesma regra do _modal_ok)."""
         if self.nome == CASA_PS:
             return False
         try:
-            btn = self.page.locator("button").filter(has_text=re.compile(r"^\s*(OK|Sim|Yes)\s*$", re.I))
-            for i in range(btn.count()):
-                if btn.nth(i).is_visible():
-                    btn.nth(i).click(timeout=1000)
-                    return True
+            n = self._eval(r"""() => {
+                document.querySelectorAll('[data-alvo-ok]').forEach(e => e.removeAttribute('data-alvo-ok'));
+                for (const b of document.querySelectorAll('button, [role=button]')) {
+                    if (!/^\s*(ok|sim|yes|confirmar)\s*$/i.test(b.innerText || '')) continue;
+                    const r = b.getBoundingClientRect(); if (r.width <= 0) continue;
+                    for (let a = b.parentElement, k = 0; a && k < 6; a = a.parentElement, k++)
+                        if (/limpar|remover|clear|apagar|excluir|tem certeza|deseja|indispon|unavailable/i.test(a.innerText || '') && (a.innerText || '').length < 300) {
+                            b.setAttribute('data-alvo-ok', '1'); return 1; }
+                }
+                return 0;
+            }""")
+            if n:
+                return self.clicar_firme(self.page.locator('[data-alvo-ok="1"]').first)
         except Exception:
             pass
         return False

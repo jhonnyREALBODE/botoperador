@@ -539,3 +539,19 @@ def test_1awin_cupom_so_e_vazio_com_a_prova_da_casa(casas):
     servidor.ESTADO.clear()
     recarregar(c1)
     assert c1.executar(c1.itens_cupom) == []  # 'Selecione um resultado' = vazio de verdade
+
+
+def test_limpar_nunca_clica_sim_de_mercado(casas):
+    """14/11 22:36: a limpeza clicou 'A partida vai para a prorrogação? Sim' @14.6 (o último 'Sim' da
+    página) e o cupom nunca esvaziava. Com o X morto, a limpeza usa a lixeira e não adiciona nada."""
+    servidor.ESTADO["x_morto"] = True
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
+    limpar_cupons(casas)
+    l1, _ = ler(casas)
+    o1 = [x for x in l1["ofertas"] if x["linha"] == 214.5 and x["lado"] == "abaixo"][0]
+    assert c1.executar(c1.montar, dict(o1, stake=26.57), TIMES)["ok"]
+    d = c1.executar(c1.desfazer, dict(o1, _mid=None))
+    assert d["ok"], d
+    assert "prorroga" not in (c1.executar(c1.texto_cupom) or "")
+    assert c1.executar(c1.itens_cupom) == []

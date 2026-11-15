@@ -25,6 +25,7 @@ function mercados1w(j) {
     ["Totais. 2º quarto", ["Menos", "Mais"], [["Abaixo De 55.5", "1.95"], ["Acima De 55.5", "1.85"]]],
     ["Totais. 4º quarto", ["Menos", "Mais"], [["Abaixo De 58.5", "2.05"], ["Acima De 58.5", "1.80"]]],
     ["Handicap. 4º quarto", [j.t1, j.t2], [[j.t1 + " -1.5", "1.97"], [j.t2 + " 1.5", "1.74"]]],
+    ["A partida vai para a prorrogação?", [], [["Sim", "14.6"], ["Não", "1.01"]]],
   ];
 }
 // PS: âncoras reais <a id="evento|período|mercado|lado|alt|linha">  (mercado 2 = HDP lado 0 casa/1 fora; 3 = OU lado 3 acima/4 abaixo)
