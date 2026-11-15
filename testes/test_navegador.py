@@ -31,6 +31,7 @@ def cfgc(casas):
     """cfg compartilhado pelas casas (restaura depois)."""
     cfg = casas[P.CASA_1W].cfg
     salvo = dict(cfg)
+    cfg["reentrar_mesmo_jogo"] = False   # testes antigos: 1 entrada encerra; a reentrada tem teste próprio
     yield cfg
     cfg.clear()
     cfg.update(salvo)
@@ -784,3 +785,19 @@ def test_monitoramento_pos_entrada_cobertura_simulada(casas, cfgc):
     for c in casas.values():
         assert c.executar(c.itens_cupom) == []
         c.executar(c.fechar_aba, "pos%d" % pos["id"])
+
+
+def test_reentrada_continua_no_jogo_e_nao_repete_o_mesmo_par(casas, cfgc):
+    """Parceiro 15/11: depois do middle, continua no jogo; o MESMO par não reentra (não aumenta a faixa)."""
+    cfgc["reentrar_mesmo_jogo"] = True
+    cfgc["monitor_intervalo_s"] = 0.5
+    limpar_cupons(casas)
+    est = P.Estado(cfgc)
+    op = P.Operador(cfgc, est, casas)
+    op.novo_sinal(dict(SINAL, id="reentra"))
+    assert esperar(lambda: est.bilhetes and est.bilhetes[-1]["status"] == "testado", 90)
+    assert esperar(lambda: "procurando reentrada" in est.monitor, 30), est.monitor
+    time.sleep(4)
+    assert len([b for b in est.bilhetes if b["status"] == "testado"]) == 1  # mesmo par não repete
+    op._atual[1].set()  # encerra o monitoramento
+    time.sleep(1.5)
