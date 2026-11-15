@@ -703,3 +703,22 @@ def test_odd_que_sobe_e_aceita_e_que_cai_nao(casas):
     assert cps.executar(com_odd, "1.950")[0] is True        # subiu 1.80 -> 1.95
     ok, mot = cps.executar(com_odd, "1.700")                 # caiu 1.80 -> 1.70
     assert not ok and "caiu" in mot
+
+
+def test_ps_rejeita_e_programa_tenta_de_novo(casas, cfgc):
+    """15/11 15:56: 1aWin apostada e a PS 'Your bet has been rejected.' — agora reaposta na hora."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["rejeita_ps"] = 1
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    try:
+        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "confirmado", bil["detalhe"]
+    finally:
+        servidor.ESTADO.clear()
+        for c in casas.values():
+            recarregar(c)

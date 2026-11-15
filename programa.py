@@ -1288,7 +1288,7 @@ _RX_OK_MODAL = re.compile(r"^\s*(ok|sim|confirmar|yes)\s*$", re.I)
 _RX_APOSTAR = re.compile(r"^\s*(fazer (a |uma )?aposta|apostar|place bet|confirmar aposta|realizar aposta)\b", re.I)
 _RX_SUCESSO = re.compile(r"aposta (aceita|feita|realizada|registrada|confirmada|efetuada)|ir para o hist[oó]rico|apostas? (foi|foram) (aceita|feita|realizada)|"
                          r"bet (accepted|placed)|sua aposta foi|successfully placed|aceit[ao] com sucesso", re.I)
-_RX_RECUSA = re.compile(r"aposta (recusada|rejeitada|n[aã]o aceita)|bet (rejected|declined|not accepted)|saldo insuficiente|"
+_RX_RECUSA = re.compile(r"aposta (foi )?(recusada|rejeitada|n[aã]o aceita)|bet (has been |was )?(rejected|declined|not accepted)|saldo insuficiente|"
                         r"insufficient (funds|balance)|odds? (have |has )?changed|cota[cç](ao|oes) (mudou|mudaram)|"
                         r"sele[cç][aã]o indispon|limite excedido|max(imum)? stake", re.I)
 
@@ -2473,8 +2473,10 @@ class Casa:
             # recusa: só texto NOVO depois do clique (o 'Odds have changed 2.080 to 2.100' que já estava
             # no boletim antes do clique fez a PS ser dada como recusada em 2s — caso 15/11 15:21)
             m = _RX_RECUSA.search("\n".join(novas))
-            if m and time.time() - t_clique > 2:
-                if self.itens_cupom():  # recusou e a seleção continua no cupom: nada foi apostado
+            if m:
+                explicita = re.search(r"rejected|declined|not accepted|recusada|rejeitada|n[aã]o aceita", m.group(0), re.I)
+                # recusa EXPLÍCITA da casa ('Your bet has been rejected.') = nada apostado, já
+                if explicita or (time.time() - t_clique > 2 and self.itens_cupom()):
                     return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar")}
         if novas:
             log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:20])))
@@ -2488,6 +2490,22 @@ class Casa:
         return {"ok": None, "foto": self.foto("incerto"),
                 "motivo": "INCERTO — sem mensagem de aceita/recusada em 15s (cupom %s). Confira em Apostas pendentes/Histórico" % (
                     "esvaziou" if vazio else "ainda com a seleção") + "; saldo %s -> %s" % (saldo0, s1)}
+
+    def reapostar(self, perna, times):
+        """Depois de uma recusa: 'Reutilizar seleção' (ou monta de novo) e confirma outra vez.
+        A conferência é a mesma: odd que subiu passa, que caiu além de 0,05 não."""
+        self._clicar_no_cupom(r"^(reutilizar sele[cç][aã]o|reuse selection)$")
+        self.page.wait_for_timeout(800)
+        if not self.itens_cupom():
+            m = self.montar(perna, times)
+            if not m["ok"]:
+                return {"ok": False, "motivo": "remontar falhou: " + m["motivo"], "foto": m.get("foto", "")}
+        else:
+            ok, mot = self.preencher_stake(round(perna["stake"] / self.cfg["cambio_brl_eur"], 2) if self.nome == CASA_PS
+                                          else perna["stake"])
+            if not ok:
+                return {"ok": False, "motivo": mot, "foto": self.foto("confirmar")}
+        return self.confirmar(perna)
 
     def recarregar(self):
         try:
@@ -3117,6 +3135,14 @@ class Operador:
             log("1aWin: aposta CONFIRMADA (%s) — confirmando a PS" % (r1["motivo"] or "mensagem da casa"))
             r2 = cps.executar(cps.confirmar, p2, timeout=40)
             fotos.append(r2.get("foto", ""))
+            # a 1aWin JÁ está apostada: se a PS recusou (atraso do ao vivo — caso 15/11 15:56,
+            # 'Your bet has been rejected'), tenta de novo na hora, até 2 vezes, com a mesma conferência
+            for tentativa in (1, 2):
+                if r2["ok"] is not False:
+                    break
+                log("PS recusou (%s) — nova tentativa %d/2 com a 1aWin já apostada" % (r2["motivo"], tentativa))
+                r2 = cps.executar(cps.reapostar, p2, bil["times"], timeout=60)
+                fotos.append(r2.get("foto", ""))
             if r2["ok"] is None:
                 detalhe["1aWin"] = "confirmada"
                 detalhe["PS3838"] = r2["motivo"]

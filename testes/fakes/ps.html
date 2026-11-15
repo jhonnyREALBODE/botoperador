@@ -44,6 +44,12 @@ document.getElementById('tab-slip').onclick = () => mostraSlip(true);
 document.getElementById('tab-all').onclick = () => mostraSlip(false);
 document.getElementById('apostar').onclick = () => {
   if (!sel || ESTADO.confirma_mudo) return;
+  if (ESTADO.rejeita_ps > 0) {  // PS real 15/11: 'Your bet has been rejected.' + 'Reutilizar seleção'
+    ESTADO.rejeita_ps -= 1; const guard = sel;
+    document.getElementById('msg').innerHTML = 'Your bet has been rejected. <a id="reuse">Reutilizar seleção</a>';
+    sel = null; render(); document.getElementById('reuse').onclick = () => { sel = guard; render(); document.getElementById('msg').textContent = ''; };
+    return;
+  }
   if (ESTADO.modal_confirmar) {  // janela real da PS (15/11)
     const m = document.createElement('div'); m.className = 'modal';
     m.innerHTML = '<h3>Confirmar Apostas</h3><p>Tem certeza de que deseja arriscar 5.00 EUR para ganhar 5.50 EUR?</p><button id="okc">OK</button> <button id="canc2">CANCELAR</button>';
