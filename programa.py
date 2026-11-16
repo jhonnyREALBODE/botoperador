@@ -118,6 +118,7 @@ DEFAULTS = {
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
     "pausa_ps_indisponivel_s": 45,
+    "pausa_ps_periodo_indisponivel_s": 180,
     "pos_monitorar": True,
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_dist_min_under": 4.0,        # FILTRO: linha do Under novo − linha do Over ORIGINAL ≥ 4
@@ -3264,7 +3265,7 @@ class Operador:
 
         def excluir(a, b, jan):
             agora_s = time.time()
-            if geladeira.get((CASA_PS, "*"), 0) > agora_s:
+            if geladeira.get((CASA_PS, "*"), 0) > agora_s or geladeira.get((CASA_PS, "per", b.get("periodo")), 0) > agora_s:
                 return True
             for casa_n, o in ((CASA_1W, a), (CASA_PS, b)):
                 if geladeira.get((casa_n, _chave_oferta(o)), 0) > agora_s:
@@ -3393,8 +3394,14 @@ class Operador:
                             # aceitava de novo. Então a PS inteira descansa um pouco neste jogo, sem largar o jogo.
                             seg_ps = int(self.cfg.get("pausa_ps_indisponivel_s", 45))
                             geladeira[(CASA_PS, "*")] = time.time() + seg_ps
+                            # print 15/11 21:0x: com o 2º quarto rolando (Q2 3') a PS mostrava as linhas do 2º quarto
+                            # mas o mercado do quarto estava no cadeado — o PERÍODO inteiro fica de fora mais tempo
+                            per_ps = bil["pernas"][1].get("periodo")
+                            seg_per = int(self.cfg.get("pausa_ps_periodo_indisponivel_s", 180))
+                            geladeira[(CASA_PS, "per", per_ps)] = time.time() + seg_per
                             log("⏳ PS suspendeu as apostas deste jogo por instantes ('mínima maior que a máxima') — "
-                                "espero %ds antes de tentar qualquer linha da PS de novo" % seg_ps)
+                                "espero %ds antes de tentar qualquer linha da PS de novo (e %ds neste período)" % (
+                                    seg_ps, int(self.cfg.get("pausa_ps_periodo_indisponivel_s", 180))))
                         log("montagem falhou — o monitoramento reassume %s" % sinal["jogo"])
                         ultimo_motivo = None
                     elif motivo != ultimo_motivo or rodada % 3 == 0:

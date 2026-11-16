@@ -851,6 +851,7 @@ def test_par_que_falhou_vai_pra_geladeira_e_nao_repete(casas, cfgc):
     servidor.ESTADO["indisponivel"] = True
     cfgc["monitor_intervalo_s"] = 0.5
     cfgc["pausa_ps_indisponivel_s"] = 3
+    cfgc["pausa_ps_periodo_indisponivel_s"] = 3
     limpar_cupons(casas)
     est = P.Estado(cfgc)
     op = P.Operador(cfgc, est, casas)
