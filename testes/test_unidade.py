@@ -1026,3 +1026,24 @@ def test_reentrada_sem_distancia_minima_fixa(cfg):
         assert melhor and melhor["depois"]["novos_totais"] == esperado, avs
         pos["pernas"].append(dict(melhor["oferta"], casa="1awin", stake=melhor["stake"], origem="cobertura"))
     assert P.cobertura_2g(pos["pernas"]) == {190, 191, 192, 193}
+
+
+def test_janela_cresce_nas_duas_direcoes(cfg):
+    """16/11: Over 189.5 + Under 190.5 = double green em 190. Linha sobe: Under 191.5 acrescenta 191 (usa o Over 189.5).
+    Linha desce: Over 188.5 acrescenta 189 (usa o Under 190.5). Linha que não acrescenta nada fica de fora."""
+    cfg = dict(cfg, pos_perda_max_total_brl=60.0, perda_max_por_jogo_brl=60.0, pos_stake_1w_brl=10.0)
+    E = cfg["perna_ps_eur"] * cfg["cambio_brl_eur"]
+    base = [dict(_p("acima", 189.5, 2.33, 22.74), casa="1awin", origem="entrada"),
+            dict(_p("abaixo", 190.5, 1.709, E), casa="ps3838", origem="entrada")]
+    sobe = {"id": 1, "periodo": "jogo", "pernas": list(base)}
+    m, _ = P.avaliar_cobertura(sobe, {"1awin": _ofs(191.5, lado="abaixo", odd=1.85)}, None, cfg)
+    assert m and m["lado"] == "abaixo" and m["depois"]["novos_totais"] == [191]
+    desce = {"id": 2, "periodo": "jogo", "pernas": list(base)}
+    m, _ = P.avaliar_cobertura(desce, {"1awin": _ofs(188.5, lado="acima", odd=1.85)}, None, cfg)
+    assert m and m["lado"] == "acima" and m["depois"]["novos_totais"] == [189]
+    # as duas aparecem ao mesmo tempo: as duas são avaliadas; a escolhida continua a janela sem buraco
+    m, av = P.avaliar_cobertura(sobe, {"1awin": _ofs(191.5, lado="abaixo", odd=1.85) + _ofs(188.5, lado="acima", odd=1.85)}, None, cfg)
+    assert len([c for c in av if c["ok"]]) == 2 and m["depois"]["novos_totais"] in ([191], [189])
+    # linha que se moveu mas não amplia a janela não é entrada automática
+    m, av = P.avaliar_cobertura(sobe, {"1awin": _ofs(190.5, lado="acima", odd=1.85)}, None, cfg)
+    assert m is None and "nenhum total novo" in av[0]["motivo"]
