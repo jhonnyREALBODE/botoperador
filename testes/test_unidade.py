@@ -954,6 +954,7 @@ def test_posicao_simulada_nunca_vira_aposta_real(cfg):
 
 
 def test_odd_fantasma_da_1awin_e_ignorada(cfg):
+    cfg = dict(cfg, odd_fantasma_margem=0.15)
     """Log 16/11 09:09: 1aWin Abaixo 195.5 a 2.1 com a PS em ~193 (justo ≈ 1.6): tela velha — aceitou a 1.61."""
     ps = [oferta("ps3838", "total", "jogo", "acima", 193.0, 1.781), oferta("ps3838", "total", "jogo", "abaixo", 193.0, 2.05),
           oferta("ps3838", "total", "jogo", "acima", 195.0, 2.10), oferta("ps3838", "total", "jogo", "abaixo", 195.0, 1.74)]

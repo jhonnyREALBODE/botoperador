@@ -2614,6 +2614,22 @@ class Casa:
         except Exception:
             return None
 
+    def _odd_do_recibo(self, perna):
+        """Recibo real da 1aWin (print 16/11): '1.61' no topo (a odd ACEITA) e '2.1' embaixo, em 'Evento' (a da seleção).
+        Pega todas as odds soltas do recibo; se alguma está abaixo da calculada, é ela a aceita."""
+        try:
+            self.page.wait_for_timeout(400)
+            tx = self.texto_cupom() or ""
+            vals = [v for l in tx.splitlines() if re.fullmatch(r"\s*\d{1,2}[.,]\d{1,3}\s*", l)
+                    for v in [_num(l.strip())] if v and 1.01 <= v <= 30]
+            if not vals:
+                return self._odd_do_cupom()
+            planejada = (perna or {}).get("odd") or 0
+            menor = min(vals)
+            return menor if menor < planejada - 1e-9 else max(vals, key=lambda v: -abs(v - planejada))
+        except Exception:
+            return None
+
     def preencher_stake(self, valor):
         """PS: com PONTO e lido de volta (com vírgula a PS lê €500). 1aWin: idem + leitura de volta."""
         if not self.itens_cupom():
@@ -2902,7 +2918,7 @@ class Casa:
             if _RX_SUCESSO.search(tx):
                 # log 16/11 09:10: conferido a 2.1, a 1aWin ACEITOU a 1.61 (aceita mudança de odd sozinha). Lê a odd do
                 # recibo e avisa — a aposta já existe, não dá para desfazer; quem decide o cash out é o operador.
-                return {"ok": True, "motivo": "", "foto": self.foto("confirmado"), "odd_aceita": self._odd_do_cupom()}
+                return {"ok": True, "motivo": "", "foto": self.foto("confirmado"), "odd_aceita": self._odd_do_recibo(perna)}
             # PS ao vivo: 'Aguarde… sendo processada… Aguardando -> Pendente' — o saldo JÁ desconta e
             # a aposta ainda pode ser rejeitada depois (15/11 15:57). Espera o resultado final.
             if re.search(r"sendo processada|aguardando|being processed|pending acceptance", tx, re.I):

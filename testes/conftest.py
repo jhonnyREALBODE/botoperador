@@ -33,6 +33,7 @@ def isolado(tmp_path, monkeypatch):
 def cfg(tmp_path):
     c = P.carregar_config(str(tmp_path / "nao-existe.json"), avisar=False)
     c["totais_periodos"] = ["jogo", "q1", "q2", "q3"]  # os testes cobrem também a lógica dos quartos
+    c["odd_fantasma_margem"] = None  # os dados falsos têm odds 'generosas' de propósito; o filtro tem teste próprio
     return c
 
 
@@ -48,6 +49,7 @@ def casas(site, tmp_path_factory):
     d = tmp_path_factory.mktemp("perfis")
     cfg = P.carregar_config(str(d / "x.json"), avisar=False)
     cfg["totais_periodos"] = ["jogo", "q1", "q2", "q3"]  # os testes cobrem também a lógica dos quartos
+    cfg["odd_fantasma_margem"] = None  # dados falsos generosos; o filtro tem teste próprio
     cps = P.Casa(P.CASA_PS, cfg, base_url=site, perfil=str(d / "ps"), headless=True).iniciar()
     c1 = P.Casa(P.CASA_1W, cfg, base_url=site, perfil=str(d / "1w"), headless=True).iniciar()
     yield {P.CASA_1W: c1, P.CASA_PS: cps}
