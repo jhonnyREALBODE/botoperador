@@ -2470,6 +2470,7 @@ class Casa:
     def _montar(self, perna, times):
         """Monta UMA perna, no mesmo fôlego da leitura. Retorna {ok, motivo, foto}."""
         r = {"ok": False, "motivo": "", "foto": ""}
+        self._t_montar = time.time()
         tx = self.texto()
         if self.esta_limitada(tx):
             r["motivo"] = "casa limitada (Excesso de requisições)"
@@ -2516,6 +2517,8 @@ class Casa:
             r["foto"] = self.foto("falha")
             self.dump("falha")
             return r
+        log("%s: cliquei a seleção em %.1fs (%s)" % (self.rotulo, time.time() - getattr(self, "_t_montar", time.time()),
+                                                     "carimbo" if not perna.get("odd_viva") else "relida"))
         ok, mot = False, "cupom não recebeu a seleção"
         # a PS demora mais para jogar linha alternativa/quarto no boletim (spinner) — caso 14/11 16:05
         fim = time.time() + (7 if self.nome == CASA_PS else 4)
