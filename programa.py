@@ -117,6 +117,7 @@ DEFAULTS = {
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
+    "perda_max_por_jogo_brl": 15.0,    # pior caso da CARTEIRA inteira do jogo (todas as entradas + coberturas)
     "pausa_ps_indisponivel_s": 45,
     "pausa_ps_periodo_indisponivel_s": 180,
     "pos_monitorar": True,
@@ -860,6 +861,87 @@ def resumo_posicao(pernas, modelo):
     return r
 
 
+# ---------------------------------------------------------------- CARTEIRA DO JOGO (operador 16/11)
+# Todas as apostas ACEITAS de um jogo/período, avaliadas juntas por total final. 'Cobertura' = totais em
+# que pelo menos DUAS apostas da carteira ganham. Uma entrada nova só vale se criar totais novos com 2+ greens.
+def resultado_perna(perna, k):
+    """'G' ganha, 'P' perde, 'D' devolvida (linha inteira empatada) — para o total final k."""
+    if abs(k - perna["linha"]) < 1e-9:
+        return "D"
+    ganha = k > perna["linha"] if perna["lado"] == "acima" else k < perna["linha"]
+    return "G" if ganha else "P"
+
+
+def faixa_carteira(pernas, margem=2):
+    ls = [p["linha"] for p in pernas] or [0]
+    return list(range(max(0, int(min(ls)) - margem), int(max(ls)) + margem + 2))
+
+
+def greens_por_total(pernas, ks):
+    return {k: sum(1 for p in pernas if resultado_perna(p, k) == "G") for k in ks}
+
+
+def cobertura_2g(pernas, ks=None):
+    """Totais finais em que 2+ apostas da carteira ganham, com os DOIS LADOS ganhando (um Over E um Under).
+    Dois Unders ganhando juntos lá embaixo é só aposta empilhada do mesmo lado, não é janela — no exemplo do
+    operador a cobertura cresce 223 -> 224–225 -> 226 -> 227–228, nunca 'todos os totais baixos'."""
+    ks = ks if ks is not None else faixa_carteira(pernas)
+    out = set()
+    for k in ks:
+        lados = [p["lado"] for p in pernas if resultado_perna(p, k) == "G"]
+        if len(lados) >= 2 and "acima" in lados and "abaixo" in lados:
+            out.add(k)
+    return out
+
+
+def tabela_carteira(pernas, novas=None):
+    """Uma linha por total final: resultado de cada aposta, nº de greens e líquido (R$).
+    Com 'novas', compara antes x depois e marca onde a entrada nova AUMENTA a perda."""
+    todas = list(pernas) + list(novas or [])
+    ks = faixa_carteira(todas)
+    liq = liquido_por_placar(todas, ks)
+    antes = liquido_por_placar(pernas, ks) if (novas and pernas) else {}
+    linhas = []
+    for k in ks:
+        res = [resultado_perna(p, k) for p in todas]
+        lados = {p["lado"] for p, r in zip(todas, res) if r == "G"}
+        ln = {"total": k, "res": res, "greens": res.count("G"), "liquido": round(liq[k], 2),
+              "cobre": res.count("G") >= 2 and lados >= {"acima", "abaixo"}}
+        if antes:
+            ln["antes"] = round(antes[k], 2)
+            ln["piorou"] = liq[k] < antes[k] - 0.005
+        linhas.append(ln)
+    return linhas
+
+
+def avaliar_nova_entrada(carteira, novas, cfg):
+    """A entrada nova (par ou perna) amplia a cobertura da carteira inteira dentro do limite de perda?"""
+    todas = list(carteira) + list(novas)
+    ks = faixa_carteira(todas)
+    cob_antes = cobertura_2g(carteira, ks) if carteira else set()
+    cob_depois = cobertura_2g(todas, ks)
+    novos = sorted(cob_depois - cob_antes)
+    liq = liquido_por_placar(todas, ks)
+    pior = round(min(liq.values()), 2)
+    lim = float(cfg.get("perda_max_por_jogo_brl", 15.0))
+    tab = tabela_carteira(carteira, novas)
+    piorou = [l["total"] for l in tab if l.get("piorou")]
+    r = {"novos_totais": novos, "cobertura": sorted(cob_depois), "pior": pior, "piorou_em": piorou,
+         "tres_ou_mais": [l["total"] for l in tab if l["greens"] >= 3]}
+    if not novos:
+        r.update(ok=False, motivo="não cria nenhum total novo com 2+ greens na carteira")
+    elif pior < -lim - 1e-9:
+        r.update(ok=False, motivo="carteira inteira passaria a perder até R$ %s (limite R$ %s por jogo)" % (_br(-pior), _br(lim)))
+    else:
+        r.update(ok=True, motivo="")
+    return r
+
+
+def _txt_totais(ks):
+    """[223, 224, 225, 228] -> '223–225, 228'"""
+    return ", ".join(("%d" % a) if a == b else ("%d–%d" % (a, b)) for a, b in _faixas(sorted(ks))) or "—"
+
+
 def _faixas(ks):
     out, ini, ant = [], None, None
     for k in ks:
@@ -872,6 +954,17 @@ def _faixas(ks):
     if ini is not None:
         out.append([ini, ant])
     return out
+
+
+def atualizar_tabela_pos(pos):
+    """Tabela por total final da carteira inteira; compara com antes da ÚLTIMA entrada (marca onde piorou)."""
+    pernas = pos.get("pernas") or []
+    n = int(pos.get("ultimo_n") or 0)
+    if 0 < n < len(pernas):
+        pos["tabela"] = tabela_carteira(pernas[:-n], pernas[-n:])
+    else:
+        pos["tabela"] = tabela_carteira(pernas)
+    pos["cobertura_2g"] = _txt_totais(cobertura_2g(pernas))
 
 
 def over_original(pos):
@@ -912,7 +1005,9 @@ def avaliar_cobertura(pos, ofertas_por_casa, modelo, cfg):
                     continue
                 nova = dict(o, casa=casa, stake=st, origem="cobertura")
                 r = resumo_posicao(pernas + [nova], modelo)
-                ok = (r["pior"] >= -cfg["pos_perda_max_total_brl"] - 1e-9
+                av = avaliar_nova_entrada(pernas, [nova], cfg)  # operador 16/11: só vale se criar totais novos com 2+ greens
+                r["novos_totais"], r["piorou_em"] = av["novos_totais"], av["piorou_em"]
+                ok = (av["ok"] and r["pior"] >= -cfg["pos_perda_max_total_brl"] - 1e-9
                       and r["ev"] - base["ev"] >= cfg["pos_ev_min_brl"] - 1e-9
                       and base["p_preju"] - r["p_preju"] >= cfg["pos_reducao_risco_min"] - 1e-9)
                 cand = {"casa": casa, "linha": o["linha"], "odd": o["odd"], "stake": st, "ok": ok,
@@ -3324,6 +3419,12 @@ class Operador:
         self._trava = threading.Lock()
         self._ultimo_por_id = {}
 
+    def _posicao_aberta(self, times, periodo):
+        for p in self.estado.posicoes:
+            if p.get("aberta") and p.get("periodo") == periodo and _mesmo_jogo(p.get("times") or ["", ""], times):
+                return p
+        return None
+
     # ---------------------------------------------- entrada de sinais
     def novo_sinal(self, sinal, origem="sinal"):
         """O sinal novo cancela o atual (inclusive estacionamento)."""
@@ -3360,7 +3461,15 @@ class Operador:
         rodada = 0
         vazias = 0
         ultimo_motivo = None
-        entradas = []   # [(periodo, tipo, conjunto de placares de dupla | linhas)] já feitas neste jogo
+        entradas = []   # bilhetes ACEITOS neste jogo (real: confirmados; teste: testados = simulados)
+        carteira_local = []  # as pernas desses bilhetes (quando não há posição aberta para o jogo)
+
+        def carteira(periodo):
+            """Todas as apostas aceitas deste jogo/período: a posição aberta (que inclui coberturas) ou a lista local."""
+            pos = self._posicao_aberta(times, periodo)
+            if pos:
+                return list(pos["pernas"])
+            return [p for p in carteira_local if p.get("periodo") == periodo]
 
         geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
 
@@ -3373,16 +3482,15 @@ class Operador:
                     return True
             if not entradas:
                 return False
-            if a["tipo"] == "total":
-                ac, ab = (a, b) if a["lado"] == "acima" else (b, a)
-                novo = placares_dupla(ac, ab)
-                ja = set()
-                for per, tp, cj in entradas:
-                    if per == a["periodo"] and tp == "total":
-                        ja |= cj
-                return not (novo - ja)  # não cobre nenhum placar novo -> não vale reentrar
-            chave = frozenset([(a["casa"] if "casa" in a else "1w", a["linha"]), ("ps", b["linha"])])
-            return any(per == a["periodo"] and tp == "handicap" and cj == chave for per, tp, cj in entradas)
+            if a["tipo"] != "total":
+                return True  # reentrada é só em totais (carteira por total final)
+            cart = carteira(a["periodo"])
+            if not cart:
+                return False  # primeira entrada neste período: vale a regra normal do par
+            c = _calcular(a, b, self.cfg)
+            novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
+            return not avaliar_nova_entrada(cart, novas, self.cfg)["ok"]
+
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
         while not cancel.is_set():
             try:
@@ -3454,15 +3562,23 @@ class Operador:
                             bil["pernas"][1]["odd"], _br(bil["janela"], 1), _br(bil["custo"])))
                         self.estado.registrar_bilhete(bil, origem)
                         self.estado.atualizar(bil, status="executando")
+                        cart_antes = carteira(bil["periodo"])  # antes: a posição ganha as pernas novas ao confirmar
                         st = self.executar_bilhete(bil)
                         if st in ("testado", "confirmado"):
-                            p1, p2 = bil["pernas"]
+                            novas = [{"casa": p["casa"], "tipo": p["tipo"], "periodo": p["periodo"], "lado": p.get("lado"),
+                                      "linha": p["linha"], "odd": p.get("odd_viva") or p["odd"], "stake": p["stake"]}
+                                     for p in bil["pernas"]]
                             if bil["tipo"] == "total":
-                                ac, ab = (p1, p2) if p1["lado"] == "acima" else (p2, p1)
-                                entradas.append((bil["periodo"], "total", placares_dupla(ac, ab)))
-                            else:
-                                entradas.append((bil["periodo"], "handicap",
-                                                 frozenset([(p1["casa"], p1["linha"]), ("ps", p2["linha"])])))
+                                av = avaliar_nova_entrada(cart_antes, novas, self.cfg)
+                                with _TRAVA:
+                                    bil["carteira"] = {k: av[k] for k in ("novos_totais", "cobertura", "pior", "piorou_em", "tres_ou_mais")}
+                                self.estado.salvar()
+                                log("🧮 carteira %s (%s): %d aposta(s) | 2+ greens em %s | 3+ greens em %s | pior caso R$ %s%s" % (
+                                    sinal["jogo"], NOME_PERIODO.get(bil["periodo"], bil["periodo"]), len(cart_antes) + 2,
+                                    _txt_totais(av["cobertura"]), _txt_totais(av["tres_ou_mais"]), _br(av["pior"]),
+                                    (" | ⚠ esta entrada AUMENTOU a perda em %s" % _txt_totais(av["piorou_em"])) if av["piorou_em"] else ""))
+                            carteira_local.extend(novas)
+                            entradas.append(bil.get("id"))
                             maxe = int(self.cfg.get("max_entradas_por_jogo", 1))
                             if not self.cfg.get("reentrar_mesmo_jogo") or len(entradas) >= maxe:
                                 self.estado.set_monitor("%s: %s — monitoramento encerrado (%d entrada(s))" % (
@@ -3470,10 +3586,8 @@ class Operador:
                                 log("■ %s: rodada %s — monitoramento encerrado (%d entrada(s) neste jogo)" % (
                                     sinal["jogo"], st, len(entradas)))
                                 return
-                            faixa = sorted(set().union(*[cj for _, tp, cj in entradas if tp == "total"]) or [])
-                            log("➕ %s: entrada %d de %d feita — continuo no jogo procurando nova brecha que aumente a "
-                                "faixa de dupla (hoje: %s)" % (sinal["jogo"], len(entradas), maxe,
-                                                              ", ".join(str(k) for k in faixa) or "—"))
+                            log("➕ %s: entrada %d de %d aceita — continuo no jogo procurando entrada que crie totais "
+                                "novos com 2+ greens na carteira" % (sinal["jogo"], len(entradas), maxe))
                             self.estado.set_monitor("%s: %d entrada(s) — procurando reentrada" % (sinal["jogo"], len(entradas)))
                             ultimo_motivo = None
                             cancel.wait(self.cfg["monitor_intervalo_s"])
@@ -3747,12 +3861,31 @@ class GerentePosicoes:
             pernas.append({"casa": p["casa"], "tipo": "total", "periodo": p["periodo"], "lado": p["lado"],
                            "linha": p["linha"], "odd": p.get("odd_viva") or p["odd"], "stake": p["stake"],
                            "origem": "entrada", "simulada": simulada, "hora": agora()})
+        # reentrada no mesmo jogo/período: as pernas novas entram na MESMA carteira (posição), que é avaliada inteira
+        for pos in self.estado.posicoes:
+            if pos.get("aberta") and pos.get("periodo") == bil["periodo"] and bool(pos.get("simulada")) == bool(simulada) \
+                    and _mesmo_jogo(pos.get("times") or ["", ""], bil["times"]):
+                with _TRAVA:
+                    for p in pernas:
+                        p["origem"] = "reentrada"
+                    pos["pernas"].extend(pernas)
+                    pos["ultimo_n"] = len(pernas)
+                    atualizar_tabela_pos(pos)
+                    pos["eventos"].append("%s reentrada: %s" % (agora(), " × ".join(
+                        descricao_oferta(x) + " @" + str(x["odd"]) for x in pernas)))
+                    for nome, u in (urls or {}).items():
+                        pos.setdefault("urls", {}).setdefault(nome, u)
+                self.estado.salvar()
+                log("📌 posição %d: reentrada somada à carteira (%d apostas)" % (pos["id"], len(pos["pernas"])))
+                return pos
         with _TRAVA:
             pid = max([x.get("id", 0) for x in self.estado.posicoes] + [0]) + 1
             pos = {"id": pid, "bilhete": bil.get("id"), "jogo": bil["jogo"], "times": bil["times"],
                    "periodo": bil["periodo"], "urls": urls, "pernas": pernas, "aberta": True, "simulada": simulada,
                    "aberta_em": time.time(), "aberta_hora": agora(), "ultima_cob": 0.0, "status": "monitorando",
                    "eventos": ["%s entrada: %s" % (agora(), " × ".join(descricao_oferta(x) + " @" + str(x["odd"]) for x in pernas))]}
+            pos["ultimo_n"] = len(pernas)
+            atualizar_tabela_pos(pos)
             self.estado.posicoes.append(pos)
         self.estado.salvar()
         log("📌 posição %d aberta (%s%s) — monitorando Unders ≥ %s pts acima do Over %s" % (
@@ -3887,6 +4020,8 @@ class GerentePosicoes:
             pos["pernas"].append({"casa": cand["casa"], "tipo": "total", "periodo": pos["periodo"], "lado": "abaixo",
                                   "linha": cand["linha"], "odd": cand["odd"], "stake": cand["stake"],
                                   "origem": "cobertura", "simulada": simulada, "hora": agora()})
+            pos["ultimo_n"] = 1
+            atualizar_tabela_pos(pos)
             pos["ultima_cob"] = time.time()
             pos.pop("pendente", None)
             pos["status"] = "monitorando"
@@ -4137,7 +4272,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
  const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>b.status!='falhou');
- document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
+ document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.carteira?'<br><span class="mut">carteira: 2+ greens em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
  {const on=pa.pos_monitorar, md=on?pa.pos_modo:'off';
   const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];
   const bt=(m,t)=>'<button style="margin-left:6px;'+(md==m?'background:#1e8e3e':'background:#555')+'" onclick="post(\'/api/pos_modo/'+m+'\')">'+t+'</button>';
@@ -4145,7 +4280,10 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
    '</div><div class="mut" style="margin-bottom:6px">Regras: Under só se ≥ '+pa.pos_dist_min_under+' pts acima do Over original · até '+R(pa.pos_max_por_cobertura_brl)+' por cobertura · '+R(pa.pos_max_total_coberturas_brl)+' no total · pior caso até −'+R(pa.pos_perda_max_total_brl)+' · máx. '+pa.pos_max_coberturas+' coberturas</div>';}
  document.getElementById('pos').innerHTML=(d.posicoes||[]).map(p=>{const r=p.resumo||{};
   let h='<div style="border-bottom:1px solid var(--ln);padding:6px 0"><b>#'+p.id+' '+esc(p.jogo)+'</b> <span class="mut">('+esc(p.periodo)+')'+(p.simulada?' SIMULADA':'')+' — '+esc(p.status)+(p.atualizada?' · '+p.atualizada:'')+'</span>';
-  h+='<div>'+p.pernas.map(l=>(l.origem=='entrada'?'entrada':'<b>cobertura</b>')+': '+(l.casa=='1awin'?'1aWin':'PS')+' '+(l.lado=='acima'?'Acima':'Abaixo')+' de '+l.linha+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</div>';
+  h+='<div>'+p.pernas.map((l,i)=>'<b>A'+(i+1)+'</b> '+(l.origem=='entrada'?'entrada':l.origem=='reentrada'?'reentrada':'<b>cobertura</b>')+': '+(l.casa=='1awin'?'1aWin':'PS')+' '+(l.lado=='acima'?'Acima':'Abaixo')+' de '+l.linha+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</div>';
+  if(p.tabela&&p.tabela.length){const tem=p.tabela.some(t=>t.antes!=null);
+   h+='<div style="margin:4px 0">Janela da carteira (2+ greens, Over e Under ganhando juntos): <b class="ok">'+esc(p.cobertura_2g||'—')+'</b></div><div style="overflow-x:auto"><table style="font-size:12px"><tr><th>Total final</th>'+p.pernas.map((l,i)=>'<th>A'+(i+1)+'</th>').join('')+'<th>Greens</th><th>Líquido</th>'+(tem?'<th>antes da última</th>':'')+'</tr>'+
+   p.tabela.map(t=>'<tr style="'+(t.cobre&&t.greens>=3?'background:rgba(30,142,62,.35)':t.cobre?'background:rgba(30,142,62,.18)':'')+'"><td>'+t.total+'</td>'+t.res.map(x=>'<td class="'+(x=='G'?'ok':x=='P'?'no':'am')+'">'+({G:'ganha',P:'perde',D:'devolve'}[x])+'</td>').join('')+'<td>'+t.greens+'</td><td class="'+(t.liquido>=0?'ok':'no')+'">'+R(t.liquido)+'</td>'+(tem?'<td class="mut">'+R(t.antes)+(t.piorou?' <b class="no">⚠ piorou</b>':'')+'</td>':'')+'</tr>').join('')+'</table></div>';}
   if(r.pior!=null)h+='<div>pior '+R(r.pior)+' · melhor '+R(r.melhor)+(r.ev!=null?' · EV '+R(r.ev)+' · P(lucro) '+P(100*r.p_lucro,0)+'% · P(prejuízo) '+P(100*r.p_preju,0)+'%':'')+' · lucro se terminar em: '+(r.faixas_lucro||[]).map(f=>f[0]==f[1]?f[0]:f[0]+'–'+f[1]).join(', ')+'</div>';
   if(p.candidatos&&p.candidatos.length)h+='<div class="mut">candidatos: '+p.candidatos.slice(0,3).map(c=>(c.ok?'✅':'✖')+' Abaixo '+c.linha+' @'+c.odd+' '+R(c.stake)+' (+'+c.dist+' pts) EV '+R(c.depois.ev)+' pior '+R(c.depois.pior)).join(' | ')+'</div>';
   if(p.pendente)h+='<div class="am">Oportunidade: '+esc(p.pendente.descricao)+' <button onclick="post(\'/api/cobertura/'+p.id+'\')">APOSTAR COBERTURA</button></div>';

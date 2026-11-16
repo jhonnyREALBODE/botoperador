@@ -879,3 +879,45 @@ def test_geladeira_de_ofertas_que_falharam():
     a = {"tipo": "total", "periodo": "q2", "lado": "abaixo", "linha": 54.5}
     perna = dict(a, casa="1aWin", odd=2.38, stake=21.65, selecao="Abaixo de 54.5")
     assert P._chave_oferta(a) == P._chave_oferta(perna)  # oferta da leitura == perna do bilhete
+
+
+def _p(lado, linha, odd=1.90, stake=30.0):
+    return {"tipo": "total", "periodo": "jogo", "lado": lado, "linha": linha, "odd": odd, "stake": stake}
+
+
+def test_carteira_amplia_a_cobertura_como_no_exemplo_do_operador():
+    """Exemplo 16/11 (só a lógica): 222,5/224 -> +223,5/225,5 -> +224,5/226,5 -> Under 228,5 -> Under 236,5."""
+    cfg = dict(P.DEFAULTS, perda_max_por_jogo_brl=1000)
+    cart = [_p("acima", 222.5), _p("abaixo", 224.0)]
+    assert P.cobertura_2g(cart) == {223}
+    av = P.avaliar_nova_entrada(cart, [_p("acima", 223.5), _p("abaixo", 225.5)], cfg)
+    assert av["ok"] and av["novos_totais"] == [224, 225]
+    assert 224 in av["tres_ou_mais"]  # Under 224 devolve em 224, mas três outras ganham
+    cart += [_p("acima", 223.5), _p("abaixo", 225.5)]
+    av = P.avaliar_nova_entrada(cart, [_p("acima", 224.5), _p("abaixo", 226.5)], cfg)
+    assert av["ok"] and av["novos_totais"] == [226]
+    cart += [_p("acima", 224.5), _p("abaixo", 226.5)]
+    av = P.avaliar_nova_entrada(cart, [_p("abaixo", 228.5)], cfg)  # perna sozinha: os Overs anteriores fazem o 2º green
+    assert av["ok"] and av["novos_totais"] == [227, 228]
+    cart += [_p("abaixo", 228.5)]
+    av = P.avaliar_nova_entrada(cart, [_p("abaixo", 236.5)], cfg)
+    assert av["ok"] and av["novos_totais"] == list(range(229, 237))
+    assert av["piorou_em"]  # acima de 236 essa aposta só perde: tem que aparecer como piora
+
+
+def test_carteira_recusa_entrada_que_nao_amplia_e_respeita_perda_por_jogo():
+    cfg = dict(P.DEFAULTS, perda_max_por_jogo_brl=15)
+    cart = [_p("acima", 222.5), _p("abaixo", 224.0)]
+    mesmo = P.avaliar_nova_entrada(cart, [_p("acima", 222.5), _p("abaixo", 224.0)], cfg)
+    assert not mesmo["ok"] and "nenhum total novo" in mesmo["motivo"]
+    caro = P.avaliar_nova_entrada(cart, [_p("abaixo", 240.5, odd=1.5, stake=200)], cfg)
+    assert not caro["ok"] and "limite" in caro["motivo"]
+
+
+def test_tabela_carteira_resultado_por_total():
+    tab = {t["total"]: t for t in P.tabela_carteira([_p("acima", 222.5), _p("abaixo", 224.0)])}
+    assert tab[223]["res"] == ["G", "G"] and tab[223]["greens"] == 2
+    assert tab[224]["res"] == ["G", "D"] and tab[224]["greens"] == 1
+    assert tab[222]["res"] == ["P", "G"]
+    assert abs(tab[223]["liquido"] - (30 * 1.9 * 2 - 60)) < 0.01
+    assert P._txt_totais([223, 224, 225, 228]) == "223–225, 228"
