@@ -119,7 +119,7 @@ DEFAULTS = {
     "max_entradas_por_jogo": 4,
     "reentrada_mesma_janela": True,    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
-    "perda_max_por_jogo_brl": 15.0,    # pior caso da CARTEIRA inteira do jogo (todas as entradas + coberturas)
+    "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
     "pausa_ps_indisponivel_s": 45,
     "pausa_ps_periodo_indisponivel_s": 180,
     "pos_monitorar": True,
@@ -127,9 +127,10 @@ DEFAULTS = {
     "pos_intervalo_s": 15,
     "pos_max_coberturas": 3,          # por posição
     "pos_max_por_cobertura_brl": 40.0,
-    "pos_max_total_coberturas_brl": 80.0,
-    "pos_perda_max_total_brl": 15.0,  # pior caso da carteira inteira (alvo do operador 16/11: pontas ≈ −R$ 10, meio ≈ +R$ 45)
-    "pos_stake_1w_brl": 30.0,         # aposta avulsa na 1aWin (na PS é a perna mínima, €5)
+    "pos_max_total_coberturas_brl": 120.0,
+    "pos_perda_max_total_brl": 100.0, # pior caso da carteira inteira (operador 16/11: R$ 100 por jogo)
+    "perna_ps_eur_max": 6.0,          # avulsa na PS: de €5 até €6 (operador 16/11)
+    "pos_stake_1w_brl": None,         # avulsa na 1aWin: até o equivalente a perna_ps_eur_max (€6 × câmbio = R$ 37,20)
     "pos_exigir_ev": False,           # true = só entra se o valor esperado não cair (antes travava tudo)
     "pos_ev_min_brl": 0.0,            # (só com pos_exigir_ev)
     "pos_reducao_risco_min": 0.05,    # (só com pos_exigir_ev)
@@ -956,7 +957,7 @@ def avaliar_nova_entrada(carteira, novas, cfg):
     novos = sorted(cob_depois - cob_antes)
     liq = liquido_por_placar(todas, ks)
     pior = round(min(liq.values()), 2)
-    lim = float(cfg.get("perda_max_por_jogo_brl", 15.0))
+    lim = float(cfg.get("perda_max_por_jogo_brl", 100.0))
     tab = tabela_carteira(carteira, novas)
     piorou = [l["total"] for l in tab if l.get("piorou")]
     r = {"novos_totais": novos, "cobertura": sorted(cob_depois), "pior": pior, "piorou_em": piorou,
@@ -1029,7 +1030,7 @@ def avaliar_cobertura(pos, ofertas_por_casa, modelo, cfg):
     cob_atual = cobertura_2g(pernas)
     topo = max(cob_atual) if cob_atual else None
     fundo = min(cob_atual) if cob_atual else None
-    lim = min(float(cfg.get("pos_perda_max_total_brl", 15.0)), float(cfg.get("perda_max_por_jogo_brl", 15.0)))
+    lim = min(float(cfg.get("pos_perda_max_total_brl", 100.0)), float(cfg.get("perda_max_por_jogo_brl", 100.0)))
     avaliados, melhor, chave_melhor = [], None, None
     for casa, ofs in ofertas_por_casa.items():
         for o in ofs or []:
@@ -1043,10 +1044,15 @@ def avaliar_cobertura(pos, ofertas_por_casa, modelo, cfg):
             if (casa, o["lado"], round(o["linha"], 3)) in ja:
                 continue  # nada de repetir a mesma aposta
             # stake: PS = perna mínima (€5); 1aWin = a maior da grade que cabe no limite de perda da carteira
-            if casa == CASA_PS:
-                grade = [round(cfg["perna_ps_eur"] * cfg["cambio_brl_eur"], 2)]
+            eur_max = float(cfg.get("perna_ps_eur_max") or cfg["perna_ps_eur"])
+            if casa == CASA_PS:  # €6, €5,5 ... até a perna mínima (€5)
+                grade, e = [], eur_max
+                while e >= cfg["perna_ps_eur"] - 1e-9:
+                    grade.append(round(e * cfg["cambio_brl_eur"], 2))
+                    e -= 0.5
             else:
-                mx, mn = float(cfg.get("pos_stake_1w_brl", 30.0)), float(cfg.get("pos_stake_min_1w_brl", 5.0))
+                mx = float(cfg.get("pos_stake_1w_brl") or round(eur_max * cfg["cambio_brl_eur"], 2))
+                mn = float(cfg.get("pos_stake_min_1w_brl", 5.0))
                 grade = []
                 v = mx
                 while v >= mn - 1e-9:

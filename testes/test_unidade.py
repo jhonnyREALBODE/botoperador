@@ -1000,7 +1000,8 @@ def test_pos_monitoramento_repete_a_sequencia_manual_do_operador(cfg):
 
 
 def test_limite_padrao_mantem_o_formato_do_operador(cfg):
-    """Alvo 16/11: pontas ≈ −R$ 10, meio largo ≈ +R$ 45 (TIPO esses valores). Com o padrão (R$ 15), um Under
+    cfg = dict(cfg, perda_max_por_jogo_brl=15.0)
+    """Alvo 16/11: pontas ≈ −R$ 10, meio largo ≈ +R$ 45 (TIPO esses valores). Com limite de R$ 15, um Under
     sozinho que deixaria uma ponta em −R$ 40+ NÃO entra; pares que somam janela entram."""
     E = cfg["perna_ps_eur"] * cfg["cambio_brl_eur"]
     cart = [dict(_p("acima", 155.5, 1.85, 33.5), casa="1awin"), dict(_p("abaixo", 156.5, 2.0, E), casa="ps3838")]
@@ -1047,3 +1048,18 @@ def test_janela_cresce_nas_duas_direcoes(cfg):
     # linha que se moveu mas não amplia a janela não é entrada automática
     m, av = P.avaliar_cobertura(sobe, {"1awin": _ofs(190.5, lado="acima", odd=1.85)}, None, cfg)
     assert m is None and "nenhum total novo" in av[0]["motivo"]
+
+
+
+def test_limites_do_operador_100_por_jogo_e_ate_6_euros(cfg):
+    """16/11: perda máxima R$ 100 por jogo; avulsa até €6 na PS ou o equivalente na 1aWin (R$ 37,20)."""
+    c = P.carregar_config("/nao/existe.json", avisar=False)
+    assert c["perda_max_por_jogo_brl"] == 100.0 and c["pos_perda_max_total_brl"] == 100.0 and c["perna_ps_eur_max"] == 6.0
+    E = c["perna_ps_eur"] * c["cambio_brl_eur"]
+    pos = {"id": 1, "periodo": "jogo", "pernas": [
+        dict(_p("acima", 150.5, 1.90, 33.45), casa="1awin", origem="entrada"),
+        dict(_p("abaixo", 151.5, 2.05, E), casa="ps3838", origem="entrada")]}
+    m, _ = P.avaliar_cobertura(pos, {"1awin": _ofs(153.5, odd=1.85)}, None, c)
+    assert m and m["stake"] == 37.2  # €6 × 6,20
+    m, _ = P.avaliar_cobertura(pos, {"ps3838": _ofs(153.5, odd=1.85)}, None, c)
+    assert m and m["stake"] == round(6 * 6.2, 2)
