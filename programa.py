@@ -117,6 +117,7 @@ DEFAULTS = {
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
+    "reentrada_mesma_janela": True,    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 15.0,    # pior caso da CARTEIRA inteira do jogo (todas as entradas + coberturas)
     "pausa_ps_indisponivel_s": 45,
@@ -3573,6 +3574,7 @@ class Operador:
         ultimo_motivo = None
         entradas = []   # bilhetes ACEITOS neste jogo (real: confirmados; teste: testados = simulados)
         carteira_local = []  # as pernas desses bilhetes (quando não há posição aberta para o jogo)
+        janela_padrao = {}   # período -> janela da 1ª entrada aceita (padrão das reentradas)
 
         def carteira(periodo):
             """Todas as apostas aceitas deste jogo/período: a posição aberta (que inclui coberturas) ou a lista local."""
@@ -3597,6 +3599,11 @@ class Operador:
             cart = carteira(a["periodo"])
             if not cart:
                 return False  # primeira entrada neste período: vale a regra normal do par
+            # regra do operador 16/11: a janela da 1ª entrada vira o padrão do jogo — as próximas têm que ter
+            # a MESMA janela (ou maior); o custo de cada par continua pela tabela (depende da odd)
+            jan0 = janela_padrao.get(a["periodo"])
+            if self.cfg.get("reentrada_mesma_janela", True) and jan0 is not None and jan < jan0 - 1e-9:
+                return True
             c = _calcular(a, b, self.cfg)
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
             return not avaliar_nova_entrada(cart, novas, self.cfg)["ok"]
@@ -3689,6 +3696,7 @@ class Operador:
                                     (" | ⚠ esta entrada AUMENTOU a perda em %s" % _txt_totais(av["piorou_em"])) if av["piorou_em"] else ""))
                             carteira_local.extend(novas)
                             entradas.append(bil.get("id"))
+                            janela_padrao.setdefault(bil["periodo"], bil["janela"])
                             maxe = int(self.cfg.get("max_entradas_por_jogo", 1))
                             if not self.cfg.get("reentrar_mesmo_jogo") or len(entradas) >= maxe:
                                 self.estado.set_monitor("%s: %s — monitoramento encerrado (%d entrada(s))" % (
