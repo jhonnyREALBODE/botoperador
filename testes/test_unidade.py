@@ -776,28 +776,30 @@ def test_pagamento_e_devolucao_na_linha_inteira():
     assert P.pagamento_perna(p, 255) == 19.0 and P.pagamento_perna(p, 256) == 10.0 and P.pagamento_perna(p, 257) == 0
 
 
-def test_filtro_4_pontos_qualquer_linha(cfg):
-    """Under novo − Over ORIGINAL ≥ 4: 253.5 não (3), 254.5 sim (4) — para qualquer linha."""
-    mod = (251.5, 9.0)
-    for over, under, novas, deve in [(250.5, 252.5, [253.5], set()), (250.5, 252.5, [254.5], {254.5}),
-                                     (180.5, 182.5, [186.5], {186.5}), (160.5, 162.5, [163.5], set())]:
+def test_sem_filtro_de_4_pontos_vale_a_janela_da_carteira(cfg):
+    """16/11: a regra 'Under ≥ 4 pts acima do Over original' saiu. Vale: acrescenta total novo à janela?
+    Over 250.5 + Under 252.5 cobrem 251–252: Under 253.5 (só 3 pts acima do Over) acrescenta 253 -> avalia e serve."""
+    cfg = dict(cfg, pos_perda_max_total_brl=60.0, perda_max_por_jogo_brl=60.0)
+    for over, under, nova in [(250.5, 252.5, 253.5), (180.5, 182.5, 183.5), (160.5, 162.5, 163.5)]:
         pos = _pos(over, under)
-        _, av = P.avaliar_cobertura(pos, {"1awin": _ofs(*novas)}, (over + 1, 9.0), cfg)
-        assert {c["linha"] for c in av} == deve, (over, novas)
+        melhor, av = P.avaliar_cobertura(pos, {"1awin": _ofs(nova)}, (over + 1, 9.0), cfg)
+        assert melhor and melhor["depois"]["novos_totais"] == [int(nova - 0.5)], (over, av)
+        assert melhor["dist"] == 1.5  # distância mostrada é da BORDA da janela atual, não do Over original
 
 
-def test_referencia_e_o_over_original_nao_o_under(cfg):
+def test_linha_que_nao_acrescenta_total_novo_nao_entra(cfg):
     pos = _pos(250.5, 252.5)
-    # 255.0 está a 2.5 do Under 252.5 mas a 4.5 do Over original 250.5 -> avalia
-    _, av = P.avaliar_cobertura(pos, {"1awin": _ofs(255.0)}, (251.5, 9.0), cfg)
-    assert av and av[0]["dist"] == 4.5
+    melhor, av = P.avaliar_cobertura(pos, {"1awin": _ofs(251.5)}, (251.5, 9.0), cfg)  # dentro da janela já coberta
+    assert melhor is None and av and "nenhum total novo" in av[0]["motivo"]
 
 
 def test_nunca_mistura_periodo_nem_over_nem_repete(cfg):
     pos = _pos(250.5, 252.5)
     ofs = {"1awin": _ofs(256.5, periodo="q3") + _ofs(256.5, lado="acima") + _ofs(252.5)}
-    _, av = P.avaliar_cobertura(pos, ofs, (251.5, 9.0), cfg)
-    assert av == []
+    melhor, av = P.avaliar_cobertura(pos, ofs, (251.5, 9.0), cfg)
+    assert melhor is None
+    assert all(c["oferta"]["periodo"] == "jogo" for c in av)            # outro período nem é avaliado
+    assert not any(c["lado"] == "abaixo" and c["linha"] == 252.5 for c in av)  # a mesma aposta não repete
     pos["pernas"].append(dict(pos["pernas"][1], linha=256.5, origem="cobertura"))
     _, av = P.avaliar_cobertura(pos, {"1awin": _ofs(256.5)}, (251.5, 9.0), cfg)
     assert av == []  # mesma casa/lado/linha já apostada
@@ -981,7 +983,7 @@ def test_pos_monitoramento_repete_a_sequencia_manual_do_operador(cfg):
         pr("ps3838", "acima", 224.5, 2.04, E, "reentrada"), pr("1awin", "abaixo", 226.5, 1.85, 35.0, "reentrada")]}
     assert P._txt_totais(P.cobertura_2g(pos["pernas"])) == "223–226"
     ofs = {"1awin": [oferta("1awin", "total", "jogo", "abaixo", 229.5, 1.85), oferta("1awin", "total", "jogo", "acima", 229.5, 1.85),
-                     oferta("1awin", "total", "jogo", "abaixo", 224.5, 2.40)],  # 224.5: < 4 pts do Over original -> fora
+                     oferta("1awin", "total", "jogo", "abaixo", 224.5, 2.40)],  # 224.5: não acrescenta total novo -> fora
            "ps3838": []}
     melhor, avaliados = P.avaliar_cobertura(pos, ofs, None, cfg)
     assert melhor and melhor["lado"] == "abaixo" and melhor["linha"] == 229.5, avaliados
@@ -1007,3 +1009,20 @@ def test_limite_padrao_mantem_o_formato_do_operador(cfg):
     sozinho = [dict(_p("abaixo", 166.5, 1.85, 30.0), casa="1awin")]
     av = P.avaliar_nova_entrada(cart + par, sozinho, cfg)
     assert not av["ok"] and "limite" in av["motivo"]
+
+
+
+def test_reentrada_sem_distancia_minima_fixa(cfg):
+    """Operador 16/11: removida a regra 'Under ≥ 4 pts acima do Over original'. Over 189.5 + Under 190.5 cobrem 190;
+    um Under 191.5 (só 2 pts acima do Over) acrescenta 191 e pode entrar; depois 192.5 acrescenta 192, e assim por diante."""
+    cfg = dict(cfg, pos_perda_max_total_brl=60.0, perda_max_por_jogo_brl=60.0, pos_stake_1w_brl=10.0)
+    E = cfg["perna_ps_eur"] * cfg["cambio_brl_eur"]
+    pos = {"id": 1, "periodo": "jogo", "pernas": [
+        dict(_p("acima", 189.5, 2.33, 22.74), casa="1awin", origem="entrada"),
+        dict(_p("abaixo", 190.5, 1.709, E), casa="ps3838", origem="entrada")]}
+    assert P.cobertura_2g(pos["pernas"]) == {190}
+    for linha, esperado in ((191.5, [191]), (192.5, [192]), (193.5, [193])):
+        melhor, avs = P.avaliar_cobertura(pos, {"1awin": [oferta("1awin", "total", "jogo", "abaixo", linha, 1.85)]}, None, cfg)
+        assert melhor and melhor["depois"]["novos_totais"] == esperado, avs
+        pos["pernas"].append(dict(melhor["oferta"], casa="1awin", stake=melhor["stake"], origem="cobertura"))
+    assert P.cobertura_2g(pos["pernas"]) == {190, 191, 192, 193}

@@ -841,8 +841,8 @@ def test_1awin_processa_e_nao_entra(casas, cfgc):
 
 
 def test_monitoramento_pos_entrada_cobertura_simulada(casas, cfgc):
-    """Middle testado -> posição aberta em aba separada -> acha Under ≥ 4 pts acima do Over original
-    que melhora a posição inteira -> cobertura (simulada no modo teste)."""
+    """Middle testado -> posição aberta em aba separada -> acha aposta avulsa que acrescenta totais novos
+    à janela da carteira -> cobertura (simulada no modo teste). Sem distância mínima fixa (16/11)."""
     ir_jogo(casas)
     for c in casas.values():
         recarregar(c)
@@ -859,9 +859,8 @@ def test_monitoramento_pos_entrada_cobertura_simulada(casas, cfgc):
     cob = [p for p in pos["pernas"] if p["origem"] == "cobertura"]
     assert cob and cob[0]["simulada"], pos.get("candidatos")
     ref_un = P.under_original(pos)
-    # Under ≥ 4 pts acima do Over original, ou (espelho, 16/11) Over ≥ 4 pts abaixo do Under original
-    assert (cob[0]["lado"] == "abaixo" and cob[0]["linha"] - 211.5 >= 4) or \
-           (cob[0]["lado"] == "acima" and ref_un - cob[0]["linha"] >= 4), cob
+    antes = P.cobertura_2g([p for p in pos["pernas"] if p["origem"] != "cobertura"])
+    assert P.cobertura_2g(pos["pernas"]) - antes, cob  # a avulsa acrescentou totais novos à janela
     assert pos["resumo"]["gasto"] > 0 and len(pos["pernas"]) == 3
     for c in casas.values():
         assert c.executar(c.itens_cupom) == []
