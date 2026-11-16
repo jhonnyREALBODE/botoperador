@@ -1063,3 +1063,15 @@ def test_limites_do_operador_100_por_jogo_e_ate_6_euros(cfg):
     assert m and m["stake"] == 37.2  # €6 × 6,20
     m, _ = P.avaliar_cobertura(pos, {"ps3838": _ofs(153.5, odd=1.85)}, None, c)
     assert m and m["stake"] == round(6 * 6.2, 2)
+
+
+def test_sigla_no_meio_do_nome(cfg):
+    """16/11: sinal 'KK SC Derby Podgorica x BC Vienna'; 1aWin 'Studentski Centar — Vienna Basket';
+    PS 'KK Studentski centar Podgorica -vs- BC Vienna'. 'SC' = iniciais de Studentski Centar."""
+    t = ["KK SC Derby Podgorica", "BC Vienna"]
+    assert P.linha_confronto("Studentski Centar — Vienna Basket\n", t) == ["Studentski Centar", "Vienna Basket"]
+    assert P.ps_e_o_jogo("ABA - Liga Adriática / KK Studentski centar Podgorica -vs- BC Vienna\n", t)
+    # sigla sozinha é pista fraca: só na 2ª passada e com o OUTRO time batendo
+    assert not P._nome_bate("KK SC Derby Podgorica", "Studentski Centar")
+    assert P.linha_confronto("Sloboda Celik — Igokea\n", t) is None
+    assert not P._nome_bate("KK Krka", "Kauno Kalnas", True)  # 'KK' é código de clube, não sigla

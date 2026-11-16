@@ -348,6 +348,31 @@ def _sigla_bate(a, b):
     return False
 
 
+_CODIGOS_CLUBE = {"kk", "bc", "bk", "fc", "cb", "sk", "ks", "kb", "hc", "ac", "cd", "ud", "sd", "ok", "kos", "bkk"}
+
+
+def _tem_sigla(nome):
+    return any(2 <= len(w) <= 4 and not w.isdigit() and w not in _CODIGOS_CLUBE and w not in _PREFIXOS_CLUBE
+               and w not in ("san",) for w in _norm(nome).split())
+
+
+def _sigla_expandida(a, b):
+    """Palavras de b cujas iniciais (seguidas) formam uma sigla curta de a. 'KK SC Derby' x 'Studentski Centar'
+    -> ['studentski', 'centar']. As palavras de b têm que ser próprias (não genéricas) e seguidas."""
+    pb = [t for t in _norm(b).split() if len(t) >= 3 and not _generico(t)]
+    out = []
+    for w in _norm(a).split():
+        # 'sc' é genérico ('Sport Club'), mas aqui só vale se bater com as iniciais de palavras PRÓPRIAS de b
+        if not (2 <= len(w) <= 4) or w in _PREFIXOS_CLUBE or w.isdigit() or w in _CODIGOS_CLUBE:
+            continue
+        n = len(w)
+        for i in range(len(pb) - n + 1):
+            if "".join(t[0] for t in pb[i:i + n]) == w:
+                out += [t for t in pb[i:i + n] if t not in out]
+                break
+    return out
+
+
 def pistas_nome(nome, tam=5):
     """Pedaços curtos (5 letras) das palavras próprias do time, em EN e PT (seleções), para o
     filtro rápido dentro da página. Lista vazia = sem filtro (nome só com sigla/genérico)."""
@@ -403,6 +428,12 @@ def _nome_bate(a, b, leniente=False):
         return True
     ta = [t for t in _tokens(a) if t != "san"] or _tokens(a)
     tb = [t for t in _tokens(b) if t != "san"] or _tokens(b)
+    # sigla no MEIO do nome (16/11: 'KK SC Derby Podgorica' = 'Studentski Centar'): 'sc' = iniciais de palavras
+    # seguidas do outro nome -> essas palavras contam como presentes dos dois lados
+    # só na 2ª passada (leniente), quando o OUTRO time do jogo também tem que bater — sigla sozinha é pista fraca
+    ea, eb = (_sigla_expandida(a, b), _sigla_expandida(b, a)) if leniente else ([], [])
+    if ea or eb:
+        ta, tb = ta + [t for t in ea if t not in ta], tb + [t for t in eb if t not in tb]
     if not ta or not tb:
         if _sigla_bate(a, b) or _sigla_bate(b, a):
             return True
@@ -3217,6 +3248,12 @@ class Casa:
         self._voltas_caca = getattr(self, "_voltas_caca", 0) + 1
         if self._voltas_caca % 3 == 0:
             p1, p2 = pistas_nome(times[0], 3), pistas_nome(times[1], 3)  # filtro frouxo (3 letras), nunca sem filtro
+            # time com SIGLA no nome ('KK SC Derby Podgorica' = 'Studentski Centar', 16/11): a sigla não aparece
+            # como pedaço do nome na outra casa — esse time fica sem filtro e o OUTRO time segura a busca
+            if p2 and _tem_sigla(times[0]):
+                p1 = []
+            elif p1 and _tem_sigla(times[1]):
+                p2 = []
         else:
             p1, p2 = pistas_nome(times[0]), pistas_nome(times[1])
         cands = self._eval(r"""([pref, p1, p2]) => {
