@@ -117,7 +117,7 @@ DEFAULTS = {
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
-    "max_indisponivel_ps_por_jogo": 3,
+    "pausa_ps_indisponivel_s": 45,
     "pos_monitorar": True,
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_dist_min_under": 4.0,        # FILTRO: linha do Under novo − linha do Over ORIGINAL ≥ 4
@@ -642,7 +642,7 @@ def _tempo_geladeira(motivo):
     if not m:
         return 0
     if "mínima maior que a máxima" in m or "indispon" in m:
-        return 300   # PS não aceita o valor mínimo nessa linha: insistir é perder tempo
+        return 120   # a PS suspendeu (o jogo todo também descansa; ver pausa_ps_indisponivel_s)
     if "não recebeu a seleção" in m or "cadeado" in m or "limpou o cupom sem aceitar" in m \
             or "sumiu do cupom" in m or "0 seleções" in m or "exclu" in m:
         return 60    # linha travada/suspensa (a 1aWin atrasada costuma travar bem nessas odds)
@@ -2707,6 +2707,25 @@ class Casa:
             log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:20])))
         vazio = not self.itens_cupom()
         s1 = self._saldo()
+        # log 15/11 20:46 (1aWin): depois do clique apareceu 'BRL 136,15' = 159,64 − 23,49 (a stake), mas
+        # o leitor de saldo ainda devolvia 159,64 e o programa disse 'nada foi apostado'. Saldo não PROVA
+        # aceite (17:02), mas um saldo novo descontando a stake também não prova o contrário: INCERTO.
+        desconto_visto = None
+        if saldo0 is not None and valor:
+            for l in novas:
+                if not re.search(r"BRL|R\$|EUR|€", l):
+                    continue
+                for v in _numeros(l):
+                    if abs((saldo0 - valor) - v) < 0.05:
+                        desconto_visto = l
+                        break
+                if desconto_visto:
+                    break
+        if desconto_visto:
+            self.dump("incerto")
+            return {"ok": None, "foto": self.foto("incerto"),
+                    "motivo": "INCERTO — sem mensagem de aceita, mas a casa mostrou saldo descontado da stake ('%s'; "
+                              "antes %s). Confira em Apostas pendentes/Histórico" % (desconto_visto, _br(saldo0))}
         if vazio and saldo0 is not None and s1 is not None and abs(saldo0 - s1) < 0.01:
             # 1aWin 14/11 23:58: limpou o cupom SEM apostar (histórico vazio, saldo igual)
             return {"ok": False, "foto": self.foto("confirmar"),
@@ -3233,10 +3252,11 @@ class Operador:
         entradas = []   # [(periodo, tipo, conjunto de placares de dupla | linhas)] já feitas neste jogo
 
         geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
-        indisp_ps = set()  # pernas PS diferentes que a PS recusou com 'mínima maior que a máxima'
 
         def excluir(a, b, jan):
             agora_s = time.time()
+            if geladeira.get((CASA_PS, "*"), 0) > agora_s:
+                return True
             for casa_n, o in ((CASA_1W, a), (CASA_PS, b)):
                 if geladeira.get((casa_n, _chave_oferta(o)), 0) > agora_s:
                     return True
@@ -3359,15 +3379,13 @@ class Operador:
                                 log("🧊 %s: %s fica %ds de fora (%s)" % (
                                     NOME_CASA[casa_n], perna["selecao"], seg, mot_f[:70]))
                         if "mínima maior que a máxima" in ((bil.get("_falhas") or {}).get(CASA_PS) or ""):
-                            indisp_ps.add(_chave_oferta(bil["pernas"][1]))
-                            lim_ind = int(self.cfg.get("max_indisponivel_ps_por_jogo", 3))
-                            if len(indisp_ps) >= lim_ind:
-                                msg = ("a PS recusou %d linhas diferentes deste jogo com 'aposta mínima maior que a "
-                                       "máxima' — ela não aceita €%s aqui (limite da PS para você neste jogo). "
-                                       "Larguei o jogo; mande outro sinal" % (len(indisp_ps), _br(self.cfg["perna_ps_eur"])))
-                                log("■ %s: %s" % (sinal["jogo"], msg))
-                                self.estado.set_monitor("%s: abandonado — %s" % (sinal["jogo"], msg))
-                                return
+                            # log 15/11 20:50–21:01: a PS suspende o jogo inteiro por instantes (lance, revisão,
+                            # lance livre) e responde 'mínima maior que a máxima' em QUALQUER linha; às 21:05 já
+                            # aceitava de novo. Então a PS inteira descansa um pouco neste jogo, sem largar o jogo.
+                            seg_ps = int(self.cfg.get("pausa_ps_indisponivel_s", 45))
+                            geladeira[(CASA_PS, "*")] = time.time() + seg_ps
+                            log("⏳ PS suspendeu as apostas deste jogo por instantes ('mínima maior que a máxima') — "
+                                "espero %ds antes de tentar qualquer linha da PS de novo" % seg_ps)
                         log("montagem falhou — o monitoramento reassume %s" % sinal["jogo"])
                         ultimo_motivo = None
                     elif motivo != ultimo_motivo or rodada % 3 == 0:

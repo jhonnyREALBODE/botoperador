@@ -869,7 +869,7 @@ def test_placares_dupla_e_reentrada(cfg):
 
 def test_geladeira_de_ofertas_que_falharam():
     """Print 15/11 20:45–20:50: Toronto x Knicks tentou o mesmo par 6x seguidas. Quem falhou fica de fora um tempo."""
-    assert P._tempo_geladeira("a PS marcou a seleção como indisponível (aposta mínima maior que a máxima)") == 300
+    assert P._tempo_geladeira("a PS marcou a seleção como indisponível (aposta mínima maior que a máxima)") == 120
     assert P._tempo_geladeira("cupom não recebeu a seleção") == 60
     assert P._tempo_geladeira("montou, mas na conferência final: cupom com 0 seleções (esperado 1)") == 60
     assert P._tempo_geladeira("a casa avisou no cupom que a odd mudou (Odds have changed from 2.010 to 1.757)") == 0

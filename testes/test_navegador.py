@@ -620,6 +620,27 @@ def test_1awin_limpa_sem_apostar_nao_e_incerto(casas, cfgc):
     assert casas[P.CASA_PS].executar(casas[P.CASA_PS].itens_cupom) == []
 
 
+def test_1awin_saldo_descontado_noutro_lugar_e_incerto(casas, cfgc):
+    """15/11 20:46: apareceu 'BRL 136,15' (= saldo − stake) mas o leitor de saldo seguia no valor velho
+    e o programa disse 'nada foi apostado'. Tem que ser INCERTO (para tudo, não aposta a PS)."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["saldo_noutro_lugar"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "incerto", bil["detalhe"]
+    assert "saldo descontado" in bil["detalhe"]["1aWin"]
+    assert "Aposta aceita" not in casas[P.CASA_PS].executar(casas[P.CASA_PS].texto)
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+
+
 def test_1awin_saldo_sozinho_nao_prova(casas, cfgc):
     """15/11 17:02: o saldo caiu e a aposta NÃO existia. Saldo sozinho não confirma: não aposta a PS."""
     cfgc["modo_teste"] = False
@@ -809,12 +830,12 @@ def test_par_que_falhou_vai_pra_geladeira_e_nao_repete(casas, cfgc):
     """Print 15/11 20:45–20:50 (Toronto x Knicks): a PS dizia 'indisponível' e o programa repetia o MESMO par."""
     servidor.ESTADO["indisponivel"] = True
     cfgc["monitor_intervalo_s"] = 0.5
+    cfgc["pausa_ps_indisponivel_s"] = 3
     limpar_cupons(casas)
     est = P.Estado(cfgc)
     op = P.Operador(cfgc, est, casas)
     op.novo_sinal(dict(SINAL, id="geladeira"))
-    assert esperar(lambda: "abandonado" in est.monitor, 240), est.monitor  # 3 linhas recusadas -> larga o jogo
-    assert "mínima maior que a máxima" in est.monitor
+    assert esperar(lambda: len([b for b in est.bilhetes if b["status"] == "falhou"]) >= 2, 150)
     op._atual[1].set()
     time.sleep(1.5)
     falhos = [b for b in est.bilhetes if b["status"] == "falhou"]
