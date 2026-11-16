@@ -2232,6 +2232,7 @@ class Casa:
     def ler_escada(self, times):
         """Lê todas as linhas de total/handicap por período, com carimbo de cada botão."""
         r = {"ok": False, "ofertas": [], "motivo": "", "limitada": False, "quarto": None}
+        self._garantir_na_frente()
         tx = self.texto()
         if self.esta_limitada(tx):
             self.limitada = True
@@ -2520,6 +2521,7 @@ class Casa:
         """Monta UMA perna, no mesmo fôlego da leitura. Retorna {ok, motivo, foto}."""
         r = {"ok": False, "motivo": "", "foto": ""}
         self._t_montar = time.time()
+        self._garantir_na_frente()
         tx = self.texto()
         if self.esta_limitada(tx):
             r["motivo"] = "casa limitada (Excesso de requisições)"
@@ -2831,6 +2833,22 @@ class Casa:
             return fn(*args)
         finally:
             self.page = principal
+            try:  # a aba da posição NÃO pode ficar na frente da aba dos sinais (odds congelariam)
+                principal.bring_to_front()
+            except Exception:
+                pass
+
+    def _garantir_na_frente(self):
+        """Aba escondida (atrás de outra aba) = o site para de redesenhar e as odds na tela ficam VELHAS.
+        Antes de ler ou montar, a aba de trabalho tem que estar na frente."""
+        try:
+            vis = self.page.evaluate("() => document.visibilityState")
+            if vis != "visible":
+                self.page.bring_to_front()
+                self.page.wait_for_timeout(400)
+                log("%s: a aba de trabalho estava escondida (%s) — trouxe para a frente" % (self.rotulo, vis))
+        except Exception:
+            pass
 
     def fechar_aba(self, chave):
         pg = getattr(self, "abas_pos", {}).pop(chave, None)
