@@ -921,3 +921,13 @@ def test_tabela_carteira_resultado_por_total():
     assert tab[222]["res"] == ["P", "G"]
     assert abs(tab[223]["liquido"] - (30 * 1.9 * 2 - 60)) < 0.01
     assert P._txt_totais([223, 224, 225, 228]) == "223–225, 228"
+
+
+def test_padrao_so_total_do_jogo_inteiro(tmp_path):
+    """Operador 16/11: só totais do jogo inteiro (os quartos ao vivo trocavam a linha antes do clique)."""
+    c = P.carregar_config(str(tmp_path / "nada.json"), avisar=False)
+    assert c["totais_periodos"] == ["jogo"]
+    a = oferta("1awin", "total", "q2", "abaixo", 54.5, 2.10)
+    b = oferta("ps3838", "total", "q2", "acima", 53.5, 2.10)
+    bil, mot = P.achar_par([a], [b], SINAL, c)
+    assert bil is None
