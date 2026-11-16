@@ -2698,7 +2698,8 @@ class Casa:
                 break
             if self.itens_cupom():
                 ok, mot = self.conferir_cupom(perna)
-                if ok or "Evento exclu" in mot:
+                # odd que mudou para PIOR já é veredito: não fica esperando o resto dos 7s (log 16/11 08:39)
+                if ok or "Evento exclu" in mot or "odd mudou" in mot or "odd do cupom caiu" in mot:
                     break
         if not ok and mot == "cupom não recebeu a seleção" and perna.get("_aid"):
             try:  # PS: travou o mercado (cadeado) no instante do clique?
