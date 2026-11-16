@@ -2355,13 +2355,15 @@ class Casa:
     def clicar_firme(self, loc):
         """Clique que insiste: elemento piscando com odds ao vivo ('not stable')
         -> clique forçado -> clique por JS."""
+        # log 15/11 22:43: o clique normal esperou 2,5s o botão 'parar de piscar' (odd ao vivo) e, nesse
+        # tempo, a 1aWin trocou a linha 226.5 -> outra. Ao vivo cada segundo conta: tentativa curta e força.
         try:
-            loc.click(timeout=2500)
+            loc.click(timeout=600)
             return True
         except Exception:
             pass
         try:
-            loc.click(timeout=2500, force=True)
+            loc.click(timeout=1200, force=True)
             return True
         except Exception:
             pass
