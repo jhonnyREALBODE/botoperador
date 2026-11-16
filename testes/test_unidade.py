@@ -446,6 +446,7 @@ def test_resultado_marca_desfecho_do_bilhete(cfg):
     est.registrar_bilhete(bil, "sinal")
     est.registrar_resultado({"jogo": "Phoenix x Charlotte", "desfecho": "DEVOLVIDA", "id": "x"})
     assert bil["desfecho"] == "DEVOLVIDA"
+    est.salvar_agora()  # a gravação normal é por fora (thread)
     assert json.load(open(P.ARQ_HIST))["bilhetes"][0]["desfecho"] == "DEVOLVIDA"
 
 

@@ -2641,7 +2641,9 @@ class Casa:
                 r["motivo"] += " — e o cupom NÃO esvaziou: limpe à mão"
                 log("‼ %s: cupom NÃO esvaziou depois da falha — limpe à mão" % self.rotulo)
             return r
-        r.update(ok=True, foto=self.foto("montado"))
+        # modo real: a foto do cupom montado custava 0,1–0,4s ANTES do clique de apostar (operador 16/11:
+        # 'não perder milissegundo'). No real a prova é a foto depois do clique; no teste a foto é o produto.
+        r.update(ok=True, foto=self.foto("montado") if self.cfg.get("modo_teste", True) else "")
         return r
 
     def desfazer(self, perna=None):
@@ -2718,7 +2720,6 @@ class Casa:
         saldo0 = self._saldo()
         valor = (perna or {}).get("stake", 0) / (self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else 1)
         log("%s: saldo antes de apostar = %s" % (self.rotulo, saldo0))
-        self.dump("antes_confirmar")
         try:
             self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=3000)
         except Exception as e:
@@ -3205,12 +3206,23 @@ class Estado:
         self.calculadora = None    # raio-x da última rodada sadia
         self.monitor = ""          # texto de status do monitoramento
         self._seq = max([b.get("id", 0) for b in self.bilhetes] + [0])
+        self._trava_gravar = threading.Lock()
+        self._sujo = threading.Event()
 
     def salvar(self):
-        with _TRAVA:
-            dados = {"bilhetes": self.bilhetes[-300:], "resultados": self.resultados[-300:],
-                     "posicoes": self.posicoes[-100:]}
-        _gravar_json(self.arquivo, dados)
+        """Grava o histórico POR FORA (thread), sem segurar quem está apostando (operador 16/11)."""
+        self._sujo.set()
+        threading.Thread(target=self.salvar_agora, daemon=True, name="gravar").start()
+
+    def salvar_agora(self):
+        with self._trava_gravar:
+            if not self._sujo.is_set():
+                return  # outra gravação já levou a versão nova
+            self._sujo.clear()
+            with _TRAVA:
+                dados = json.loads(json.dumps({"bilhetes": self.bilhetes[-300:], "resultados": self.resultados[-300:],
+                                               "posicoes": self.posicoes[-100:]}, default=str))
+            _gravar_json(self.arquivo, dados)
 
     def registrar_bilhete(self, bil, origem):
         with _TRAVA:
@@ -4345,6 +4357,11 @@ def main(argv):
         srv.serve_forever()
     except KeyboardInterrupt:
         log("encerrando")
+    finally:
+        try:
+            estado.salvar_agora()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
