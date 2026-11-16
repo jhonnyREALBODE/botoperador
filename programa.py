@@ -1052,7 +1052,17 @@ JS_ITENS_CUPOM = r"""
       if (!vis(e) || e.tagName === 'INPUT') continue;
       const t = (e.innerText || '').trim();
       if (!t || t.length > 400) continue;
-      if (/evento exclu[ií]do|event (excluded|removed)/i.test(t)) { cand.push(e); continue; }  // seleção morta também é seleção
+      if (/evento exclu[ií]do|event (excluded|removed)/i.test(t)) {
+        // 1aWin: '5 · Evento excluído · Cancelar' é o aviso de DESFAZER de quem acabou de tirar a seleção:
+        // NÃO é seleção (e 'Cancelar' a devolveria ao cupom)
+        let p = e, toast = false;
+        for (let k = 0; k < 4 && p && !cups.includes(p); k++, p = p.parentElement) {
+          const pt = (p.innerText || '');
+          if (pt.length < 80 && /(^|\s)(cancelar|desfazer|undo)(\s|$)/i.test(pt)) { toast = true; break; }
+        }
+        if (!toast) cand.push(e);  // seleção morta também é seleção
+        continue;
+      }
       const m = t.match(ODD);
       if (!m || parseFloat(m[2].replace(',', '.')) < 1.01) continue;
       if (!MERC.test(t)) continue;
@@ -1490,6 +1500,20 @@ _RX_CUPOM_VAZIO = re.compile(r"selecione um resultado|nenhuma aposta selecionada
                              r"bet ?slip is empty|cupom (esta )?vazio|adicione (uma )?sele", re.I)
 _RX_INDISPONIVEL = re.compile(r"sele[cç][aã]o indispon[ií]vel|selection (is )?(currently )?unavailable|"
                               r"indispon[ií]vel para apostas|aposta m[ií]nima [eé] maior que a aposta m[aá]xima", re.I)
+# 1aWin (print do operador 15/11 21:1x): ao TIRAR uma seleção aparece '5 · Evento excluído · Cancelar' por 5s.
+# É o aviso de DESFAZER ('Cancelar' devolve a seleção ao cupom!) — não é mercado encerrado e o cupom está vazio.
+_RX_TOAST_DESFAZER = re.compile(r"evento exclu[ií]do\s*\n?\s*(cancelar|desfazer|undo)", re.I)
+
+
+def _sem_toast_desfazer(tx):
+    """Tira do texto do cupom o aviso de desfazer da 1aWin ('Evento excluído · Cancelar')."""
+    tx = tx or ""
+    if not re.search(r"evento exclu[ií]do", tx, re.I) or not re.search(r"\b(cancelar|desfazer|undo)\b", tx, re.I):
+        return tx
+    return "\n".join(l for l in tx.splitlines()
+                     if not re.search(r"evento exclu[ií]do|^\s*(cancelar|desfazer|undo)\s*$|^\s*\d{1,2}\s*$", l, re.I))
+
+
 _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado (fechado|encerrado)|market closed", re.I)
 _RX_REMOVER_TUDO = re.compile(r"^\s*(remover tudo|remove all|limpar tudo|clear all|apagar tudo)\s*$", re.I)
 _RX_OK_MODAL = re.compile(r"^\s*(ok|sim|confirmar|yes)\s*$", re.I)
@@ -1886,7 +1910,7 @@ class Casa:
         # 'vazio' só com a PROVA da casa ('Selecione um resultado…' / 'Nenhuma aposta selecionada');
         # sem a frase e com cara de seleção = sujo, mesmo sem reconhecer o cartão
         # (caso 14/11 18:40: painel disse 'cupom vazio' com várias seleções presas na 1aWin)
-        tx = self.texto_cupom() or ""
+        tx = _sem_toast_desfazer(self.texto_cupom() or "")
         if _RX_CUPOM_VAZIO.search(tx):
             return []
         if re.search(r"\b(acima|abaixo|mais|menos|over|under)\s+de\b|@\s*\d|\bevento exclu", _sem_acento(tx), re.I):
@@ -2052,6 +2076,26 @@ class Casa:
             self.page.wait_for_timeout(150)
         return False
 
+    def _tem_toast_desfazer(self):
+        tx = self.texto_cupom() or ""
+        return bool(re.search(r"evento exclu[ií]do", tx, re.I) and re.search(r"\b(cancelar|desfazer|undo)\b", tx, re.I))
+
+    def _esperar_toast_desfazer(self, s=7.0):
+        """1aWin: '5 · Evento excluído · Cancelar' some sozinho em ~5s. NUNCA clicamos 'Cancelar' (devolveria
+        a seleção). Espera sumir; se não sumir, a lixeira do cupom (apaga tudo, sem devolver nada)."""
+        if self.nome != CASA_1W or not self._tem_toast_desfazer():
+            return True
+        fim = time.time() + s
+        while time.time() < fim:
+            self.page.wait_for_timeout(250)
+            if not self._tem_toast_desfazer():
+                return True
+        log("1aWin: o aviso 'Evento excluído · Cancelar' não sumiu em %.0fs — uso a lixeira do cupom" % s)
+        self._clicar_lixeira_1w()
+        self._modal_ok_rapido()
+        self.page.wait_for_timeout(500)
+        return not self._tem_toast_desfazer()
+
     def esperar_cupom_vazio(self, s=3.0):
         fim = time.time() + s
         while time.time() < fim:
@@ -2096,7 +2140,7 @@ class Casa:
             if self.esperar_cupom_vazio(2.0):
                 return True
         for _ in range(5):
-            if not self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|cancelar|remove|delete|cancel|limpar tudo|remover tudo)$", True):
+            if not self._clicar_no_cupom(r"^(×|✕|x|remover|excluir|remove|delete|limpar tudo|remover tudo)$", True):
                 self._clicar_icone_do_item()
             self._modal_ok_rapido()
             if self.esperar_cupom_vazio(1.5):
@@ -2364,7 +2408,7 @@ class Casa:
 
     def conferir_cupom(self, perna):
         """Lê o cupom e confere seleção, linha e odd (tol 0,05)."""
-        tx = self.texto_cupom()
+        tx = _sem_toast_desfazer(self.texto_cupom())
         if _RX_EXCLUIDO.search(tx):
             return False, "cupom mostra 'Evento excluído' — mercado encerrado, perna morta"
         if _RX_INDISPONIVEL.search(tx):
@@ -2480,6 +2524,7 @@ class Casa:
             return r
         self.fechar_aviso_indisponivel()
         self.mostrar_boletim()
+        self._esperar_toast_desfazer()
         if self.itens_cupom():  # quarentena
             log("%s: cupom sujo antes de montar — limpando primeiro" % self.rotulo)
             if not self.limpar_cupom():
@@ -2528,7 +2573,7 @@ class Casa:
                 ok, mot = False, "a PS marcou a seleção como indisponível (aposta mínima maior que a máxima)"
                 break
             self.mostrar_boletim()
-            if _RX_EXCLUIDO.search(self.texto_cupom() or ""):
+            if _RX_EXCLUIDO.search(_sem_toast_desfazer(self.texto_cupom())):
                 ok, mot = False, "cupom mostra 'Evento excluído' — mercado encerrado, perna morta"
                 break
             if self.itens_cupom():

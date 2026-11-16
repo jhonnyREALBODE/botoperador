@@ -209,16 +209,31 @@ def test_evento_excluido_reprova_perna(casas):
     perna = {"tipo": "total", "periodo": "q1", "lado": "abaixo", "linha": 54.5, "odd": 2.20,
              "_mid": alvo["mid"], "_src": alvo["seg"], "stake": 20.0, "aba": ""}
     r = c1.executar(c1.montar, perna, TIMES)
-    assert not r["ok"] and "Evento excluído" in r["motivo"]
-    assert c1.executar(c1.itens_cupom) == []  # saiu pelo "Cancelar"
+    assert not r["ok"], r  # mercado morto: a perna não monta
+    assert c1.executar(c1.itens_cupom) == []
+    assert not c1.executar(c1._eval, "() => window.__cancelou || 0")  # NUNCA clicou 'Cancelar'
 
 
-def test_cupom_preso_evento_excluido_sai_pelo_cancelar(casas):
+def test_aviso_evento_excluido_nao_e_selecao_e_nunca_clica_cancelar(casas):
+    """Print 15/11 21:1x: o 'Cancelar' do aviso devolvia a seleção — selecionava e excluía sem parar."""
     servidor.ESTADO["cupom_preso"] = True
     c1, _ = ir_jogo(casas)
     recarregar(c1)
-    assert c1.executar(c1.itens_cupom)
+    assert c1.executar(c1.itens_cupom) == []          # aviso de desfazer não é seleção
     assert c1.executar(c1.limpar_cupom) is True
+    assert c1.executar(c1._esperar_toast_desfazer) is True   # some sozinho
+    assert not c1.executar(c1._eval, "() => window.__cancelou || 0")
+    servidor.ESTADO.clear()
+
+
+def test_aviso_evento_excluido_preso_sai_pela_lixeira(casas):
+    servidor.ESTADO["cupom_preso"] = True
+    servidor.ESTADO["toast_preso"] = True
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
+    assert c1.executar(c1._esperar_toast_desfazer, 2.0) is True
+    assert not c1.executar(c1._eval, "() => window.__cancelou || 0")
+    servidor.ESTADO.clear()
 
 
 def test_carimbo_morto_relê_por_identidade(casas):

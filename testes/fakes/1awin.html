@@ -21,8 +21,12 @@ function renderCupom() {
   }
   const d = document.createElement('div'); d.className = '_card_c7'; d.setAttribute('data-scope', 'CouponCard');
   if (sel.morto) {
-    d.innerHTML = '<div>' + sel.jogo + '</div><div>Evento excluído</div><button class="_b_m1">Cancelar</button>';
-    d.querySelector('button').onclick = () => { sel = null; renderCupom(); };
+    // 1aWin real (print 15/11 21:1x): '5 · Evento excluído · Cancelar' — some sozinho em 5s;
+    // 'Cancelar' DEVOLVE a seleção ao cupom (era o laço 'seleciona e exclui sem parar')
+    d.innerHTML = '<span class="_cd_t1">5</span><div>Evento excluído</div><button class="_b_m1">Cancelar</button>';
+    d.querySelector('button').onclick = () => { window.__cancelou = (window.__cancelou || 0) + 1;
+      sel = {jogo: sel.jogo, mk: 'Totais (inc OT)', rot: 'Acima De 150.5', odd: '1.90'}; renderCupom(); };
+    const quem = sel; setTimeout(() => { if (sel === quem) { sel = null; renderCupom(); } }, ESTADO.toast_preso ? 600000 : 5000);
     s.appendChild(d);
     return;
   }
