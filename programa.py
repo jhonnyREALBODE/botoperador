@@ -118,7 +118,7 @@ DEFAULTS = {
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
-    "perda_max_por_jogo_brl": 15.0,    # pior caso da CARTEIRA inteira do jogo (todas as entradas + coberturas)
+    "perda_max_por_jogo_brl": 80.0,    # pior caso da CARTEIRA inteira do jogo (todas as entradas + coberturas)
     "pausa_ps_indisponivel_s": 45,
     "pausa_ps_periodo_indisponivel_s": 180,
     "pos_monitorar": True,
@@ -128,9 +128,11 @@ DEFAULTS = {
     "pos_max_coberturas": 3,          # por posição
     "pos_max_por_cobertura_brl": 40.0,
     "pos_max_total_coberturas_brl": 80.0,
-    "pos_perda_max_total_brl": 15.0,  # pior caso da posição inteira não pode passar disso
-    "pos_ev_min_brl": 0.0,            # valor esperado não pode cair
-    "pos_reducao_risco_min": 0.05,    # chance de prejuízo tem que cair pelo menos 5 pontos percentuais
+    "pos_perda_max_total_brl": 80.0,  # pior caso da carteira inteira (sequência manual 15/11 chegou a −76)
+    "pos_stake_1w_brl": 30.0,         # aposta avulsa na 1aWin (na PS é a perna mínima, €5)
+    "pos_exigir_ev": False,           # true = só entra se o valor esperado não cair (antes travava tudo)
+    "pos_ev_min_brl": 0.0,            # (só com pos_exigir_ev)
+    "pos_reducao_risco_min": 0.05,    # (só com pos_exigir_ev)
     "pos_cooldown_s": 20,
     "pos_stake_min_1w_brl": 5.0,
     "pos_duracao_max_min": 150,
@@ -1004,48 +1006,69 @@ def over_original(pos):
     return ov[0]["linha"] if ov else None
 
 
+def under_original(pos):
+    un = [p for p in pos["pernas"] if p.get("origem") == "entrada" and p["lado"] == "abaixo"]
+    return un[0]["linha"] if un else None
+
+
 def avaliar_cobertura(pos, ofertas_por_casa, modelo, cfg):
-    """Procura UM Under novo (mesmo mercado/período) que melhore a posição INTEIRA.
-    Filtro obrigatório: linha_under − linha_over_original ≥ pos_dist_min_under.
+    """Procura UMA aposta avulsa (mesmo mercado/período) que AMPLIE A JANELA da carteira inteira
+    (sequência manual do operador 15–16/11: Under 229.5 sozinho abriu 227–229; Under 236.5 abriu até 236).
+    Critério: cria totais NOVOS com Over e Under ganhando juntos + pior caso da carteira dentro do limite.
+    Distância (regra do operador): Under ≥ pos_dist_min_under acima do Over ORIGINAL; Over (espelho) ≥ essa
+    distância abaixo do Under original. EV e chance de prejuízo são MOSTRADOS, não travam (pos_exigir_ev liga).
     Devolve (melhor_candidato | None, lista_de_avaliados_para_o_painel)."""
-    ref = over_original(pos)
-    if ref is None or modelo is None:
+    ref_ov, ref_un = over_original(pos), under_original(pos)
+    if ref_ov is None and ref_un is None:
         return None, []
     dist_min = float(cfg.get("pos_dist_min_under", 4.0))
     pernas = pos["pernas"]
-    base = resumo_posicao(pernas, modelo)
+    base = resumo_posicao(pernas, modelo) if modelo else None
     gasto_cob = sum(p["stake"] for p in pernas if p.get("origem") == "cobertura")
     resta = cfg["pos_max_total_coberturas_brl"] - gasto_cob
     ja = {(p["casa"], p["lado"], round(p["linha"], 3)) for p in pernas}
-    avaliados, melhor = [], None
+    cob_atual = cobertura_2g(pernas)
+    topo = max(cob_atual) if cob_atual else None
+    fundo = min(cob_atual) if cob_atual else None
+    lim = min(float(cfg.get("pos_perda_max_total_brl", 80.0)), float(cfg.get("perda_max_por_jogo_brl", 80.0)))
+    avaliados, melhor, chave_melhor = [], None, None
     for casa, ofs in ofertas_por_casa.items():
         for o in ofs or []:
-            if o.get("tipo") != "total" or o.get("periodo") != pos["periodo"] or o.get("lado") != "abaixo":
+            if o.get("tipo") != "total" or o.get("periodo") != pos["periodo"]:
                 continue
-            if o["linha"] - ref < dist_min - 1e-9:
-                continue  # filtro dos 4 pontos
-            if (casa, "abaixo", round(o["linha"], 3)) in ja:
-                continue  # nada de repetir a mesma aposta
-            if casa == CASA_PS:
-                grade = [round(e * cfg["cambio_brl_eur"], 2) for e in (5.0, 6.0, 7.5, 10.0)]
+            if o["lado"] == "abaixo":
+                if ref_ov is None or o["linha"] - ref_ov < dist_min - 1e-9:
+                    continue  # filtro dos 4 pontos (Under)
+                dist = o["linha"] - ref_ov
             else:
-                mn = cfg.get("pos_stake_min_1w_brl", 5.0)
-                grade = [round(mn + 5 * i, 2) for i in range(0, 9)]
-            for st in grade:
-                if st > cfg["pos_max_por_cobertura_brl"] + 1e-9 or st > resta + 1e-9:
-                    continue
-                nova = dict(o, casa=casa, stake=st, origem="cobertura")
-                r = resumo_posicao(pernas + [nova], modelo)
-                av = avaliar_nova_entrada(pernas, [nova], cfg)  # operador 16/11: só vale se criar totais novos com 2+ greens
-                r["novos_totais"], r["piorou_em"] = av["novos_totais"], av["piorou_em"]
-                ok = (av["ok"] and r["pior"] >= -cfg["pos_perda_max_total_brl"] - 1e-9
-                      and r["ev"] - base["ev"] >= cfg["pos_ev_min_brl"] - 1e-9
+                if ref_un is None or ref_un - o["linha"] < dist_min - 1e-9:
+                    continue  # espelho para o Over
+                dist = ref_un - o["linha"]
+            if (casa, o["lado"], round(o["linha"], 3)) in ja:
+                continue  # nada de repetir a mesma aposta
+            st = round(cfg["perna_ps_eur"] * cfg["cambio_brl_eur"], 2) if casa == CASA_PS \
+                else float(cfg.get("pos_stake_1w_brl", 30.0))
+            if st > cfg["pos_max_por_cobertura_brl"] + 1e-9 or st > resta + 1e-9:
+                continue
+            nova = dict(o, casa=casa, stake=st, origem="cobertura")
+            av = avaliar_nova_entrada(pernas, [nova], dict(cfg, perda_max_por_jogo_brl=lim))
+            r = resumo_posicao(pernas + [nova], modelo) if modelo else {"pior": av["pior"]}
+            r["novos_totais"], r["piorou_em"] = av["novos_totais"], av["piorou_em"]
+            ok = av["ok"]
+            if ok and cfg.get("pos_exigir_ev") and base and "ev" in r:
+                ok = (r["ev"] - base["ev"] >= cfg["pos_ev_min_brl"] - 1e-9
                       and base["p_preju"] - r["p_preju"] >= cfg["pos_reducao_risco_min"] - 1e-9)
-                cand = {"casa": casa, "linha": o["linha"], "odd": o["odd"], "stake": st, "ok": ok,
-                        "dist": round(o["linha"] - ref, 1), "antes": base, "depois": r, "oferta": o}
-                avaliados.append(cand)
-                if ok and (melhor is None or (r["ev"], -r["p_preju"]) > (melhor["depois"]["ev"], -melhor["depois"]["p_preju"])):
-                    melhor = cand
+            cand = {"casa": casa, "lado": o["lado"], "linha": o["linha"], "odd": o["odd"], "stake": st, "ok": ok,
+                    "dist": round(dist, 1), "antes": base or {}, "depois": r, "oferta": o, "motivo": av["motivo"]}
+            avaliados.append(cand)
+            if ok:
+                # 'de pouco em pouco': primeiro o que CONTINUA a janela sem buraco, depois a odd mais alta (a linha viva)
+                novos = av["novos_totais"]
+                cola = (topo is not None and o["lado"] == "abaixo" and novos and novos[0] == topo + 1) or \
+                       (fundo is not None and o["lado"] == "acima" and novos and novos[-1] == fundo - 1)
+                chave = (1 if cola else 0, o["odd"])
+                if melhor is None or chave > chave_melhor:
+                    melhor, chave_melhor = cand, chave
     return melhor, avaliados
 
 
@@ -4062,16 +4085,21 @@ class GerentePosicoes:
             return
         melhor, avaliados = avaliar_cobertura(pos, ofertas, modelo, cfg)
         with _TRAVA:
-            top = sorted(avaliados, key=lambda c: (-c["depois"].get("ev", -1e9)))[:5]
+            top = sorted(avaliados, key=lambda c: (not c["ok"], -len(c["depois"].get("novos_totais") or []), -c["odd"]))[:5]
             pos["candidatos"] = [{k: v for k, v in c.items() if k != "oferta"} for c in top]
         if not melhor:
             pos["status"] = "monitorando"
             return
-        desc = "Abaixo de %s (%s) @%s R$ %s na %s" % (_fmt_linha(melhor["linha"]), NOME_PERIODO.get(pos["periodo"]),
-                                                     melhor["odd"], _br(melhor["stake"]), NOME_CASA[melhor["casa"]])
-        log("📌 posição %d: cobertura justificada — %s | pior %s → %s | EV %s → %s | P(prejuízo) %.0f%% → %.0f%%" % (
-            pos["id"], desc, _br(melhor["antes"]["pior"]), _br(melhor["depois"]["pior"]), _br(melhor["antes"]["ev"]),
-            _br(melhor["depois"]["ev"]), 100 * melhor["antes"]["p_preju"], 100 * melhor["depois"]["p_preju"]))
+        lado_txt = "Abaixo" if melhor["lado"] == "abaixo" else "Acima"
+        desc = "%s de %s (%s) @%s R$ %s na %s" % (lado_txt, _fmt_linha(melhor["linha"]), NOME_PERIODO.get(pos["periodo"]),
+                                                melhor["odd"], _br(melhor["stake"]), NOME_CASA[melhor["casa"]])
+        dep = melhor["depois"]
+        log("📌 posição %d: aposta avulsa amplia a janela — %s | totais novos com Over e Under: %s | pior caso da carteira "
+            "%s → %s%s%s" % (
+                pos["id"], desc, _txt_totais(dep.get("novos_totais") or []), _br((melhor["antes"] or {}).get("pior", 0)),
+                _br(dep["pior"]),
+                (" | EV %s → %s" % (_br(melhor["antes"]["ev"]), _br(dep["ev"]))) if melhor["antes"].get("ev") is not None and dep.get("ev") is not None else "",
+                (" | ⚠ aumenta a perda em %s" % _txt_totais(dep.get("piorou_em") or [])) if dep.get("piorou_em") else ""))
         if not cfg["modo_teste"] and cfg.get("pos_modo", "auto") == "manual":
             with _TRAVA:
                 pos["pendente"] = dict(melhor, descricao=desc, hora=agora())
@@ -4098,12 +4126,14 @@ class GerentePosicoes:
                 log("📌 posição %d: cobertura não montou — %s" % (pos["id"], m["motivo"]))
                 pos["ultima_cob"] = time.time()
                 return False
+            odd_aceita = None
             if simulada:
                 c.executar(c.na_aba, chave, url, c.desfazer, perna, timeout=40)
                 ok = True
             else:
                 r = c.executar(c.na_aba, chave, url, c.confirmar, perna, timeout=120)
                 ok = r["ok"]
+                odd_aceita = r.get("odd_aceita")
                 if ok is None:
                     with _TRAVA:
                         pos["status"] = "PAUSADA"
@@ -4117,16 +4147,18 @@ class GerentePosicoes:
                     pos["ultima_cob"] = time.time()
                     return False
         with _TRAVA:
-            pos["pernas"].append({"casa": cand["casa"], "tipo": "total", "periodo": pos["periodo"], "lado": "abaixo",
-                                  "linha": cand["linha"], "odd": cand["odd"], "stake": cand["stake"],
+            pos["pernas"].append({"casa": cand["casa"], "tipo": "total", "periodo": pos["periodo"],
+                                  "lado": cand.get("lado", "abaixo"), "linha": cand["linha"],
+                                  "odd": odd_aceita or cand["odd"], "stake": cand["stake"],
                                   "origem": "cobertura", "simulada": simulada, "hora": agora()})
             pos["ultimo_n"] = 1
             atualizar_tabela_pos(pos)
             pos["ultima_cob"] = time.time()
             pos.pop("pendente", None)
             pos["status"] = "monitorando"
-            pos["eventos"].append("%s cobertura %s: Abaixo de %s @%s R$ %s (%s)" % (
-                agora(), "SIMULADA" if simulada else "APOSTADA", _fmt_linha(cand["linha"]), cand["odd"],
+            pos["eventos"].append("%s cobertura %s: %s de %s @%s R$ %s (%s)" % (
+                agora(), "SIMULADA" if simulada else "APOSTADA", "Acima" if cand.get("lado") == "acima" else "Abaixo",
+                _fmt_linha(cand["linha"]), odd_aceita or cand["odd"],
                 _br(cand["stake"]), NOME_CASA[cand["casa"]]))
         self.estado.salvar()
         log("📌 posição %d: cobertura %s" % (pos["id"], "simulada (modo teste)" if simulada else "APOSTADA"))
@@ -4377,7 +4409,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
   const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];
   const bt=(m,t)=>'<button style="margin-left:6px;'+(md==m?'background:#1e8e3e':'background:#555')+'" onclick="post(\'/api/pos_modo/'+m+'\')">'+t+'</button>';
   document.getElementById('posmodo').innerHTML='<div style="margin-bottom:6px">Cobertura: <b class="'+(md=='off'?'no':'ok')+'">'+nome+'</b>'+(d.modo=='TESTE'&&on?' <span class="mut">— modo teste: só SIMULA</span>':'')+bt('auto','Automático')+bt('manual','Manual')+bt('off','Desligar')+
-   '</div><div class="mut" style="margin-bottom:6px">Regras: Under só se ≥ '+pa.pos_dist_min_under+' pts acima do Over original · até '+R(pa.pos_max_por_cobertura_brl)+' por cobertura · '+R(pa.pos_max_total_coberturas_brl)+' no total · pior caso até −'+R(pa.pos_perda_max_total_brl)+' · máx. '+pa.pos_max_coberturas+' coberturas</div>';}
+   '</div><div class="mut" style="margin-bottom:6px">Regras: aposta avulsa só se abrir totais NOVOS na janela (Over e Under ganhando juntos) · Under ≥ '+pa.pos_dist_min_under+' pts acima do Over original (Over: espelho) · até '+R(pa.pos_max_por_cobertura_brl)+' por aposta · '+R(pa.pos_max_total_coberturas_brl)+' no total · pior caso da carteira até −'+R(pa.pos_perda_max_total_brl)+' · máx. '+pa.pos_max_coberturas+' avulsas</div>';}
  document.getElementById('pos').innerHTML=(d.posicoes||[]).map(p=>{const r=p.resumo||{};
   let h='<div style="border-bottom:1px solid var(--ln);padding:6px 0"><b>#'+p.id+' '+esc(p.jogo)+'</b> <span class="mut">('+esc(p.periodo)+')'+(p.simulada?' SIMULADA':'')+' — '+esc(p.status)+(p.atualizada?' · '+p.atualizada:'')+'</span>';
   h+='<div>'+p.pernas.map((l,i)=>'<b>A'+(i+1)+'</b> '+(l.origem=='entrada'?'entrada':l.origem=='reentrada'?'reentrada':'<b>cobertura</b>')+': '+(l.casa=='1awin'?'1aWin':'PS')+' '+(l.lado=='acima'?'Acima':'Abaixo')+' de '+l.linha+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</div>';
@@ -4385,7 +4417,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
    h+='<div style="margin:4px 0">Janela da carteira (2+ greens, Over e Under ganhando juntos): <b class="ok">'+esc(p.cobertura_2g||'—')+'</b></div><div style="overflow-x:auto"><table style="font-size:12px"><tr><th>Total final</th>'+p.pernas.map((l,i)=>'<th>A'+(i+1)+'</th>').join('')+'<th>Greens</th><th>Líquido</th>'+(tem?'<th>antes da última</th>':'')+'</tr>'+
    p.tabela.map(t=>'<tr style="'+(t.cobre&&t.greens>=3?'background:rgba(30,142,62,.35)':t.cobre?'background:rgba(30,142,62,.18)':'')+'"><td>'+t.total+'</td>'+t.res.map(x=>'<td class="'+(x=='G'?'ok':x=='P'?'no':'am')+'">'+({G:'ganha',P:'perde',D:'devolve'}[x])+'</td>').join('')+'<td>'+t.greens+'</td><td class="'+(t.liquido>=0?'ok':'no')+'">'+R(t.liquido)+'</td>'+(tem?'<td class="mut">'+R(t.antes)+(t.piorou?' <b class="no">⚠ piorou</b>':'')+'</td>':'')+'</tr>').join('')+'</table></div>';}
   if(r.pior!=null)h+='<div>pior '+R(r.pior)+' · melhor '+R(r.melhor)+(r.ev!=null?' · EV '+R(r.ev)+' · P(lucro) '+P(100*r.p_lucro,0)+'% · P(prejuízo) '+P(100*r.p_preju,0)+'%':'')+' · lucro se terminar em: '+(r.faixas_lucro||[]).map(f=>f[0]==f[1]?f[0]:f[0]+'–'+f[1]).join(', ')+'</div>';
-  if(p.candidatos&&p.candidatos.length)h+='<div class="mut">candidatos: '+p.candidatos.slice(0,3).map(c=>(c.ok?'✅':'✖')+' Abaixo '+c.linha+' @'+c.odd+' '+R(c.stake)+' (+'+c.dist+' pts) EV '+R(c.depois.ev)+' pior '+R(c.depois.pior)).join(' | ')+'</div>';
+  if(p.candidatos&&p.candidatos.length)h+='<div class="mut">avulsas avaliadas: '+p.candidatos.slice(0,3).map(c=>(c.ok?'✅':'✖')+' '+(c.lado=='acima'?'Acima':'Abaixo')+' '+c.linha+' @'+c.odd+' '+R(c.stake)+' ('+c.dist+' pts) → janela nova: '+((c.depois.novos_totais||[]).length?c.depois.novos_totais[0]+'–'+c.depois.novos_totais[c.depois.novos_totais.length-1]:'nenhuma')+' · pior '+R(c.depois.pior)+(c.ok?'':' <i>('+esc(c.motivo||'')+')</i>')).join(' | ')+'</div>';
   if(p.pendente)h+='<div class="am">Oportunidade: '+esc(p.pendente.descricao)+' <button onclick="post(\'/api/cobertura/'+p.id+'\')">APOSTAR COBERTURA</button></div>';
   return h+'</div>'}).join('')||'Nenhuma posição aberta. Ela abre sozinha logo depois de um middle (confirmado no real, ou testado no modo teste).';
  document.getElementById('sinais').innerHTML=d.sinais.map(s=>'<div>'+s.hora+' '+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+' ('+s.origem+')</span></div>').join('')||'—';

@@ -812,8 +812,8 @@ def test_cobertura_so_quando_a_posicao_inteira_melhora(cfg):
     # todas as pernas entram na conta (nada substitui a entrada)
     res = P.resumo_posicao(pos["pernas"] + [dict(melhor["oferta"], casa="1awin", stake=melhor["stake"])], mod)
     assert res["gasto"] == round(31.0 + 29.5 + melhor["stake"], 2)
-    # odd ruim (EV caindo) não entra
-    melhor2, _ = P.avaliar_cobertura(pos, {"1awin": _ofs(256.5, odd=1.15)}, mod, cfg)
+    # odd ruim (EV caindo): com pos_exigir_ev ligado não entra; desligado (padrão 16/11) é só informação
+    melhor2, _ = P.avaliar_cobertura(pos, {"1awin": _ofs(256.5, odd=1.15)}, mod, dict(cfg, pos_exigir_ev=True))
     assert melhor2 is None
 
 
@@ -964,3 +964,32 @@ def test_odd_fantasma_da_1awin_e_ignorada(cfg):
     cfg2 = dict(cfg, odd_fantasma_margem=None)  # desligado: voltaria a achar o par
     bil2, _ = P.achar_par(w1, ps, SINAL, cfg2)
     assert bil2 is not None
+
+
+def test_pos_monitoramento_repete_a_sequencia_manual_do_operador(cfg):
+    """15–16/11 Sacramento x OKC, na mão: 3 pares (janela 223–226), depois Under 229.5 SOZINHO (abre 227–229)
+    e Under 236.5 SOZINHO (abre 230–236). O jogo terminou entre 227 e 229."""
+    cfg = dict(cfg, modo_teste=True)
+    E = cfg["perna_ps_eur"] * cfg["cambio_brl_eur"]
+    def pr(casa, lado, linha, odd, st, origem):
+        return {"casa": casa, "tipo": "total", "periodo": "jogo", "lado": lado, "linha": linha, "odd": odd, "stake": st,
+                "origem": origem}
+    pos = {"id": 9, "periodo": "jogo", "pernas": [
+        pr("1awin", "acima", 222.5, 1.85, 29.40, "entrada"), pr("ps3838", "abaixo", 224.0, 1.813, E, "entrada"),
+        pr("1awin", "abaixo", 225.5, 1.85, 30.0, "reentrada"), pr("ps3838", "acima", 223.5, 1.90, E, "reentrada"),
+        pr("ps3838", "acima", 224.5, 2.04, E, "reentrada"), pr("1awin", "abaixo", 226.5, 1.85, 35.0, "reentrada")]}
+    assert P._txt_totais(P.cobertura_2g(pos["pernas"])) == "223–226"
+    ofs = {"1awin": [oferta("1awin", "total", "jogo", "abaixo", 229.5, 1.85), oferta("1awin", "total", "jogo", "acima", 229.5, 1.85),
+                     oferta("1awin", "total", "jogo", "abaixo", 224.5, 2.40)],  # 224.5: < 4 pts do Over original -> fora
+           "ps3838": []}
+    melhor, avaliados = P.avaliar_cobertura(pos, ofs, None, cfg)
+    assert melhor and melhor["lado"] == "abaixo" and melhor["linha"] == 229.5, avaliados
+    assert melhor["depois"]["novos_totais"] == [227, 228, 229]
+    pos["pernas"].append(pr("1awin", "abaixo", 229.5, 1.85, 37.0, "cobertura"))
+    ofs = {"1awin": [oferta("1awin", "total", "jogo", "abaixo", 236.5, 1.89)], "ps3838": []}
+    melhor, _ = P.avaliar_cobertura(pos, ofs, None, cfg)
+    assert melhor and melhor["depois"]["novos_totais"] == list(range(230, 237))
+    assert melhor["depois"]["piorou_em"]  # acima de 236 essa aposta só perde: o painel avisa
+    apertado = dict(cfg, pos_perda_max_total_brl=40.0)
+    melhor, avs = P.avaliar_cobertura(pos, ofs, None, apertado)
+    assert melhor is None and "limite" in avs[0]["motivo"]
