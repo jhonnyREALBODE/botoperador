@@ -117,6 +117,7 @@ DEFAULTS = {
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
+    "max_indisponivel_ps_por_jogo": 3,
     "pos_monitorar": True,
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_dist_min_under": 4.0,        # FILTRO: linha do Under novo − linha do Over ORIGINAL ≥ 4
@@ -627,6 +628,25 @@ def placares_dupla(acima, abaixo):
     """Placares (inteiros) em que as DUAS pernas de um par de totais ganham: La < k < Lb."""
     la, lb = acima["linha"], abaixo["linha"]
     return {k for k in range(int(la) + 1, int(lb) + 1) if la < k < lb}
+
+
+def _chave_oferta(o):
+    """Identidade de uma oferta para a geladeira: casa, mercado, período, lado e linha."""
+    return (o["tipo"], o.get("periodo"), o.get("lado"), o.get("time_idx"), round(float(o["linha"]), 2))
+
+
+def _tempo_geladeira(motivo):
+    """Quanto tempo uma oferta que falhou fica de fora antes de tentar de novo (s). 0 = não gela.
+    Odd mudou não gela: a próxima leitura já traz a odd nova e a conta é refeita."""
+    m = (motivo or "").lower()
+    if not m:
+        return 0
+    if "mínima maior que a máxima" in m or "indispon" in m:
+        return 300   # PS não aceita o valor mínimo nessa linha: insistir é perder tempo
+    if "não recebeu a seleção" in m or "cadeado" in m or "limpou o cupom sem aceitar" in m \
+            or "sumiu do cupom" in m or "0 seleções" in m or "exclu" in m:
+        return 60    # linha travada/suspensa (a 1aWin atrasada costuma travar bem nessas odds)
+    return 0
 
 
 def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None):
@@ -3212,7 +3232,16 @@ class Operador:
         ultimo_motivo = None
         entradas = []   # [(periodo, tipo, conjunto de placares de dupla | linhas)] já feitas neste jogo
 
+        geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
+        indisp_ps = set()  # pernas PS diferentes que a PS recusou com 'mínima maior que a máxima'
+
         def excluir(a, b, jan):
+            agora_s = time.time()
+            for casa_n, o in ((CASA_1W, a), (CASA_PS, b)):
+                if geladeira.get((casa_n, _chave_oferta(o)), 0) > agora_s:
+                    return True
+            if not entradas:
+                return False
             if a["tipo"] == "total":
                 ac, ab = (a, b) if a["lado"] == "acima" else (b, a)
                 novo = placares_dupla(ac, ab)
@@ -3286,7 +3315,7 @@ class Operador:
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, self.cfg, raiox,
-                                            excluir=excluir if entradas else None)
+                                            excluir=excluir)
                     self.estado.set_calc(raiox, rodada)
                     if bil:
                         log("✔ PAR: %s @%s × %s @%s | janela %s | custo %s%%" % (
@@ -3322,6 +3351,23 @@ class Operador:
                             self.estado.set_monitor("%s: %s — monitoramento encerrado" % (sinal["jogo"], st))
                             log("■ %s: rodada %s — monitoramento encerrado" % (sinal["jogo"], st))
                             return
+                        for (casa_n, perna) in ((CASA_1W, bil["pernas"][0]), (CASA_PS, bil["pernas"][1])):
+                            mot_f = (bil.get("_falhas") or {}).get(casa_n)
+                            seg = _tempo_geladeira(mot_f)
+                            if seg:
+                                geladeira[(casa_n, _chave_oferta(perna))] = time.time() + seg
+                                log("🧊 %s: %s fica %ds de fora (%s)" % (
+                                    NOME_CASA[casa_n], perna["selecao"], seg, mot_f[:70]))
+                        if "mínima maior que a máxima" in ((bil.get("_falhas") or {}).get(CASA_PS) or ""):
+                            indisp_ps.add(_chave_oferta(bil["pernas"][1]))
+                            lim_ind = int(self.cfg.get("max_indisponivel_ps_por_jogo", 3))
+                            if len(indisp_ps) >= lim_ind:
+                                msg = ("a PS recusou %d linhas diferentes deste jogo com 'aposta mínima maior que a "
+                                       "máxima' — ela não aceita €%s aqui (limite da PS para você neste jogo). "
+                                       "Larguei o jogo; mande outro sinal" % (len(indisp_ps), _br(self.cfg["perna_ps_eur"])))
+                                log("■ %s: %s" % (sinal["jogo"], msg))
+                                self.estado.set_monitor("%s: abandonado — %s" % (sinal["jogo"], msg))
+                                return
                         log("montagem falhou — o monitoramento reassume %s" % sinal["jogo"])
                         ultimo_motivo = None
                     elif motivo != ultimo_motivo or rodada % 3 == 0:
@@ -3391,6 +3437,7 @@ class Operador:
             detalhe = {NOME_CASA[n]: ("montou" if r["ok"] else r["motivo"]) for n, r in res.items()}
             for n, r in res.items():
                 log("%s: %s" % (NOME_CASA[n], "montou %s" % ("1aWin" if n == CASA_1W else "PS") if r["ok"] else "FALHOU — " + r["motivo"]))
+            bil["_falhas"] = {n: r["motivo"] for n, r in res.items() if not r["ok"]}
             if not all(r["ok"] for r in res.values()):
                 self._desfazer(res, bil, fotos, detalhe)
                 self.estado.atualizar(bil, status="falhou", detalhe=detalhe, fotos=fotos)

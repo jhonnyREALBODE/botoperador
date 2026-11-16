@@ -865,3 +865,16 @@ def test_placares_dupla_e_reentrada(cfg):
     a2 = oferta("1awin", "total", "jogo", "abaixo", 153.5, 2.1)
     b2 = oferta("ps3838", "total", "jogo", "acima", 151.5, 2.1)
     assert P.achar_par([a2], [b2], SINAL, cfg, excluir=exc)[0] is not None       # aumenta a faixa: 153
+
+
+def test_geladeira_de_ofertas_que_falharam():
+    """Print 15/11 20:45–20:50: Toronto x Knicks tentou o mesmo par 6x seguidas. Quem falhou fica de fora um tempo."""
+    assert P._tempo_geladeira("a PS marcou a seleção como indisponível (aposta mínima maior que a máxima)") == 300
+    assert P._tempo_geladeira("cupom não recebeu a seleção") == 60
+    assert P._tempo_geladeira("montou, mas na conferência final: cupom com 0 seleções (esperado 1)") == 60
+    assert P._tempo_geladeira("a casa avisou no cupom que a odd mudou (Odds have changed from 2.010 to 1.757)") == 0
+    assert P._tempo_geladeira("montou e desfez (cupom vazio)") == 0
+    assert P._tempo_geladeira(None) == 0
+    a = {"tipo": "total", "periodo": "q2", "lado": "abaixo", "linha": 54.5}
+    perna = dict(a, casa="1aWin", odd=2.38, stake=21.65, selecao="Abaixo de 54.5")
+    assert P._chave_oferta(a) == P._chave_oferta(perna)  # oferta da leitura == perna do bilhete

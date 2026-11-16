@@ -515,6 +515,7 @@ def test_ps_selecao_indisponivel_fecha_janela_e_falha(casas):
     r = cps.executar(cps.montar, dict(o, stake=31.0), TIMES)
     assert not r["ok"] and "indisponível" in r["motivo"]
     assert "Seleção Indisponível" not in cps.executar(cps.texto)  # janela fechada: a página volta a funcionar
+    servidor.ESTADO.pop("indisponivel", None)
 
 
 def test_1awin_desfaz_pela_lixeira_quando_o_x_nao_funciona(casas):
@@ -789,15 +790,35 @@ def test_monitoramento_pos_entrada_cobertura_simulada(casas, cfgc):
 
 def test_reentrada_continua_no_jogo_e_nao_repete_o_mesmo_par(casas, cfgc):
     """Parceiro 15/11: depois do middle, continua no jogo; o MESMO par não reentra (não aumenta a faixa)."""
+    servidor.ESTADO.clear()
     cfgc["reentrar_mesmo_jogo"] = True
     cfgc["monitor_intervalo_s"] = 0.5
     limpar_cupons(casas)
     est = P.Estado(cfgc)
     op = P.Operador(cfgc, est, casas)
     op.novo_sinal(dict(SINAL, id="reentra"))
-    assert esperar(lambda: est.bilhetes and est.bilhetes[-1]["status"] == "testado", 90)
+    assert esperar(lambda: est.bilhetes and est.bilhetes[-1]["status"] == "testado", 90), [(b["status"], b.get("detalhe")) for b in est.bilhetes]
     assert esperar(lambda: "procurando reentrada" in est.monitor, 30), est.monitor
     time.sleep(4)
     assert len([b for b in est.bilhetes if b["status"] == "testado"]) == 1  # mesmo par não repete
     op._atual[1].set()  # encerra o monitoramento
     time.sleep(1.5)
+
+
+def test_par_que_falhou_vai_pra_geladeira_e_nao_repete(casas, cfgc):
+    """Print 15/11 20:45–20:50 (Toronto x Knicks): a PS dizia 'indisponível' e o programa repetia o MESMO par."""
+    servidor.ESTADO["indisponivel"] = True
+    cfgc["monitor_intervalo_s"] = 0.5
+    limpar_cupons(casas)
+    est = P.Estado(cfgc)
+    op = P.Operador(cfgc, est, casas)
+    op.novo_sinal(dict(SINAL, id="geladeira"))
+    assert esperar(lambda: "abandonado" in est.monitor, 240), est.monitor  # 3 linhas recusadas -> larga o jogo
+    assert "mínima maior que a máxima" in est.monitor
+    op._atual[1].set()
+    time.sleep(1.5)
+    falhos = [b for b in est.bilhetes if b["status"] == "falhou"]
+    pernas_ps = [b["pernas"][1]["selecao"] for b in falhos]
+    assert len(pernas_ps) == len(set(pernas_ps)), pernas_ps  # nenhuma perna PS gelada foi tentada de novo
+    servidor.ESTADO.pop("indisponivel", None)
+    limpar_cupons(casas)
