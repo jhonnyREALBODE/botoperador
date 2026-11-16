@@ -804,6 +804,7 @@ def test_nunca_mistura_periodo_nem_over_nem_repete(cfg):
 
 
 def test_cobertura_so_quando_a_posicao_inteira_melhora(cfg):
+    cfg = dict(cfg, pos_perda_max_total_brl=40.0, perda_max_por_jogo_brl=40.0)
     pos = _pos(250.5, 252.5)
     mod = (251.5, 9.0)
     melhor, av = P.avaliar_cobertura(pos, {"1awin": _ofs(256.5, odd=1.95)}, mod, cfg)
@@ -969,7 +970,7 @@ def test_odd_fantasma_da_1awin_e_ignorada(cfg):
 def test_pos_monitoramento_repete_a_sequencia_manual_do_operador(cfg):
     """15–16/11 Sacramento x OKC, na mão: 3 pares (janela 223–226), depois Under 229.5 SOZINHO (abre 227–229)
     e Under 236.5 SOZINHO (abre 230–236). O jogo terminou entre 227 e 229."""
-    cfg = dict(cfg, modo_teste=True)
+    cfg = dict(cfg, modo_teste=True, pos_perda_max_total_brl=80.0, perda_max_por_jogo_brl=80.0)  # a lógica da sequência
     E = cfg["perna_ps_eur"] * cfg["cambio_brl_eur"]
     def pr(casa, lado, linha, odd, st, origem):
         return {"casa": casa, "tipo": "total", "periodo": "jogo", "lado": lado, "linha": linha, "odd": odd, "stake": st,
@@ -993,3 +994,16 @@ def test_pos_monitoramento_repete_a_sequencia_manual_do_operador(cfg):
     apertado = dict(cfg, pos_perda_max_total_brl=40.0)
     melhor, avs = P.avaliar_cobertura(pos, ofs, None, apertado)
     assert melhor is None and "limite" in avs[0]["motivo"]
+
+
+
+def test_limite_padrao_mantem_o_formato_do_operador(cfg):
+    """Alvo 16/11: pontas ≈ −R$ 10, meio largo ≈ +R$ 45 (TIPO esses valores). Com o padrão (R$ 15), um Under
+    sozinho que deixaria uma ponta em −R$ 40+ NÃO entra; pares que somam janela entram."""
+    E = cfg["perna_ps_eur"] * cfg["cambio_brl_eur"]
+    cart = [dict(_p("acima", 155.5, 1.85, 33.5), casa="1awin"), dict(_p("abaixo", 156.5, 2.0, E), casa="ps3838")]
+    par = [dict(_p("acima", 157.5, 1.85, 33.5), casa="1awin"), dict(_p("abaixo", 159.5, 2.0, E), casa="ps3838")]
+    assert P.avaliar_nova_entrada(cart, par, cfg)["ok"]
+    sozinho = [dict(_p("abaixo", 166.5, 1.85, 30.0), casa="1awin")]
+    av = P.avaliar_nova_entrada(cart + par, sozinho, cfg)
+    assert not av["ok"] and "limite" in av["motivo"]
