@@ -1905,6 +1905,9 @@ class Casa:
         PS: abre a aba do boletim antes — boletim escondido NÃO é boletim vazio."""
         self.mostrar_boletim()
         itens = self._eval(JS_ITENS_CUPOM, [self.sel_cupom, self.sel_item]) or []
+        # aviso de desfazer da 1aWin ('5 · Evento excluído · Cancelar') pode vir no próprio cartão: não é seleção
+        itens = [i for i in itens if not (_RX_TOAST_DESFAZER.search(i or "") and len(i) < 80
+                                          and not re.search(r"\b(acima|abaixo|mais|menos|over|under)\b", i, re.I))]
         if itens:
             return itens
         # 'vazio' só com a PROVA da casa ('Selecione um resultado…' / 'Nenhuma aposta selecionada');

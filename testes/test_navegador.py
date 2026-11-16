@@ -867,11 +867,14 @@ def test_par_que_falhou_vai_pra_geladeira_e_nao_repete(casas, cfgc):
     cfgc["monitor_intervalo_s"] = 0.5
     cfgc["pausa_ps_indisponivel_s"] = 3
     cfgc["pausa_ps_periodo_indisponivel_s"] = 3
+    for c in casas.values():
+        recarregar(c)  # o site falso só lê as chaves de ESTADO ao carregar a página
     limpar_cupons(casas)
     est = P.Estado(cfgc)
     op = P.Operador(cfgc, est, casas)
     op.novo_sinal(dict(SINAL, id="geladeira"))
-    assert esperar(lambda: len([b for b in est.bilhetes if b["status"] == "falhou"]) >= 2, 150)
+    assert esperar(lambda: len([b for b in est.bilhetes if b["status"] == "falhou"]) >= 2, 150), (
+        est.monitor, [(b["status"], b.get("detalhe")) for b in est.bilhetes], P._LOG_MEM[-12:])
     op._atual[1].set()
     time.sleep(1.5)
     falhos = [b for b in est.bilhetes if b["status"] == "falhou"]
