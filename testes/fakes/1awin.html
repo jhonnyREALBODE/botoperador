@@ -46,7 +46,9 @@ function renderCupom() {
     if (ESTADO.saldo_noutro_lugar) {  // 1aWin real 15/11 20:46: saldo novo aparece em OUTRO lugar; o #saldo fica velho
       const v = parseFloat(f.querySelector('input').value.replace(',', '.'));
       const d = document.createElement('div'); d.textContent = 'BRL ' + (120 - v).toFixed(2).replace('.', ',');
-      document.body.appendChild(d); sel = null; renderCupom(); return; }
+      document.body.appendChild(d); sel = null; renderCupom();
+      if (ESTADO.saldo_volta) setTimeout(() => d.remove(), 3000);  // 20:46 conferido: a casa devolveu
+      return; }
     if (ESTADO.so_saldo) { const v = parseFloat(f.querySelector('input').value.replace(',', '.')); document.getElementById('saldo').textContent = 'BRL ' + (120 - v).toFixed(2).replace('.', ','); sel = null; renderCupom(); return; }
     if (ESTADO.recibo) { document.getElementById('slip').innerHTML = '<div class="_ok_r1"><p>Aposta aceita</p><a>Ir para o histórico</a></div><div data-scope="CouponCard"><span>Aberto • Simples</span><span>1.4</span><div>' + sel.mk + ', ' + sel.rot + '</div></div>'; return; }
     if (!ESTADO.confirma_mudo) document.getElementById('msg').textContent = 'Aposta aceita'; };

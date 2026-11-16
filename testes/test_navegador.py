@@ -641,6 +641,26 @@ def test_1awin_saldo_descontado_noutro_lugar_e_incerto(casas, cfgc):
     limpar_cupons(casas)
 
 
+def test_1awin_saldo_cai_e_volta_e_falhou(casas, cfgc):
+    """15/11 20:46 conferido pelo operador: o saldo caiu durante o processamento, voltou, e a aposta NÃO existia."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["saldo_noutro_lugar"] = True
+    servidor.ESTADO["saldo_volta"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "falhou", bil["detalhe"]
+    assert casas[P.CASA_PS].executar(casas[P.CASA_PS].itens_cupom) == []
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+
+
 def test_1awin_saldo_sozinho_nao_prova(casas, cfgc):
     """15/11 17:02: o saldo caiu e a aposta NÃO existia. Saldo sozinho não confirma: não aposta a PS."""
     cfgc["modo_teste"] = False

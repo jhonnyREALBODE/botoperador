@@ -2722,6 +2722,15 @@ class Casa:
                 if desconto_visto:
                     break
         if desconto_visto:
+            # 1aWin conferido pelo operador (20:46): o saldo cai durante o processamento e VOLTA quando a casa
+            # não aceita. Se o valor descontado ainda está na página agora, não sei: INCERTO. Se voltou, nada entrou.
+            ainda = any(abs((saldo0 - valor) - v) < 0.05
+                        for l in self.texto().splitlines() if re.search(r"BRL|R\$|EUR|€", l) for v in _numeros(l))
+            if not ainda:
+                log("%s: o saldo caiu durante o processamento ('%s') e voltou para %s — a casa não aceitou" % (
+                    self.rotulo, desconto_visto, _br(saldo0)))
+                desconto_visto = None
+        if desconto_visto:
             self.dump("incerto")
             return {"ok": None, "foto": self.foto("incerto"),
                     "motivo": "INCERTO — sem mensagem de aceita, mas a casa mostrou saldo descontado da stake ('%s'; "
