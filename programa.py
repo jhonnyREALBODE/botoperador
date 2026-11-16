@@ -1958,13 +1958,28 @@ class Casa:
             self.base = nova
 
     # -------------------------------------------------- cupom / boletim
-    def fechar_aviso_indisponivel(self):
+    def _aviso_indisponivel_rapido(self):
+        """Checagem LEVE (só janelas/diálogos visíveis, não a página inteira da PS, que é enorme)."""
+        try:
+            return bool(self._eval(r"""() => {
+                const RX = /sele[cç][aã]o indispon[ií]vel|selection (is )?(currently )?unavailable|indispon[ií]vel para apostas|aposta m[ií]nima [eé] maior/i;
+                for (const e of document.querySelectorAll('[role=dialog], [class*="modal" i], [class*="popup" i], [class*="dialog" i], [class*="alert" i]')) {
+                    const r = e.getBoundingClientRect();
+                    if (r.width > 0 && r.height > 0 && RX.test(e.innerText || '')) return true;
+                }
+                return false; }"""))
+        except Exception:
+            return False
+
+    def fechar_aviso_indisponivel(self, tx=None, rapido=False):
         """PS: janela 'Seleção Indisponível — a aposta mínima é maior que a aposta máxima'.
         Ela BLOQUEIA a página até alguém clicar OK. Fecha e devolve o texto (ou '')."""
         if self.nome != CASA_PS:
             return ""
+        if rapido and not self._aviso_indisponivel_rapido():
+            return ""
         try:
-            tx = self.texto()
+            tx = tx if (tx is not None and not rapido) else self.texto()
             m = _RX_INDISPONIVEL.search(tx)
             if not m:
                 return ""
@@ -2642,7 +2657,7 @@ class Casa:
         if self.nome == CASA_PS and not ps_e_o_jogo(tx, times):
             r["motivo"] = "PS não está no matchup deste jogo (a página é lista) — montagem abortada"
             return r
-        self.fechar_aviso_indisponivel()
+        self.fechar_aviso_indisponivel(tx)
         self.mostrar_boletim()
         self._esperar_toast_desfazer()
         if self.itens_cupom():  # quarentena
@@ -2687,12 +2702,17 @@ class Casa:
         ok, mot = False, "cupom não recebeu a seleção"
         # a PS demora mais para jogar linha alternativa/quarto no boletim (spinner) — caso 14/11 16:05
         fim = time.time() + (7 if self.nome == CASA_PS else 4)
+        voltas = 0
         while time.time() < fim:
-            self.page.wait_for_timeout(250)
-            if self.fechar_aviso_indisponivel():
+            self.page.wait_for_timeout(150)
+            voltas += 1
+            # 16/11: aqui relia a página INTEIRA da PS a cada volta só para achar a janela de aviso (lento)
+            # a classe da janela real não é garantida: a cada 4 voltas (~0,6s) confere também pela página inteira
+            if self.fechar_aviso_indisponivel(rapido=(voltas % 4 != 0)):
                 ok, mot = False, "a PS marcou a seleção como indisponível (aposta mínima maior que a máxima)"
                 break
-            self.mostrar_boletim()
+            if voltas == 1 or voltas % 6 == 0:
+                self.mostrar_boletim()
             if _RX_EXCLUIDO.search(_sem_toast_desfazer(self.texto_cupom())):
                 ok, mot = False, "cupom mostra 'Evento excluído' — mercado encerrado, perna morta"
                 break
@@ -2718,8 +2738,10 @@ class Casa:
                 r["motivo"] += " — e o cupom NÃO esvaziou: limpe à mão"
                 log("‼ %s: cupom NÃO esvaziou depois da falha — limpe à mão" % self.rotulo)
             return r
+        log("%s: seleção conferida no cupom em %.1fs" % (self.rotulo, time.time() - self._t_montar))
         valor = perna["stake"] / self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else perna["stake"]
         ok, mot = self.preencher_stake(round(valor, 2))
+        log("%s: stake digitada em %.1fs" % (self.rotulo, time.time() - self._t_montar))
         if ok:
             # reconfere DEPOIS da stake: a seleção tem que continuar lá, a mesma
             self.page.wait_for_timeout(300)
