@@ -117,6 +117,7 @@ DEFAULTS = {
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
+    "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 15.0,    # pior caso da CARTEIRA inteira do jogo (todas as entradas + coberturas)
     "pausa_ps_indisponivel_s": 45,
     "pausa_ps_periodo_indisponivel_s": 180,
@@ -674,6 +675,35 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None):
         return out
 
     e1, e2 = filtra(esc_1w), filtra(esc_ps)
+    # ODD FANTASMA (log 16/11 09:09): a 1aWin mostrava Abaixo 195.5 a 2.1 com a PS em 193 (justo ≈ 1.65) — era
+    # tela velha; aceitou a 1.61. Odd da 1aWin muito ACIMA do justo calculado pela escada da PS = não confio.
+    margem = cfg.get("odd_fantasma_margem", 0.15)
+    modelos = {}
+    fantasmas = 0
+
+    def fantasma(o):
+        if margem is None or o["tipo"] != "total":
+            return False
+        per = o["periodo"]
+        if per not in modelos:
+            modelos[per] = modelo_total(esc_ps, per)
+        md = modelos[per]
+        if not md:
+            return False
+        d = _ND(md[0], md[1])
+        L = o["linha"]
+        p = (1 - d.cdf(L)) if o["lado"] == "acima" else d.cdf(L)
+        if p <= 0.02:
+            return True
+        return o["odd"] > (1.0 / p) * (1 + float(margem)) + 1e-9
+
+    e1_ok = []
+    for a in e1:
+        if fantasma(a):
+            fantasmas += 1
+        else:
+            e1_ok.append(a)
+    e1 = e1_ok
     for a in e1:
         for b in e2:
             if a["tipo"] != b["tipo"] or a["periodo"] != b["periodo"]:
@@ -724,14 +754,15 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None):
                           "suspeitos": suspeitos})
         return bil, None
 
-    motivo = "sem par: %d combinações; melhor janela %s; menor custo com janela ok %s; %d suspeito(s) descartado(s)%s" % (
+    motivo = "sem par: %d combinações; melhor janela %s; menor custo com janela ok %s; %d suspeito(s) descartado(s)%s%s" % (
         len(candidatos),
         _br(melhor_janela, 1) if melhor_janela is not None else "—",
         (_br(menor_custo_ok, 2) + "%") if menor_custo_ok is not None else "—",
-        suspeitos, restricao)
+        suspeitos, (" ; %d odd(s) fantasma da 1aWin ignorada(s)" % fantasmas) if fantasmas else "", restricao)
     if not e1 or not e2:
-        motivo = "sem par: escada vazia em %s%s" % (
-            " e ".join(n for n, e in ((NOME_CASA[CASA_1W], e1), (NOME_CASA[CASA_PS], e2)) if not e), restricao)
+        motivo = "sem par: escada vazia em %s%s%s" % (
+            " e ".join(n for n, e in ((NOME_CASA[CASA_1W], e1), (NOME_CASA[CASA_PS], e2)) if not e),
+            (" (%d odd(s) fantasma da 1aWin ignorada(s))" % fantasmas) if fantasmas else "", restricao)
     if raiox is not None:
         quase = [x for x in candidatos if x[1] >= cfg["janela_min"]]
         quase.sort(key=lambda x: (x[2]["custo"], -x[1]))
@@ -2869,7 +2900,9 @@ class Casa:
                 log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:12])))
                 self._logou_novas = True
             if _RX_SUCESSO.search(tx):
-                return {"ok": True, "motivo": "", "foto": self.foto("confirmado")}
+                # log 16/11 09:10: conferido a 2.1, a 1aWin ACEITOU a 1.61 (aceita mudança de odd sozinha). Lê a odd do
+                # recibo e avisa — a aposta já existe, não dá para desfazer; quem decide o cash out é o operador.
+                return {"ok": True, "motivo": "", "foto": self.foto("confirmado"), "odd_aceita": self._odd_do_cupom()}
             # PS ao vivo: 'Aguarde… sendo processada… Aguardando -> Pendente' — o saldo JÁ desconta e
             # a aposta ainda pode ser rejeitada depois (15/11 15:57). Espera o resultado final.
             if re.search(r"sendo processada|aguardando|being processed|pending acceptance", tx, re.I):
@@ -3444,7 +3477,8 @@ class Operador:
 
     def _posicao_aberta(self, times, periodo):
         for p in self.estado.posicoes:
-            if p.get("aberta") and p.get("periodo") == periodo and _mesmo_jogo(p.get("times") or ["", ""], times):
+            if p.get("aberta") and p.get("periodo") == periodo and _mesmo_jogo(p.get("times") or ["", ""], times) \
+                    and bool(p.get("simulada")) == bool(self.cfg.get("modo_teste", True)):
                 return p
         return None
 
@@ -3589,7 +3623,7 @@ class Operador:
                         st = self.executar_bilhete(bil)
                         if st in ("testado", "confirmado"):
                             novas = [{"casa": p["casa"], "tipo": p["tipo"], "periodo": p["periodo"], "lado": p.get("lado"),
-                                      "linha": p["linha"], "odd": p.get("odd_viva") or p["odd"], "stake": p["stake"]}
+                                      "linha": p["linha"], "odd": p.get("odd_aceita") or p.get("odd_viva") or p["odd"], "stake": p["stake"]}
                                      for p in bil["pernas"]]
                             if bil["tipo"] == "total":
                                 av = avaliar_nova_entrada(cart_antes, novas, self.cfg)
@@ -3743,6 +3777,15 @@ class Operador:
                 self.estado.atualizar(bil, status="falhou", detalhe=detalhe, fotos=fotos)
                 return "falhou"
             log("1aWin: aposta CONFIRMADA (%s) — confirmando a PS" % (r1["motivo"] or "mensagem da casa"))
+            oa = r1.get("odd_aceita")
+            if oa and oa < p1["odd"] - TOL_ODD_CUPOM - 1e-9:
+                aviso = "‼ a 1aWin ACEITOU a %s (o par foi calculado a %s) — a casa aceitou a odd que caiu. " \
+                        "Confira na 1aWin a opção de aceitar mudanças de cotação (deixe 'só se aumentar')" % (oa, p1["odd"])
+                log("1aWin: " + aviso)
+                with _TRAVA:
+                    bil.setdefault("avisos", []).append(aviso)
+            if oa:
+                p1["odd_aceita"] = oa  # a carteira usa a odd que a casa ACEITOU
             r2 = cps.executar(cps.confirmar, p2, timeout=120)
             fotos.append(r2.get("foto", ""))
             # a 1aWin JÁ está apostada: se a PS recusou (atraso do ao vivo — caso 15/11 15:56,
@@ -3882,7 +3925,7 @@ class GerentePosicoes:
         pernas = []
         for p in bil["pernas"]:
             pernas.append({"casa": p["casa"], "tipo": "total", "periodo": p["periodo"], "lado": p["lado"],
-                           "linha": p["linha"], "odd": p.get("odd_viva") or p["odd"], "stake": p["stake"],
+                           "linha": p["linha"], "odd": p.get("odd_aceita") or p.get("odd_viva") or p["odd"], "stake": p["stake"],
                            "origem": "entrada", "simulada": simulada, "hora": agora()})
         # reentrada no mesmo jogo/período: as pernas novas entram na MESMA carteira (posição), que é avaliada inteira
         for pos in self.estado.posicoes:
@@ -3917,6 +3960,16 @@ class GerentePosicoes:
         return pos
 
     def iniciar(self):
+        # log 16/11 09:07: posição SIMULADA (aberta no modo teste às 08:48) foi retomada no modo REAL e ganhou
+        # uma cobertura DE VERDADE (R$ 10 no Chiba). Posição simulada nunca atravessa para o modo real.
+        if not self.cfg.get("modo_teste", True):
+            for pos in [p for p in self.estado.posicoes if p.get("aberta") and p.get("simulada")]:
+                with _TRAVA:
+                    pos["aberta"] = False
+                    pos["status"] = "encerrada: era simulada (modo teste) — nunca vira aposta real"
+                    pos["eventos"].append("%s encerrada — simulada não continua no modo real" % agora())
+                log("📌 posição %d (%s) era SIMULADA — encerrada: o modo real não mexe nela" % (pos["id"], pos.get("jogo")))
+            self.estado.salvar()
         threading.Thread(target=self._laco, name="posicoes", daemon=True).start()
         return self
 
@@ -3925,7 +3978,8 @@ class GerentePosicoes:
             if not self.cfg.get("pos_monitorar", True):  # desligado pelo painel/config
                 time.sleep(5)
                 continue
-            for pos in [p for p in list(self.estado.posicoes) if p.get("aberta")]:
+            real = not self.cfg.get("modo_teste", True)
+            for pos in [p for p in list(self.estado.posicoes) if p.get("aberta") and not (real and p.get("simulada"))]:
                 try:
                     self.rodada(pos)
                 except Exception as e:
@@ -4010,6 +4064,13 @@ class GerentePosicoes:
         self.executar_cobertura(pos, melhor)
 
     def executar_cobertura(self, pos, cand):
+        if pos.get("simulada") and not self.cfg.get("modo_teste", True):
+            log("‼ posição %d é SIMULADA — cobertura real recusada (nunca aposto de verdade em cima de simulação)" % pos["id"])
+            with _TRAVA:
+                pos["aberta"] = False
+                pos["status"] = "encerrada: era simulada (modo teste) — nunca vira aposta real"
+            self.estado.salvar()
+            return False
         c = self.casas[cand["casa"]]
         chave, url = "pos%d" % pos["id"], (pos.get("urls") or {}).get(cand["casa"])
         perna = dict(cand["oferta"], casa=cand["casa"], stake=cand["stake"])
@@ -4295,7 +4356,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
  const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>b.status!='falhou');
- document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.carteira?'<br><span class="mut">carteira: 2+ greens em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
+ document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.avisos&&b.avisos.length?'<br><b class="no">'+b.avisos.map(esc).join('<br>')+'</b>':'')+(b.carteira?'<br><span class="mut">carteira: 2+ greens em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
  {const on=pa.pos_monitorar, md=on?pa.pos_modo:'off';
   const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];
   const bt=(m,t)=>'<button style="margin-left:6px;'+(md==m?'background:#1e8e3e':'background:#555')+'" onclick="post(\'/api/pos_modo/'+m+'\')">'+t+'</button>';

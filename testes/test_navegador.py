@@ -676,6 +676,26 @@ def test_1awin_saldo_cai_e_volta_e_falhou(casas, cfgc):
     limpar_cupons(casas)
 
 
+def test_1awin_aceita_com_odd_pior_avisa(casas, cfgc):
+    """16/11 09:10: a 1aWin aceitou a 1.61 um par calculado a 2.1 — tem que aparecer o aviso no bilhete."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["aceita_pior"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+    assert st == "confirmado", bil.get("detalhe")
+    assert any("ACEITOU a 1.61" in a for a in bil.get("avisos", [])), bil.get("avisos")
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+
+
 def test_1awin_saldo_sozinho_nao_prova(casas, cfgc):
     """15/11 17:02: o saldo caiu e a aposta NÃO existia. Saldo sozinho não confirma: não aposta a PS."""
     cfgc["modo_teste"] = False

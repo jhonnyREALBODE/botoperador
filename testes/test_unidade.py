@@ -931,3 +931,35 @@ def test_padrao_so_total_do_jogo_inteiro(tmp_path):
     b = oferta("ps3838", "total", "q2", "acima", 53.5, 2.10)
     bil, mot = P.achar_par([a], [b], SINAL, c)
     assert bil is None
+
+
+def test_posicao_simulada_nunca_vira_aposta_real(cfg):
+    """Log 16/11 09:07: posição SIMULADA (modo teste 08:48) retomada no modo REAL ganhou cobertura de verdade."""
+    est = P.Estado(cfg)
+    g = P.GerentePosicoes(cfg, est, {})
+    b = {"id": 1, "jogo": "Chiba x SAN-EN", "times": ["Chiba", "SAN-EN"], "tipo": "total", "periodo": "jogo",
+         "pernas": [dict(_p("acima", 189.5), casa="1awin"), dict(_p("abaixo", 190.5), casa="ps3838")]}
+    pos = g.abrir(b, {}, simulada=True)
+    assert pos["simulada"] and pos["aberta"]
+    cfg["modo_teste"] = False
+    assert g.executar_cobertura(pos, {"casa": "1awin", "linha": 195.5, "odd": 2.1, "stake": 10.0, "oferta": {}}) is False
+    assert not pos["aberta"]
+    pos2 = g.abrir(dict(b, id=2), {}, simulada=True)  # (abrir no teste; agora reinicia no real)
+    assert pos2["id"] != pos["id"] or not pos["aberta"]
+    g2 = P.GerentePosicoes(cfg, est, {})
+    g2.iniciar()
+    assert all(not p["aberta"] for p in est.posicoes if p.get("simulada"))
+    op = P.Operador(cfg, est, {})
+    assert op._posicao_aberta(["Chiba", "SAN-EN"], "jogo") is None
+
+
+def test_odd_fantasma_da_1awin_e_ignorada(cfg):
+    """Log 16/11 09:09: 1aWin Abaixo 195.5 a 2.1 com a PS em ~193 (justo ≈ 1.6): tela velha — aceitou a 1.61."""
+    ps = [oferta("ps3838", "total", "jogo", "acima", 193.0, 1.781), oferta("ps3838", "total", "jogo", "abaixo", 193.0, 2.05),
+          oferta("ps3838", "total", "jogo", "acima", 195.0, 2.10), oferta("ps3838", "total", "jogo", "abaixo", 195.0, 1.74)]
+    w1 = [oferta("1awin", "total", "jogo", "abaixo", 195.5, 2.10)]
+    bil, mot = P.achar_par(w1, ps, SINAL, cfg)
+    assert bil is None and "fantasma" in mot
+    cfg2 = dict(cfg, odd_fantasma_margem=None)  # desligado: voltaria a achar o par
+    bil2, _ = P.achar_par(w1, ps, SINAL, cfg2)
+    assert bil2 is not None

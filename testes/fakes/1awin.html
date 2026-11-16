@@ -55,6 +55,8 @@ function renderCupom() {
       return; }
     if (ESTADO.so_saldo) { const v = parseFloat(f.querySelector('input').value.replace(',', '.')); document.getElementById('saldo').textContent = 'BRL ' + (120 - v).toFixed(2).replace('.', ','); sel = null; renderCupom(); return; }
     if (ESTADO.recibo) { document.getElementById('slip').innerHTML = '<div class="_ok_r1"><p>Aposta aceita</p><a>Ir para o histórico</a></div><div data-scope="CouponCard"><span>Aberto • Simples</span><span>1.4</span><div>' + sel.mk + ', ' + sel.rot + '</div></div>'; return; }
+    if (ESTADO.aceita_pior) {  // 1aWin real 16/11 09:10: conferido a 2.1, aceito a 1.61
+      const bd = document.querySelector('[data-scope="SelectionCfBadge"] span'); if (bd) bd.textContent = '1.61'; }
     if (!ESTADO.confirma_mudo) document.getElementById('msg').textContent = 'Aposta aceita'; };
   s.appendChild(f);
 }
