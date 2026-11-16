@@ -857,7 +857,11 @@ def test_monitoramento_pos_entrada_cobertura_simulada(casas, cfgc):
     assert pos["aberta"] and P.over_original(pos) == 211.5
     op.gerente.rodada(pos)
     cob = [p for p in pos["pernas"] if p["origem"] == "cobertura"]
-    assert cob and cob[0]["lado"] == "abaixo" and cob[0]["linha"] - 211.5 >= 4 and cob[0]["simulada"], pos.get("candidatos")
+    assert cob and cob[0]["simulada"], pos.get("candidatos")
+    ref_un = P.under_original(pos)
+    # Under ≥ 4 pts acima do Over original, ou (espelho, 16/11) Over ≥ 4 pts abaixo do Under original
+    assert (cob[0]["lado"] == "abaixo" and cob[0]["linha"] - 211.5 >= 4) or \
+           (cob[0]["lado"] == "acima" and ref_un - cob[0]["linha"] >= 4), cob
     assert pos["resumo"]["gasto"] > 0 and len(pos["pernas"]) == 3
     for c in casas.values():
         assert c.executar(c.itens_cupom) == []
