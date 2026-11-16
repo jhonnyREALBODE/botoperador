@@ -2488,23 +2488,41 @@ class Casa:
             # NUNCA o campo de "Código da aposta"/promo (caso 14/11: stake digitada no código, cupom vazio)
             if re.search(r"c[oó]digo|code|promo|cupom|coupon|bonus|b[oô]nus|ganho|win", _sem_acento(rotulo)):
                 continue
-            alvo = el
+            # print 15/11 23:4x: '24.40' foi parar no 'Código da aposta'. O locator nth(i) é PREGUIÇOSO: a 1aWin
+            # tirou a linha do ar, o cupom redesenhou e o 1º campo passou a ser o do código. Fixa o ELEMENTO.
+            alvo = el.element_handle()
             break
         if alvo is None:
             return False, "campo de stake não encontrado no cupom"
+
+        def _ainda_e_stake():
+            try:
+                if not alvo.evaluate("e => e.isConnected"):
+                    return False
+                rot = " ".join(filter(None, [alvo.get_attribute("placeholder"), alvo.get_attribute("name"),
+                                             alvo.get_attribute("aria-label")])).lower()
+                return not re.search(r"c[oó]digo|code|promo|cupom|coupon|bonus|b[oô]nus|ganho|win", _sem_acento(rot))
+            except Exception:
+                return False
         formatos = ["%.2f" % valor] if self.nome == CASA_PS else ["%.2f" % valor, ("%.2f" % valor).replace(".", ",")]
         lido = None
         for f in formatos:
-            alvo.click()
-            alvo.fill("")
-            alvo.type(f, delay=15)
-            alvo.evaluate("e => { e.dispatchEvent(new Event('change', {bubbles: true})); e.blur(); }")
-            self.page.wait_for_timeout(250)
-            lido = _num(alvo.input_value())
+            if not _ainda_e_stake():
+                return False, "a seleção sumiu do cupom durante a stake (a casa tirou a linha do ar)"
+            try:
+                alvo.click()
+                alvo.fill("")
+                alvo.type(f, delay=15)
+                alvo.evaluate("e => { e.dispatchEvent(new Event('change', {bubbles: true})); e.blur(); }")
+                self.page.wait_for_timeout(250)
+                lido = _num(alvo.input_value())
+            except Exception:
+                return False, "a seleção sumiu do cupom durante a stake (a casa tirou a linha do ar)"
             if lido is not None and abs(lido - valor) < 0.011:
                 return True, ""
         try:
-            alvo.fill("")
+            if _ainda_e_stake():
+                alvo.fill("")
         except Exception:
             pass
         return False, "stake lida de volta %s ≠ %s — não segue" % (lido, _fmt(valor))
