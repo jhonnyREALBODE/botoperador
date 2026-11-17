@@ -1131,3 +1131,15 @@ def test_reentrada_livre_so_logica_do_parceiro(cfg):
     assert P.tipo_reentrada(cart, par(210, 212)) is None              # longe da janela: não é sequência
     # janela menor que a da 1ª entrada (1 ponto depois de 3) agora pode, se for sequência
     assert P.tipo_reentrada(cart, par(203, 204)) == "sequência"
+
+
+def test_reentrada_custo_ate_10_preferindo_4(cfg):
+    """Operador 17/11: reentrada até 10% se valer a pena (duplo duplo ou janela ≥ 3); preferência ≤ 4%.
+    O par de 22% de 15:48 (1aWin a 1.43) nunca mais entra."""
+    assert P.DEFAULTS["reentrada_custo_max"] == 10.0 and P.DEFAULTS["reentrada_custo_bom"] == 4.0
+    a = {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": 195.5, "odd": 1.43}
+    b = {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 186.0, "odd": 1.689}
+    assert P._calcular(a, b, cfg)["custo"] > 10
+    cfg_re = dict(cfg, custo_por_janela=None, custo_max=10.0)
+    bil, _ = P.achar_par([a], [b], SINAL, cfg_re)
+    assert bil is None  # acima do teto de 10%

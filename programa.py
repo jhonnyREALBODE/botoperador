@@ -118,7 +118,10 @@ DEFAULTS = {
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
     "reentrada_mesma_janela": True,
-    "reentrada_livre": True,           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
+    "reentrada_livre": True,
+    "reentrada_custo_max": 10.0,       # reentrada: teto de custo (operador 17/11)
+    "reentrada_custo_bom": 4.0,        # até aqui entra sempre e tem preferência
+    "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
     "pausa_ps_indisponivel_s": 45,
@@ -3708,9 +3711,16 @@ class Operador:
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
             if self.cfg.get("reentrada_livre", True):
                 # ORDEM DO OPERADOR 17/11: nas reentradas SÓ a lógica do parceiro — duplo duplo ou em sequência,
-                # nunca o mesmo par. Sem: total novo com lucro, 'não tirar lucro', janela ≥ 1ª, tabela de custo,
-                # R$ 100 / 4 entradas. A linha pode andar pros dois lados; nada de adivinhar direção.
-                return tipo_reentrada(cart, novas) is None
+                # nunca o mesmo par. A linha pode andar pros dois lados; nada de adivinhar direção.
+                tipo = tipo_reentrada(cart, novas)
+                if tipo is None:
+                    return True
+                # custo: até 4% entra; de 4% a 10% só se VALER A PENA (duplo duplo ou janela ≥ 3 pontos)
+                bom = float(self.cfg.get("reentrada_custo_bom", 4.0))
+                if c["custo"] > bom + 1e-9 and not (tipo == "duplo duplo" or
+                                                     jan >= float(self.cfg.get("reentrada_janela_vale", 3.0)) - 1e-9):
+                    return True
+                return False
             # regra do operador 16/11: a janela da 1ª entrada vira o padrão do jogo — as próximas têm que ter
             # a MESMA janela (ou maior); o custo de cada par continua pela tabela (depende da odd)
             jan0 = janela_padrao.get(a["periodo"])
@@ -3733,7 +3743,10 @@ class Operador:
             ks = faixa_carteira(todas)
             g = greens_por_total(todas, ks)
             g0 = greens_por_total(cart, ks)
-            return sum(1 for k in ks if g[k] >= 4 and g0[k] < 4)
+            duplo = sum(1 for k in ks if g[k] >= 4 and g0[k] < 4)
+            # 1º critério: custo até 4% (operador 17/11); 2º: duplo duplo; depois a janela e o custo (no achar_par)
+            barato = 1 if c["custo"] <= float(self.cfg.get("reentrada_custo_bom", 4.0)) + 1e-9 else 0
+            return barato * 1000 + duplo
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
         while not cancel.is_set():
@@ -3800,8 +3813,11 @@ class Operador:
                     cfg_par = self.cfg
                     # 17/11 15:48: sem a tabela entraram pares de CUSTO 22% (1aWin a 1.43). A tabela de custo voltou
                     # nas reentradas; só sai com "reentrada_sem_tabela_custo": true no config.json
-                    if entradas and self.cfg.get("reentrada_livre", True) and self.cfg.get("reentrada_sem_tabela_custo", False):
-                        cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=100.0)
+                    if entradas and self.cfg.get("reentrada_livre", True):
+                        # operador 17/11: na reentrada o custo pode ir até 10% SE VALER A PENA; preferência ≤ 4%
+                        teto = 100.0 if self.cfg.get("reentrada_sem_tabela_custo", False) else \
+                            float(self.cfg.get("reentrada_custo_max", 10.0))
+                        cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=teto)
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, cfg_par, raiox,
                                             excluir=excluir, preferir=preferir if entradas else None)
                     self.estado.set_calc(raiox, rodada)
