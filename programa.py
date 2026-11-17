@@ -3673,11 +3673,19 @@ class Operador:
         janela_padrao = {}   # período -> janela da 1ª entrada aceita (padrão das reentradas)
 
         def carteira(periodo):
-            """Todas as apostas aceitas deste jogo/período: a posição aberta (que inclui coberturas) ou a lista local."""
+            """Todas as apostas aceitas deste jogo/período: as entradas deste monitoramento (SEMPRE) + as avulsas
+            da posição. 17/11 15:48: com a Cobertura desligada a posição parou de receber as reentradas e o mesmo
+            par (186/195.5) entrou DUAS vezes — a lista local é a fonte, a posição só soma as avulsas."""
+            base = [p for p in carteira_local if p.get("periodo") == periodo]
             pos = self._posicao_aberta(times, periodo)
-            if pos:
-                return list(pos["pernas"])
-            return [p for p in carteira_local if p.get("periodo") == periodo]
+            if pos:  # junta sem duplicar (a mesma aposta pode estar nas duas listas)
+                ja = {(p["casa"], p["lado"], round(p["linha"], 2), round(p["stake"], 2)) for p in base}
+                for p in pos["pernas"]:
+                    k = (p["casa"], p["lado"], round(p["linha"], 2), round(p["stake"], 2))
+                    if k not in ja:
+                        base.append(dict(p))
+                        ja.add(k)
+            return base
 
         geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
         indisp_ps = [0]  # quantas vezes a PS disse 'mínima maior que a máxima' neste jogo
@@ -3790,8 +3798,10 @@ class Operador:
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
                     cfg_par = self.cfg
-                    if entradas and self.cfg.get("reentrada_livre", True):
-                        cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=100.0)  # reentrada: sem tabela de custo
+                    # 17/11 15:48: sem a tabela entraram pares de CUSTO 22% (1aWin a 1.43). A tabela de custo voltou
+                    # nas reentradas; só sai com "reentrada_sem_tabela_custo": true no config.json
+                    if entradas and self.cfg.get("reentrada_livre", True) and self.cfg.get("reentrada_sem_tabela_custo", False):
+                        cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=100.0)
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, cfg_par, raiox,
                                             excluir=excluir, preferir=preferir if entradas else None)
                     self.estado.set_calc(raiox, rodada)
@@ -4122,7 +4132,7 @@ class GerentePosicoes:
         self._vazias = {}
 
     def abrir(self, bil, urls, simulada):
-        if not self.cfg.get("pos_monitorar", True) or bil.get("tipo") != "total":
+        if bil.get("tipo") != "total":
             return None
         pernas = []
         for p in bil["pernas"]:
@@ -4146,6 +4156,8 @@ class GerentePosicoes:
                 self.estado.salvar()
                 log("📌 posição %d: reentrada somada à carteira (%d apostas)" % (pos["id"], len(pos["pernas"])))
                 return pos
+        if not self.cfg.get("pos_monitorar", True):
+            return None  # posição NOVA só com o monitoramento pós-entrada ligado
         with _TRAVA:
             pid = max([x.get("id", 0) for x in self.estado.posicoes] + [0]) + 1
             pos = {"id": pid, "bilhete": bil.get("id"), "jogo": bil["jogo"], "times": bil["times"],
