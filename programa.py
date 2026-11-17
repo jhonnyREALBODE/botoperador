@@ -3644,6 +3644,7 @@ class Operador:
             return [p for p in carteira_local if p.get("periodo") == periodo]
 
         geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
+        indisp_ps = [0]  # quantas vezes a PS disse 'mínima maior que a máxima' neste jogo
 
         def excluir(a, b, jan):
             agora_s = time.time()
@@ -3795,6 +3796,18 @@ class Operador:
                             log("⏳ PS suspendeu as apostas deste jogo por instantes ('mínima maior que a máxima') — "
                                 "espero %ds antes de tentar qualquer linha da PS de novo (e %ds neste período)" % (
                                     seg_ps, int(self.cfg.get("pausa_ps_periodo_indisponivel_s", 180))))
+                            indisp_ps[0] += 1
+                            # 17/11 00:46 (Denver x Phoenix): a PS já tinha uma aposta SUA neste jogo e recusou a
+                            # reentrada com 'mínima maior que a máxima' — é o teto da PS por jogo/mercado para a conta
+                            # (o máximo que sobra fica abaixo dos €5 mínimos). Insistir não adianta: PS fora DESTE jogo.
+                            lim_ind = int(self.cfg.get("max_indisponivel_ps_com_entrada", 2))
+                            if entradas and indisp_ps[0] >= lim_ind:
+                                geladeira[(CASA_PS, "*")] = time.time() + 12 * 3600
+                                log("■ %s: a PS recusou %d vezes ('mínima maior que a máxima') e você JÁ tem aposta na PS "
+                                    "neste jogo — é o limite da PS para a sua conta neste jogo. Sem mais reentradas "
+                                    "com a PS aqui; mande outro sinal" % (sinal["jogo"], indisp_ps[0]))
+                                self.estado.set_monitor("%s: %d entrada(s) — a PS não aceita mais apostas suas neste "
+                                                        "jogo (limite da PS)" % (sinal["jogo"], len(entradas)))
                         log("montagem falhou — o monitoramento reassume %s" % sinal["jogo"])
                         ultimo_motivo = None
                     elif motivo != ultimo_motivo or rodada % 3 == 0:
