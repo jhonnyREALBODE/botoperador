@@ -117,7 +117,8 @@ DEFAULTS = {
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
     "max_entradas_por_jogo": 4,
-    "reentrada_mesma_janela": True,    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
+    "reentrada_mesma_janela": True,
+    "reentrada_livre": True,           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
     "pausa_ps_indisponivel_s": 45,
@@ -1011,6 +1012,40 @@ def avaliar_nova_entrada(carteira, novas, cfg):
 def _txt_totais(ks):
     """[223, 224, 225, 228] -> '223–225, 228'"""
     return ", ".join(("%d" % a) if a == b else ("%d–%d" % (a, b)) for a, b in _faixas(sorted(ks))) or "—"
+
+
+def tipo_reentrada(carteira, novas):
+    """Lógica do PARCEIRO (17/11) para a reentrada de um par (Over + Under) — a única regra das reentradas:
+    - nunca o MESMO par (as duas linhas já apostadas nos mesmos lados);
+    - 'duplo duplo': repete/encosta numa linha e cria totais com 4+ greens (os dois pares ganhando dos dois lados);
+    - senão 'sequência': a janela do par novo encosta (ou sobrepõe) na janela que a carteira já tem, para cima ou
+      para baixo — 200/202 -> 202/204 -> 204/206.
+    Devolve 'duplo duplo' | 'sequência' | None (não entra)."""
+    ov = [p for p in novas if p["lado"] == "acima"]
+    un = [p for p in novas if p["lado"] == "abaixo"]
+    if not ov or not un or not carteira:
+        return None
+    lo, hi = ov[0]["linha"], un[0]["linha"]
+    if any(p["lado"] == "acima" and abs(p["linha"] - lo) < 1e-9 for p in carteira) and \
+            any(p["lado"] == "abaixo" and abs(p["linha"] - hi) < 1e-9 for p in carteira):
+        return None  # o mesmo par de novo
+    todas = list(carteira) + list(novas)
+    ks = faixa_carteira(todas)
+    g, g0 = greens_por_total(todas, ks), greens_por_total(carteira, ks)
+    if any(g[k] >= 4 and g0[k] < 4 for k in ks):
+        return "duplo duplo"
+    # janelas como intervalos de totais onde Over e Under do MESMO par ganham (ou devolvem) juntos
+    jan_nova = [k for k in ks if lo <= k <= hi]
+    ovs = [p["linha"] for p in carteira if p["lado"] == "acima"]
+    uns = [p["linha"] for p in carteira if p["lado"] == "abaixo"]
+    if not ovs or not uns or not jan_nova:
+        return None
+    jan_atual = [k for k in ks if min(ovs) <= k <= max(uns)]
+    if not jan_atual:
+        return None
+    if min(jan_nova) <= max(jan_atual) + 1 and max(jan_nova) >= min(jan_atual) - 1:
+        return "sequência"
+    return None
 
 
 def _faixas(ks):
@@ -3661,6 +3696,13 @@ class Operador:
             cart = carteira(a["periodo"])
             if not cart:
                 return False  # primeira entrada neste período: vale a regra normal do par
+            c = _calcular(a, b, self.cfg)
+            novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
+            if self.cfg.get("reentrada_livre", True):
+                # ORDEM DO OPERADOR 17/11: nas reentradas SÓ a lógica do parceiro — duplo duplo ou em sequência,
+                # nunca o mesmo par. Sem: total novo com lucro, 'não tirar lucro', janela ≥ 1ª, tabela de custo,
+                # R$ 100 / 4 entradas. A linha pode andar pros dois lados; nada de adivinhar direção.
+                return tipo_reentrada(cart, novas) is None
             # regra do operador 16/11: a janela da 1ª entrada vira o padrão do jogo — as próximas têm que ter
             # a MESMA janela (ou maior); o custo de cada par continua pela tabela (depende da odd)
             jan0 = janela_padrao.get(a["periodo"])
@@ -3747,7 +3789,10 @@ class Operador:
                     sinal["jogo"], rodada, tipo, n1, n2))
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
-                    bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, self.cfg, raiox,
+                    cfg_par = self.cfg
+                    if entradas and self.cfg.get("reentrada_livre", True):
+                        cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=100.0)  # reentrada: sem tabela de custo
+                    bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, cfg_par, raiox,
                                             excluir=excluir, preferir=preferir if entradas else None)
                     self.estado.set_calc(raiox, rodada)
                     if bil:
@@ -3775,14 +3820,16 @@ class Operador:
                             entradas.append(bil.get("id"))
                             janela_padrao.setdefault(bil["periodo"], bil["janela"])
                             maxe = int(self.cfg.get("max_entradas_por_jogo", 1))
+                            if self.cfg.get("reentrada_livre", True):
+                                maxe = 10 ** 6  # ordem do operador 17/11: sem limite de entradas nas reentradas
                             if not self.cfg.get("reentrar_mesmo_jogo") or len(entradas) >= maxe:
                                 self.estado.set_monitor("%s: %s — monitoramento encerrado (%d entrada(s))" % (
                                     sinal["jogo"], st, len(entradas)))
                                 log("■ %s: rodada %s — monitoramento encerrado (%d entrada(s) neste jogo)" % (
                                     sinal["jogo"], st, len(entradas)))
                                 return
-                            log("➕ %s: entrada %d de %d aceita — continuo no jogo procurando entrada que crie totais "
-                                "novos com lucro na carteira" % (sinal["jogo"], len(entradas), maxe))
+                            log("➕ %s: entrada %d aceita — continuo no jogo procurando duplo duplo ou sequência (nunca o "
+                                "mesmo par)" % (sinal["jogo"], len(entradas)))
                             self.estado.set_monitor("%s: %d entrada(s) — procurando reentrada" % (sinal["jogo"], len(entradas)))
                             ultimo_motivo = None
                             cancel.wait(self.cfg["monitor_intervalo_s"])

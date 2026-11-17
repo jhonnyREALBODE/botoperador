@@ -1111,3 +1111,23 @@ def test_parceiro_duplo_duplo_primeiro_senao_sequencia(cfg):
     # sem chance de duplo duplo: sequência (Over 203 × Under 205 encosta e acrescenta 204)
     bil3, _ = P.achar_par([w1[1]], [ps[0]], SINAL, cfg, excluir=excluir, preferir=preferir)
     assert bil3 and P.avaliar_nova_entrada(cart, bil3["pernas"], cfg)["novos_totais"] == [204, 205]
+
+
+def test_reentrada_livre_so_logica_do_parceiro(cfg):
+    """Ordem 17/11: nas reentradas SÓ duplo duplo / sequência / nunca o mesmo par (sem total novo com lucro,
+    sem 'não tirar lucro', sem janela ≥ 1ª, sem tabela de custo, sem R$ 100 / 4 entradas)."""
+    assert P.DEFAULTS["reentrada_livre"] is True
+
+    def par(ov, un, o1=1.90, o2=2.0):
+        a = {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": ov, "odd": o1}
+        b = {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": un, "odd": o2}
+        c = P._calcular(a, b, cfg)
+        return [dict(a, casa="1awin", stake=c["stake_1w"]), dict(b, casa="ps3838", stake=c["stake_ps"])]
+    cart = par(200, 203)
+    assert P.tipo_reentrada(cart, par(200, 203)) is None              # o mesmo par: nunca
+    assert P.tipo_reentrada(cart, par(200, 205)) == "duplo duplo"     # repete o Over e estica o Under
+    assert P.tipo_reentrada(cart, par(203, 205)) == "sequência"       # encosta por cima
+    assert P.tipo_reentrada(cart, par(198, 200)) == "sequência"       # encosta por baixo (linha desceu)
+    assert P.tipo_reentrada(cart, par(210, 212)) is None              # longe da janela: não é sequência
+    # janela menor que a da 1ª entrada (1 ponto depois de 3) agora pode, se for sequência
+    assert P.tipo_reentrada(cart, par(203, 204)) == "sequência"
