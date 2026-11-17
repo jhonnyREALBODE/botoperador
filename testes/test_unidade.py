@@ -889,23 +889,29 @@ def _p(lado, linha, odd=1.90, stake=30.0):
 
 
 def test_carteira_amplia_a_cobertura_como_no_exemplo_do_operador():
-    """Exemplo 16/11 (só a lógica): 222,5/224 -> +223,5/225,5 -> +224,5/226,5 -> Under 228,5 -> Under 236,5."""
+    """Exemplo 16/11 (só a lógica): 222,5/224 -> +223,5/225,5 -> +224,5/226,5. Janela = totais com LUCRO na
+    carteira inteira, entre a linha mais baixa e a mais alta. Linha inteira (224) devolve: no 224 ainda há lucro."""
     cfg = dict(P.DEFAULTS, perda_max_por_jogo_brl=1000)
     cart = [_p("acima", 222.5), _p("abaixo", 224.0)]
-    assert P.cobertura_2g(cart) == {223}
+    assert P.cobertura_2g(cart) == {223, 224}
     av = P.avaliar_nova_entrada(cart, [_p("acima", 223.5), _p("abaixo", 225.5)], cfg)
-    assert av["ok"] and av["novos_totais"] == [224, 225]
-    assert 224 in av["tres_ou_mais"]  # Under 224 devolve em 224, mas três outras ganham
+    assert av["ok"] and av["novos_totais"] == [225] and not av["perdidos"]
     cart += [_p("acima", 223.5), _p("abaixo", 225.5)]
     av = P.avaliar_nova_entrada(cart, [_p("acima", 224.5), _p("abaixo", 226.5)], cfg)
     assert av["ok"] and av["novos_totais"] == [226]
     cart += [_p("acima", 224.5), _p("abaixo", 226.5)]
-    av = P.avaliar_nova_entrada(cart, [_p("abaixo", 228.5)], cfg)  # perna sozinha: os Overs anteriores fazem o 2º green
-    assert av["ok"] and av["novos_totais"] == [227, 228]
-    cart += [_p("abaixo", 228.5)]
-    av = P.avaliar_nova_entrada(cart, [_p("abaixo", 236.5)], cfg)
-    assert av["ok"] and av["novos_totais"] == list(range(229, 237))
-    assert av["piorou_em"]  # acima de 236 essa aposta só perde: tem que aparecer como piora
+    assert P._txt_totais(P.cobertura_2g(cart)) == "223–226"
+
+
+def test_exemplo_de_6_apostas_do_operador_conta_certa():
+    """16/11: Over 221/Under 222/Over 225/Under 226/Over 228/Under 230, R$ 30 cada a 1,85 (R$ 180). 3 ganhando
+    = 166,50 − 180 = −13,50 (NÃO é green). Só 229 tem 4 ganhando (+42). Linhas inteiras devolvem."""
+    L = [("acima", 221), ("abaixo", 222), ("acima", 225), ("abaixo", 226), ("acima", 228), ("abaixo", 230)]
+    pp = [_p(a, b, 1.85, 30.0) for a, b in L]
+    t = {x["total"]: x["liquido"] for x in P.tabela_carteira(pp)}
+    assert t[220] == -13.5 and t[223] == -13.5 and t[227] == -13.5 and t[231] == -13.5
+    assert t[221] == 16.5 and t[229] == 42.0 and t[230] == 16.5
+    assert P._txt_totais(P.cobertura_2g(pp)) == "221–222, 225–226, 228–230"
 
 
 def test_carteira_recusa_entrada_que_nao_amplia_e_respeita_perda_por_jogo():
@@ -988,14 +994,11 @@ def test_pos_monitoramento_repete_a_sequencia_manual_do_operador(cfg):
     melhor, avaliados = P.avaliar_cobertura(pos, ofs, None, cfg)
     assert melhor and melhor["lado"] == "abaixo" and melhor["linha"] == 229.5, avaliados
     assert melhor["depois"]["novos_totais"] == [227, 228, 229]
-    pos["pernas"].append(pr("1awin", "abaixo", 229.5, 1.85, 37.0, "cobertura"))
+    pos["pernas"].append(pr("1awin", "abaixo", 229.5, 1.85, melhor["stake"], "cobertura"))
     ofs = {"1awin": [oferta("1awin", "total", "jogo", "abaixo", 236.5, 1.89)], "ps3838": []}
-    melhor, _ = P.avaliar_cobertura(pos, ofs, None, cfg)
-    assert melhor and melhor["depois"]["novos_totais"] == list(range(230, 237))
-    assert melhor["depois"]["piorou_em"]  # acima de 236 essa aposta só perde: o painel avisa
-    apertado = dict(cfg, pos_perda_max_total_brl=40.0)
-    melhor, avs = P.avaliar_cobertura(pos, ofs, None, apertado)
-    assert melhor is None and "limite" in avs[0]["motivo"]
+    melhor, avs = P.avaliar_cobertura(pos, ofs, None, cfg)
+    # na mão o operador fez, mas 230–236 continuaram no PREJUÍZO (−R$ 22): não é janela de green
+    assert melhor is None and "nenhum total novo com lucro" in avs[0]["motivo"]
 
 
 
@@ -1015,18 +1018,20 @@ def test_limite_padrao_mantem_o_formato_do_operador(cfg):
 
 def test_reentrada_sem_distancia_minima_fixa(cfg):
     """Operador 16/11: removida a regra 'Under ≥ 4 pts acima do Over original'. Over 189.5 + Under 190.5 cobrem 190;
-    um Under 191.5 (só 2 pts acima do Over) acrescenta 191 e pode entrar; depois 192.5 acrescenta 192, e assim por diante."""
+    um Under 191.5 (só 2 pts acima do Over) acrescenta 191 e pode entrar; o seguinte só se der lucro de verdade."""
     cfg = dict(cfg, pos_perda_max_total_brl=60.0, perda_max_por_jogo_brl=60.0, pos_stake_1w_brl=10.0)
     E = cfg["perna_ps_eur"] * cfg["cambio_brl_eur"]
     pos = {"id": 1, "periodo": "jogo", "pernas": [
         dict(_p("acima", 189.5, 2.33, 22.74), casa="1awin", origem="entrada"),
         dict(_p("abaixo", 190.5, 1.709, E), casa="ps3838", origem="entrada")]}
     assert P.cobertura_2g(pos["pernas"]) == {190}
-    for linha, esperado in ((191.5, [191]), (192.5, [192]), (193.5, [193])):
-        melhor, avs = P.avaliar_cobertura(pos, {"1awin": [oferta("1awin", "total", "jogo", "abaixo", linha, 1.85)]}, None, cfg)
-        assert melhor and melhor["depois"]["novos_totais"] == esperado, avs
-        pos["pernas"].append(dict(melhor["oferta"], casa="1awin", stake=melhor["stake"], origem="cobertura"))
-    assert P.cobertura_2g(pos["pernas"]) == {190, 191, 192, 193}
+    melhor, avs = P.avaliar_cobertura(pos, {"1awin": [oferta("1awin", "total", "jogo", "abaixo", 191.5, 1.85)]}, None, cfg)
+    assert melhor and melhor["depois"]["novos_totais"] == [191], avs   # só 2 pts acima do Over original: entra
+    pos["pernas"].append(dict(melhor["oferta"], casa="1awin", stake=melhor["stake"], origem="cobertura"))
+    assert P.cobertura_2g(pos["pernas"]) == {190, 191}
+    # o próximo Under sozinho (192.5) com R$ 10 não põe o 192 no lucro (o custo acumula): fica fora, com o motivo
+    melhor, avs = P.avaliar_cobertura(pos, {"1awin": [oferta("1awin", "total", "jogo", "abaixo", 192.5, 1.85)]}, None, cfg)
+    assert melhor is None and "lucro" in avs[0]["motivo"]
 
 
 def test_janela_cresce_nas_duas_direcoes(cfg):
