@@ -1080,3 +1080,34 @@ def test_sigla_no_meio_do_nome(cfg):
     assert not P._nome_bate("KK SC Derby Podgorica", "Studentski Centar")
     assert P.linha_confronto("Sloboda Celik — Igokea\n", t) is None
     assert not P._nome_bate("KK Krka", "Kauno Kalnas", True)  # 'KK' é código de clube, não sigla
+
+
+def test_parceiro_duplo_duplo_primeiro_senao_sequencia(cfg):
+    """Parceiro 17/11: 'peguei Over 200 Under 203; se apitar Over 200 e Under 205, eu pego de novo — se bater
+    201/202/203 é duplo duplo. Se não brechar duplo duplo, vou em sequência: 200/202, 202/204, 204/206.' Nada repetido."""
+    c0 = P._calcular({"odd": 1.95}, {"odd": 2.05}, cfg)
+    cart = [dict(_p("acima", 200.0, 1.95, c0["stake_1w"]), casa="1awin"), dict(_p("abaixo", 203.0, 2.05, c0["stake_ps"]), casa="ps3838")]
+
+    def preferir(a, b, c):
+        novas = [dict(a, casa="1awin", stake=c["stake_1w"]), dict(b, casa="ps3838", stake=c["stake_ps"])]
+        ks = P.faixa_carteira(cart + novas)
+        g, g0 = P.greens_por_total(cart + novas, ks), P.greens_por_total(cart, ks)
+        return sum(1 for k in ks if g[k] >= 4 and g0[k] < 4)
+
+    excluir = lambda a, b, jan: not P.avaliar_nova_entrada(
+        cart, [dict(a, casa="1awin", stake=P._calcular(a, b, cfg)["stake_1w"]),
+               dict(b, casa="ps3838", stake=P._calcular(a, b, cfg)["stake_ps"])], cfg)["ok"]
+    w1 = [oferta("1awin", "total", "jogo", "acima", 200.0, 1.95), oferta("1awin", "total", "jogo", "acima", 203.0, 1.95)]
+    ps = [oferta("ps3838", "total", "jogo", "abaixo", 205.0, 2.05), oferta("ps3838", "total", "jogo", "abaixo", 209.0, 2.05),
+          oferta("ps3838", "total", "jogo", "abaixo", 203.0, 2.05)]
+    # sem preferência: maior janela (Over 200 × Under 209); com a do parceiro: o duplo duplo Over 200 × Under 205
+    bil, _ = P.achar_par(w1, ps, SINAL, cfg, excluir=excluir, preferir=preferir)
+    assert bil and (bil["pernas"][0]["linha"], bil["pernas"][1]["linha"]) in ((200.0, 205.0), (200.0, 209.0))
+    tab = {t["total"]: t["greens"] for t in P.tabela_carteira(cart, bil["pernas"])}
+    assert tab[201] == 4 and tab[202] == 4  # duplo duplo
+    # o mesmo par de novo nunca entra
+    bil2, _ = P.achar_par([w1[0]], [ps[2]], SINAL, cfg, excluir=excluir, preferir=preferir)
+    assert bil2 is None
+    # sem chance de duplo duplo: sequência (Over 203 × Under 205 encosta e acrescenta 204)
+    bil3, _ = P.achar_par([w1[1]], [ps[0]], SINAL, cfg, excluir=excluir, preferir=preferir)
+    assert bil3 and P.avaliar_nova_entrada(cart, bil3["pernas"], cfg)["novos_totais"] == [204, 205]

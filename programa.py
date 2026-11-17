@@ -686,7 +686,7 @@ def _tempo_geladeira(motivo):
     return 0
 
 
-def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None):
+def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=None):
     """Pareia as escadas reais das duas casas. Retorna (bilhete, None) ou (None, motivo).
     Varre todos os mercados/períodos permitidos — o sinal é só a pista."""
     permitidos = set(cfg.get("totais_periodos") or PERIODOS_TODOS) - {"q4"}
@@ -771,16 +771,17 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None):
                 menor_custo_ok = c["custo"] if menor_custo_ok is None else min(menor_custo_ok, c["custo"])
             ps_ok = c["ps_eur"] + FOLGA_PS_EUR >= (cfg["perna_ps_eur"] or 5.0)
             valido = jan >= cfg["janela_min"] and c["custo"] <= custo_max_para(jan, cfg) and ps_ok
-            candidatos.append((valido, jan, c, a, b))
+            candidatos.append((valido, jan, c, a, b, preferir(a, b, c) if (preferir and valido) else 0))
 
+    # reentrada (parceiro 17/11): 'duplo duplo' primeiro (mais totais com 4+ greens), depois a maior janela, depois o custo
     validos = [x for x in candidatos if x[0]]
     restricao = ""
     if so_totais:
         restricao = " [restrição ativa: só totais %s; handicap desligado]" % "/".join(
             p for p in PERIODOS_TODOS if p in permitidos)
     if validos:
-        validos.sort(key=lambda x: (-x[1], x[2]["custo"]))
-        _, jan, c, a, b = validos[0]
+        validos.sort(key=lambda x: (-x[5], -x[1], x[2]["custo"]))
+        _, jan, c, a, b, _ = validos[0]
         bil = _montar_bilhete(sinal, a, b, jan, c)
         if raiox is not None:
             raiox.update({"valido": True, "par": bil, "motivo": "par válido",
@@ -3669,6 +3670,21 @@ class Operador:
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
             return not avaliar_nova_entrada(cart, novas, self.cfg)["ok"]
 
+        def preferir(a, b, c):
+            """Parceiro 17/11: 'se der, misturo linha igual com uma linha maior pra ter chance de DUPLO DUPLO;
+            senão vou em sequência'. Nota = quantos totais da carteira passam a ter 4+ greens."""
+            if a["tipo"] != "total":
+                return 0
+            cart = carteira(a["periodo"])
+            if not cart:
+                return 0
+            novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
+            todas = cart + novas
+            ks = faixa_carteira(todas)
+            g = greens_por_total(todas, ks)
+            g0 = greens_por_total(cart, ks)
+            return sum(1 for k in ks if g[k] >= 4 and g0[k] < 4)
+
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
         while not cancel.is_set():
             try:
@@ -3732,7 +3748,7 @@ class Operador:
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, self.cfg, raiox,
-                                            excluir=excluir)
+                                            excluir=excluir, preferir=preferir if entradas else None)
                     self.estado.set_calc(raiox, rodada)
                     if bil:
                         log("✔ PAR: %s @%s × %s @%s | janela %s | custo %s%%" % (
