@@ -61,6 +61,12 @@ function renderCupom() {
   s.appendChild(f);
 }
 renderCupom();
+// 1aWin real 16/11 22:32: o botão 'Fazer uma aposta' é redesenhado entre a marca e o clique (a marca some)
+let _redesenhou = false;
+new MutationObserver(ms => { if (!ESTADO.redesenha_botao || _redesenhou) return;
+  for (const m of ms) if (m.attributeName === 'data-alvo-apostar' && m.target.getAttribute('data-alvo-apostar')) {
+    _redesenhou = true; const b = m.target, nb = b.cloneNode(true); nb.removeAttribute('data-alvo-apostar');
+    nb.onclick = b.onclick; b.replaceWith(nb); return; } }).observe(document.body, {attributes: true, subtree: true});
 document.getElementById('lix').onclick = () => { if (!ESTADO.lixeira_morta) { sel = null; renderCupom(); } };
 if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
   app.innerHTML = '<h2>Basquete ao vivo</h2>' + (ESTADO.feed_vazio ? '' : LIGAS1W.map(l => '<div><a href="/betting/live/basketball-23/' + l[0] + '">' + l[1] + ' <span>' + l[2].length + '</span></a></div>').join(''));

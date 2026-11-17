@@ -2955,10 +2955,27 @@ class Casa:
         saldo0 = self._saldo()
         valor = (perna or {}).get("stake", 0) / (self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else 1)
         log("%s: saldo antes de apostar = %s" % (self.rotulo, saldo0))
-        try:
-            self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=3000)
-        except Exception as e:
-            return {"ok": False, "motivo": "o clique em apostar não aconteceu (%s)" % str(e)[:80], "foto": self.foto("confirmar")}
+        clicou, erro = False, ""
+        for tentativa in range(3):
+            try:
+                self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=1500)
+                clicou = True
+                break
+            except Exception as e:
+                erro = str(e)
+                # 16/11 22:32: a 1aWin REDESENHOU o botão entre a marca e o clique (a marca sumiu) e o clique ficou
+                # 3s esperando um elemento que não existia. 'waiting for locator' = o clique NÃO aconteceu: remarca.
+                # Qualquer outro erro: não sei se clicou -> não repito (dois cliques = duas apostas).
+                if "waiting for locator" not in erro and "not attached" not in erro and "detached" not in erro:
+                    break
+                b = self._marcar_botao_apostar()
+                if b.get("n") != 1 or b.get("desabilitado"):
+                    erro = "botão de apostar sumiu/desabilitou depois de redesenhar (achei %s)" % b.get("n", 0)
+                    break
+                log("%s: o botão de apostar foi redesenhado antes do clique — marquei de novo (%d)" % (self.rotulo, tentativa + 1))
+        if not clicou:
+            return {"ok": False, "motivo": "o clique em apostar não aconteceu (%s)" % erro.split("\n")[0][:80],
+                    "foto": self.foto("confirmar")}
         log("%s: cliquei em APOSTAR" % self.rotulo)
         linhas0 = set(l.strip() for l in (getattr(self, "_texto_antes", "") or "").splitlines())
         novas, fotos_rapidas = [], 0
@@ -3872,7 +3889,12 @@ class Operador:
                 return "incerto"
             if not r1["ok"]:
                 detalhe["1aWin"] = "não confirmou: " + r1["motivo"]
-                cps.executar(cps.desfazer, p2, timeout=30)
+                try:
+                    d2 = cps.executar(cps.desfazer, p2, timeout=30)
+                    detalhe["PS3838"] = "montou e desfez (cupom vazio)" if d2.get("ok") else \
+                        "montou — DESFAZER FALHOU: limpe o boletim da PS à mão (nada foi confirmado)"
+                except Exception:
+                    detalhe["PS3838"] = "montou — DESFAZER FALHOU: limpe o boletim da PS à mão (nada foi confirmado)"
                 self.estado.atualizar(bil, status="falhou", detalhe=detalhe, fotos=fotos)
                 return "falhou"
             log("1aWin: aposta CONFIRMADA (%s) — confirmando a PS" % (r1["motivo"] or "mensagem da casa"))

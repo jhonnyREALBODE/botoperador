@@ -696,6 +696,26 @@ def test_1awin_aceita_com_odd_pior_avisa(casas, cfgc):
     limpar_cupons(casas)
 
 
+def test_botao_de_apostar_redesenhado_antes_do_clique(casas, cfgc):
+    """16/11 22:32: 'o clique em apostar não aconteceu (Locator.click: Timeout 3000ms … waiting for locator)'.
+    A 1aWin redesenhou o botão entre a marca e o clique. Agora remarca e clica (uma vez só)."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["redesenha_botao"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "confirmado", bil.get("detalhe")
+    assert any("redesenhado antes do clique" in l for l in P._LOG_MEM[-40:])  # o caso aconteceu mesmo
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+
+
 def test_1awin_saldo_sozinho_nao_prova(casas, cfgc):
     """15/11 17:02: o saldo caiu e a aposta NÃO existia. Saldo sozinho não confirma: não aposta a PS."""
     cfgc["modo_teste"] = False
