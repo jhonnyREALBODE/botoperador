@@ -119,9 +119,10 @@ DEFAULTS = {
     "max_entradas_por_jogo": 4,
     "reentrada_mesma_janela": True,
     "reentrada_livre": True,
-    "reentrada_custo_max": 10.0,       # reentrada: teto de custo (operador 17/11)
+    "reentrada_custo_max": 15.0,       # reentrada: teto de custo (operador 17/11: até 15%)
     "reentrada_custo_bom": 4.0,        # até aqui entra sempre e tem preferência
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
+    "odd_min": 1.78,                   # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
     "pausa_ps_indisponivel_s": 45,
@@ -700,9 +701,13 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
     melhor_janela = None
     menor_custo_ok = None
 
+    odd_min = cfg.get("odd_min")
+
     def filtra(esc):
         out = []
         for o in esc or []:
+            if odd_min and o.get("odd", 0) < float(odd_min) - 1e-9:
+                continue  # perna com odd baixa demais (ex.: 1aWin a 1.43 em 17/11 15:48)
             if o.get("periodo") == "q4":
                 continue
             if o["tipo"] == "total" and o.get("periodo") not in permitidos:
@@ -1118,6 +1123,8 @@ def avaliar_cobertura(pos, ofertas_por_casa, modelo, cfg):
                 dist = (fundo - o["linha"]) if fundo is not None else 0.0
             if (casa, o["lado"], round(o["linha"], 3)) in ja:
                 continue  # nada de repetir a mesma aposta
+            if cfg.get("odd_min") and o.get("odd", 0) < float(cfg["odd_min"]) - 1e-9:
+                continue  # odd mínima (operador 17/11)
             # stake: PS = perna mínima (€5); 1aWin = a maior da grade que cabe no limite de perda da carteira
             eur_max = float(cfg.get("perna_ps_eur_max") or cfg["perna_ps_eur"])
             if casa == CASA_PS:  # €6, €5,5 ... até a perna mínima (€5)
@@ -3816,7 +3823,7 @@ class Operador:
                     if entradas and self.cfg.get("reentrada_livre", True):
                         # operador 17/11: na reentrada o custo pode ir até 10% SE VALER A PENA; preferência ≤ 4%
                         teto = 100.0 if self.cfg.get("reentrada_sem_tabela_custo", False) else \
-                            float(self.cfg.get("reentrada_custo_max", 10.0))
+                            float(self.cfg.get("reentrada_custo_max", 15.0))
                         cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=teto)
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, cfg_par, raiox,
                                             excluir=excluir, preferir=preferir if entradas else None)

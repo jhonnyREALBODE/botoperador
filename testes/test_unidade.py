@@ -1136,10 +1136,25 @@ def test_reentrada_livre_so_logica_do_parceiro(cfg):
 def test_reentrada_custo_ate_10_preferindo_4(cfg):
     """Operador 17/11: reentrada até 10% se valer a pena (duplo duplo ou janela ≥ 3); preferência ≤ 4%.
     O par de 22% de 15:48 (1aWin a 1.43) nunca mais entra."""
-    assert P.DEFAULTS["reentrada_custo_max"] == 10.0 and P.DEFAULTS["reentrada_custo_bom"] == 4.0
+    assert P.DEFAULTS["reentrada_custo_max"] == 15.0 and P.DEFAULTS["reentrada_custo_bom"] == 4.0
     a = {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": 195.5, "odd": 1.43}
     b = {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 186.0, "odd": 1.689}
     assert P._calcular(a, b, cfg)["custo"] > 10
     cfg_re = dict(cfg, custo_por_janela=None, custo_max=10.0)
     bil, _ = P.achar_par([a], [b], SINAL, cfg_re)
     assert bil is None  # acima do teto de 10%
+
+
+
+def test_odd_minima_1_78(cfg):
+    """Operador 17/11: odds sempre no mínimo 1.78/1.79 — nenhuma perna abaixo (par, reentrada ou avulsa)."""
+    assert P.DEFAULTS["odd_min"] == 1.78
+    c = dict(cfg, odd_min=1.78)
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.77)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 2.30)
+    assert P.achar_par([a], [b], SINAL, c)[0] is None
+    a2 = dict(a, odd=1.80)
+    assert P.achar_par([a2], [b], SINAL, c)[0] is not None
+    pos = _pos(250.5, 252.5)
+    m, av = P.avaliar_cobertura(pos, {"1awin": _ofs(254.5, odd=1.60)}, None, dict(c, pos_perda_max_total_brl=100))
+    assert m is None and av == []
