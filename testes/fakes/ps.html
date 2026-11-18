@@ -99,10 +99,10 @@ if (ESTADO.limite) {
       m.querySelector('.okbtn').onclick = () => m.remove(); document.body.appendChild(m); return;
     }
     sel = {aid: a.id, t1: j.t1, t2: j.t2, per: PERS[per] || per, mk, rot, odd}; render();
-    if (ESTADO.odd_muda) setTimeout(() => { if (!sel) return; const de = sel.odd; sel.odd = '1.675';
-      const o = document.querySelector('.BetItemComponent .odds-info .odds'); if (o) o.textContent = ' 1.675';
+    if (ESTADO.odd_muda) setTimeout(() => { if (!sel) return; const de = sel.odd; const nv = ESTADO.odd_nova || '1.675'; sel.odd = nv;
+      const o = document.querySelector('.BetItemComponent .odds-info .odds'); if (o) o.textContent = ' ' + nv;
       const s = document.getElementById('sels'); const av = document.createElement('div'); av.className = 'odds-changed';
-      av.textContent = 'Odds have changed from ' + de + ' to 1.675'; s.prepend(av); }, ESTADO.odd_muda);
+      av.textContent = 'Odds have changed from ' + de + ' to ' + nv; s.prepend(av); }, ESTADO.odd_muda);
   });
   if (ESTADO.sujo) { sel = {aid: '999|0|3|3|0|150.5', t1: 'Outro', t2: 'Jogo', per: 'Jogo', mk: 'OU', rot: 'Mais de 150.5', odd: '1.900'}; render(); }
 } else {

@@ -481,6 +481,34 @@ def test_odd_que_cai_depois_de_montado_reprova_tudo(casas, cfgc, ms):
         assert c.executar(c.itens_cupom) == []
 
 
+def test_odd_que_cai_mas_fica_no_piso_1_78_e_aceita(casas, cfgc):
+    """Operador 18/11 (Chemnitz x Bursa): 'Odds have changed from 2.140 to 1.840' reprovava. 'Até 1.78 pode pegar':
+    agora aceita, recalcula o par com a odd viva e só barra se o custo passar do teto (15%)."""
+    servidor.ESTADO["odd_muda"] = 1
+    servidor.ESTADO["odd_nova"] = "1.72"   # no site falso a perna da PS é 1.80: cai 0,08 (> 0,05 da regra antiga)
+    cfgc["odd_min"] = 1.70                 # piso do teste (no programa: 1.78)
+    c1, cps = ir_jogo(casas)
+    recarregar(cps)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+    assert st == "testado", bil["detalhe"]
+    assert bil["pernas"][1].get("odd_viva") == 1.72 and bil.get("custo_vivo") is not None, "\n".join(P._LOG_MEM[-25:])
+    # caindo para 1.675 (abaixo do piso) continua reprovando
+    servidor.ESTADO["odd_nova"] = "1.675"
+    cfgc["odd_min"] = 1.70
+    recarregar(cps)
+    limpar_cupons(casas)
+    bil2 = achar(casas, cfgc)
+    est.registrar_bilhete(bil2, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil2) == "falhou"
+    servidor.ESTADO.clear()
+    recarregar(cps)
+    limpar_cupons(casas)
+
+
 def test_modo_real_reconfere_no_instante_de_confirmar(casas, cfgc):
     """A odd cai DEPOIS da conferência final: no modo real o confirmar reconfere e não aposta."""
     c1, cps = ir_jogo(casas)

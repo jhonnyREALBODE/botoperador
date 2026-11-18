@@ -2689,8 +2689,12 @@ class Casa:
             mm = re.search(r"(\d+[.,]\d+)\D+(\d+[.,]\d+)", linha)
             antiga, nova = (_num(mm.group(1)), _num(mm.group(2))) if mm else (None, None)
             desta = antiga is None or abs(antiga - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9
-            if desta and (nova is None or nova < perna["odd"] - TOL_ODD_CUPOM - 1e-9):
+            if desta and (nova is None or nova < self._piso_odd(perna) - 1e-9):
                 return False, "a casa avisou no cupom que a odd mudou (%s)" % linha.strip()[:80]
+            if desta and nova is not None and nova < perna["odd"] - 1e-9:
+                # operador 18/11: 'até 1.78 pode pegar' — caiu mas ficou no piso: aceita e o par é recalculado
+                log("%s: odd caiu %s -> %s (piso %s) — aceita" % (self.rotulo, perna["odd"], nova, self._piso_odd(perna)))
+                perna["odd_viva"] = nova
             # aviso de OUTRA seleção (o "de X" não é a odd clicada): ignora; a odd do item é conferida abaixo
         itens = self.itens_cupom()
         if len(itens) != 1:
@@ -2710,12 +2714,16 @@ class Casa:
         # A odd 'subida' só vale lida do lugar exato da odd no cupom (senão placar/stake passariam).
         exata = self._odd_do_cupom()
         if exata is not None:
+            if exata < self._piso_odd(perna) - 1e-9:
+                return False, "odd do cupom caiu: %s -> %s (abaixo do piso %s)" % (perna["odd"], exata, self._piso_odd(perna))
             if exata < perna["odd"] - TOL_ODD_CUPOM - 1e-9:
-                return False, "odd do cupom caiu: %s -> %s" % (perna["odd"], exata)
+                log("%s: odd caiu %s -> %s (piso %s) — aceita" % (self.rotulo, perna["odd"], exata, self._piso_odd(perna)))
+                perna["odd_viva"] = exata
             if exata > perna["odd"] + TOL_ODD_CUPOM + 1e-9:
                 log("%s: odd subiu %s -> %s (melhor) — aceita" % (self.rotulo, perna["odd"], exata))
         # +1e-9: 2.0 - 1.95 = 0.0500000000000004 no computador — 0,05 exato é DENTRO da tolerância
-        elif not any(abs(v - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9 for v in odds):
+        elif not any(abs(v - perna["odd"]) <= TOL_ODD_CUPOM + 1e-9 or self._piso_odd(perna) - 1e-9 <= v < perna["odd"]
+                     for v in odds):
             return False, "odd do cupom difere de %s (lidas: %s)" % (perna["odd"], ", ".join(map(str, odds[:4])) or "nenhuma")
         if perna["tipo"] == "total":
             quer = r"\b(acima|mais|over)\b" if perna["lado"] == "acima" else r"\b(abaixo|menos|under)\b"
@@ -2724,6 +2732,14 @@ class Casa:
         elif perna.get("time") and not any(_nome_bate(l, perna["time"]) for l in re.split(r"[\n(]", itens[0]) if l.strip()):
             return False, "cupom não mostra o time %s" % perna["time"]
         return True, ""
+
+    def _piso_odd(self, perna):
+        """Até onde a odd pode CAIR no cupom e ainda valer. Operador 18/11: 'até 1.78 pode pegar' (odd_min).
+        Sem odd_min no config: a regra antiga (cai no máximo 0,05)."""
+        om = self.cfg.get("odd_min")
+        if om:
+            return float(om)
+        return perna["odd"] - TOL_ODD_CUPOM
 
     def _odd_do_cupom(self):
         """A odd no lugar exato do cupom (PS: '.odds-info .odds'; 1aWin: [data-scope=SelectionCfBadge])."""
@@ -3969,6 +3985,26 @@ class Operador:
                 # ainda são as mesmas, na mesma odd? (caso Ratiopharm 15:21: PS 2.000 -> 1.675
                 # depois de montado)
                 self._conferencia_final(res, bil)
+            if all(r["ok"] for r in res.values()):
+                # odd que caiu até o piso (1.78) foi aceita no cupom: o par é RECALCULADO com as odds vivas e as
+                # stakes já digitadas; custo acima do teto (15%) -> não entra (desfaz as duas)
+                p1x, p2x = bil["pernas"]
+                o1, o2 = p1x.get("odd_viva") or p1x["odd"], p2x.get("odd_viva") or p2x["odd"]
+                if (o1, o2) != (p1x["odd"], p2x["odd"]):
+                    tot = p1x["stake"] + p2x["stake"]
+                    custo_vivo = (tot - min(p1x["stake"] * o1, p2x["stake"] * o2)) / tot * 100 if tot else 999
+                    teto = float(self.cfg.get("custo_max_odd_viva", self.cfg.get("reentrada_custo_max", 15.0)))
+                    log("par recalculado com as odds vivas %s × %s: custo %s%% (antes %s%%)" % (
+                        o1, o2, _br(custo_vivo), _br(bil["custo"])))
+                    if custo_vivo > teto + 1e-9:
+                        for nome in res:
+                            res[nome]["ok"] = False
+                            res[nome]["montada"] = True
+                            res[nome]["motivo"] = "montou, mas com a odd nova o par custa %s%% (teto %s%%)" % (
+                                _br(custo_vivo), _br(teto))
+                    else:
+                        with _TRAVA:
+                            bil["custo_vivo"] = round(custo_vivo, 2)
             fotos = [r["foto"] for r in res.values() if r.get("foto")]
             detalhe = {NOME_CASA[n]: ("montou" if r["ok"] else r["motivo"]) for n, r in res.items()}
             for n, r in res.items():
