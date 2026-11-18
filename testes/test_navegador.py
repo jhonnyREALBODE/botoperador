@@ -897,6 +897,8 @@ def test_monitoramento_pos_entrada_cobertura_simulada(casas, cfgc):
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
+    cfgc["pos_monitorar"] = True
+    cfgc["avulsas_permitidas"] = True  # (18/11: no programa as avulsas estão PROIBIDAS; o teste liga para cobrir a mecânica)
     est = P.Estado(cfgc)
     op = P.Operador(cfgc, est, casas)
     op.gerente = P.GerentePosicoes(cfgc, est, casas)
@@ -955,3 +957,25 @@ def test_par_que_falhou_vai_pra_geladeira_e_nao_repete(casas, cfgc):
     assert len(pernas_ps) == len(set(pernas_ps)), pernas_ps  # nenhuma perna PS gelada foi tentada de novo
     servidor.ESTADO.pop("indisponivel", None)
     limpar_cupons(casas)
+
+
+
+def test_avulsa_proibida_por_padrao(casas, cfgc):
+    """18/11: 'a ideia era fazer LINHAS' — com o padrão, nenhuma aposta de uma perna só, mesmo com a posição aberta."""
+    assert P.DEFAULTS["avulsas_permitidas"] is False and P.DEFAULTS["pos_monitorar"] is False
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    cfgc["pos_monitorar"] = True
+    cfgc["avulsas_permitidas"] = False
+    est = P.Estado(cfgc)
+    op = P.Operador(cfgc, est, casas)
+    op.gerente = P.GerentePosicoes(cfgc, est, casas)
+    bil = achar(casas, cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert op.executar_bilhete(bil) == "testado"
+    pos = est.posicoes[-1]
+    op.gerente.rodada(pos)
+    assert not [p for p in pos["pernas"] if p["origem"] == "cobertura"]
+    assert pos.get("tabela")  # a carteira continua aparecendo

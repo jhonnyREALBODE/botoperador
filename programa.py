@@ -128,7 +128,8 @@ DEFAULTS = {
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
     "pausa_ps_indisponivel_s": 45,
     "pausa_ps_periodo_indisponivel_s": 180,
-    "pos_monitorar": False,           # 18/11: DESLIGADO por padrão (apostas avulsas de uma perna só); liga no painel
+    "pos_monitorar": False,           # 18/11: DESLIGADO por padrão
+    "avulsas_permitidas": False,      # 18/11: NUNCA aposta de uma perna só (só reentrada em par)
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_intervalo_s": 15,
     "pos_max_coberturas": 3,          # por posição
@@ -3608,7 +3609,7 @@ class Estado:
                 "modo": "TESTE" if self.cfg["modo_teste"] else "REAL",
                 "params": {k: self.cfg.get(k) for k in ("janela_min", "custo_max", "perna_ps_eur", "cambio_brl_eur",
                                                         "so_totais", "totais_periodos", "monitor_intervalo_s",
-                                                        "pos_monitorar", "pos_modo",
+                                                        "pos_monitorar", "pos_modo", "avulsas_permitidas",
                                                         "pos_max_por_cobertura_brl", "pos_max_total_coberturas_brl",
                                                         "pos_perda_max_total_brl", "pos_max_coberturas")},
                 "bilhetes": [_sem_privados(b) for b in self.bilhetes[-60:]][::-1],
@@ -4316,6 +4317,11 @@ class GerentePosicoes:
         with _TRAVA:
             pos["resumo"] = resumo_posicao(pos["pernas"], modelo)
             pos["atualizada"] = agora()
+        if not cfg.get("avulsas_permitidas", False):
+            # 18/11, operador: 'a ideia era fazer LINHAS' — nunca aposta de uma perna só. A posição só mostra a
+            # carteira; quem amplia a janela são as reentradas EM PAR (1aWin + PS), no monitoramento do sinal.
+            pos["status"] = "monitorando (carteira)"
+            return
         n_cob = len([p for p in pos["pernas"] if p.get("origem") == "cobertura"])
         if n_cob >= cfg["pos_max_coberturas"]:
             pos["status"] = "monitorando (limite de coberturas atingido)"
@@ -4647,7 +4653,8 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  {const on=pa.pos_monitorar, md=on?pa.pos_modo:'off';
   const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];
   const bt=(m,t)=>'<button style="margin-left:6px;'+(md==m?'background:#1e8e3e':'background:#555')+'" onclick="post(\'/api/pos_modo/'+m+'\')">'+t+'</button>';
-  document.getElementById('posmodo').innerHTML='<div style="margin-bottom:6px">Cobertura: <b class="'+(md=='off'?'no':'ok')+'">'+nome+'</b>'+(d.modo=='TESTE'&&on?' <span class="mut">— modo teste: só SIMULA</span>':'')+bt('auto','Automático')+bt('manual','Manual')+bt('off','Desligar')+
+  if(!pa.avulsas_permitidas){document.getElementById('posmodo').innerHTML='<div class="mut" style="margin-bottom:6px">Apostas avulsas (de uma perna só): <b>NUNCA</b>. A janela cresce só com reentradas EM PAR (1aWin + PS). Aqui fica a carteira de cada jogo.</div>';}
+  else document.getElementById('posmodo').innerHTML='<div style="margin-bottom:6px">Cobertura: <b class="'+(md=='off'?'no':'ok')+'">'+nome+'</b>'+(d.modo=='TESTE'&&on?' <span class="mut">— modo teste: só SIMULA</span>':'')+bt('auto','Automático')+bt('manual','Manual')+bt('off','Desligar')+
    '</div><div class="mut" style="margin-bottom:6px">Regras: aposta avulsa só se abrir totais NOVOS com lucro na carteira, sem tirar o lucro de nenhum · sem distância mínima: compara com a janela atual da carteira · até '+R(pa.pos_max_por_cobertura_brl)+' por aposta · '+R(pa.pos_max_total_coberturas_brl)+' no total · pior caso da carteira até −'+R(pa.pos_perda_max_total_brl)+' · máx. '+pa.pos_max_coberturas+' avulsas</div>';}
  document.getElementById('pos').innerHTML=(d.posicoes||[]).map(p=>{const r=p.resumo||{};
   let h='<div style="border-bottom:1px solid var(--ln);padding:6px 0"><b>#'+p.id+' '+esc(p.jogo)+'</b> <span class="mut">('+esc(p.periodo)+')'+(p.simulada?' SIMULADA':'')+' — '+esc(p.status)+(p.atualizada?' · '+p.atualizada:'')+'</span>';
