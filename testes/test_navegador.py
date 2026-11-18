@@ -817,6 +817,7 @@ def test_ps_janela_confirmar_apostas_e_aviso_velho(casas, cfgc):
 def test_odd_que_sobe_e_aceita_e_que_cai_nao(casas):
     """Ordem do operador 15/11: subiu (melhor) = aceita; caiu além de 0,05 = reprova."""
     _, cps = ir_jogo(casas)
+    recarregar(cps)  # a página guarda o ESTADO do site falso de quando carregou (odd_muda de testes anteriores)
     limpar_cupons(casas)
     _, lp = ler(casas)
     o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
@@ -827,7 +828,8 @@ def test_odd_que_sobe_e_aceita_e_que_cai_nao(casas):
         r = cps.conferir_cupom(o)
         cps.limpar_cupom()
         return r
-    assert cps.executar(com_odd, "1.950")[0] is True        # subiu 1.80 -> 1.95
+    r0 = cps.executar(com_odd, "1.950")
+    assert r0[0] is True, r0        # subiu 1.80 -> 1.95
     ok, mot = cps.executar(com_odd, "1.700")                 # caiu 1.80 -> 1.70
     assert not ok and "caiu" in mot
 

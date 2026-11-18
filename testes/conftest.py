@@ -23,6 +23,7 @@ def isolado(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "ARQ_LIGAS", str(tmp_path / "ligas.json"))
     monkeypatch.setattr(P, "ARQ_LOG", str(tmp_path / "log.txt"))
     monkeypatch.setattr(P, "ARQ_HIST", str(tmp_path / "hist.json"))
+    monkeypatch.setattr(P, "ARQ_PREFS", str(tmp_path / "prefs.json"))
     P._MEM_URLS = None
     P._MEM_LIGAS = None
     servidor.ESTADO.clear()

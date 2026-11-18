@@ -53,6 +53,7 @@ PRINTS = os.path.join(DADOS, "prints")
 ARQ_CONFIG = os.path.join(BASE, "config.json")
 ARQ_LOG = os.path.join(BASE, "log-programa.txt")
 ARQ_HIST = os.path.join(DADOS, "historico.json")
+ARQ_PREFS = os.path.join(DADOS, "preferencias.json")  # escolhas feitas no painel (sobrevivem ao reinício)
 ARQ_LIGAS = os.path.join(DADOS, "memoria_ligas_1awin.json")
 ARQ_URLS = os.path.join(DADOS, "memoria_urls.json")
 
@@ -127,7 +128,7 @@ DEFAULTS = {
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
     "pausa_ps_indisponivel_s": 45,
     "pausa_ps_periodo_indisponivel_s": 180,
-    "pos_monitorar": True,
+    "pos_monitorar": False,           # 18/11: DESLIGADO por padrão (apostas avulsas de uma perna só); liga no painel
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_intervalo_s": 15,
     "pos_max_coberturas": 3,          # por posição
@@ -173,6 +174,12 @@ def carregar_config(caminho=None, avisar=True):
         with open(caminho, "r", encoding="utf-8-sig") as f:
             bruto = json.load(f)
     cfg = dict(DEFAULTS)
+    # o que o operador escolheu no PAINEL (botão da Cobertura) vale no próximo início — 18/11: reabriu e a
+    # Cobertura voltou sozinha para 'automático' (avulsas só na PS). O config.json, se tiver a chave, manda.
+    if caminho == ARQ_CONFIG:
+        for k, v in (_ler_json(ARQ_PREFS, {}) or {}).items():
+            if k in ("pos_monitorar", "pos_modo"):
+                cfg[k] = v
     for k, v in bruto.items():
         cfg[k] = v
     # normalizações (sem trocar a ordem do operador)
@@ -4215,8 +4222,7 @@ class GerentePosicoes:
                 self.estado.salvar()
                 log("📌 posição %d: reentrada somada à carteira (%d apostas)" % (pos["id"], len(pos["pernas"])))
                 return pos
-        if not self.cfg.get("pos_monitorar", True):
-            return None  # posição NOVA só com o monitoramento pós-entrada ligado
+        # a posição abre sempre (mostra a tabela da carteira); apostas AVULSAS só com a Cobertura ligada
         with _TRAVA:
             pid = max([x.get("id", 0) for x in self.estado.posicoes] + [0]) + 1
             pos = {"id": pid, "bilhete": bil.get("id"), "jogo": bil["jogo"], "times": bil["times"],
@@ -4714,7 +4720,13 @@ def criar_painel(estado, operador, porta):
                     estado.cfg["pos_monitorar"] = modo != "off"
                     if modo != "off":
                         estado.cfg["pos_modo"] = modo
-                log("📌 cobertura pós-entrada: %s (pelo painel; para ficar fixo, ajuste pos_modo/pos_monitorar no config.json)" % {
+                try:
+                    prefs = _ler_json(ARQ_PREFS, {}) or {}
+                    prefs.update({"pos_monitorar": estado.cfg["pos_monitorar"], "pos_modo": estado.cfg.get("pos_modo", "auto")})
+                    _gravar_json(ARQ_PREFS, prefs)
+                except Exception:
+                    pass
+                log("📌 cobertura pós-entrada: %s (pelo painel — fica assim também quando o programa reabrir)" % {
                     "auto": "AUTOMÁTICA", "manual": "MANUAL", "off": "DESLIGADA"}[modo])
                 return self._env(200, '{"ok":true}')
             if p == "/api/calibrar" and operador:
