@@ -3877,16 +3877,15 @@ class Operador:
                             entradas.append(bil.get("id"))
                             janela_padrao.setdefault(bil["periodo"], bil["janela"])
                             maxe = int(self.cfg.get("max_entradas_por_jogo", 1))
-                            if self.cfg.get("reentrada_livre", True):
-                                maxe = 10 ** 6  # ordem do operador 17/11: sem limite de entradas nas reentradas
+                            # 18/11: 'e assim por diante até bater 4 linhas' — o limite de 4 entradas por jogo voltou
                             if not self.cfg.get("reentrar_mesmo_jogo") or len(entradas) >= maxe:
                                 self.estado.set_monitor("%s: %s — monitoramento encerrado (%d entrada(s))" % (
                                     sinal["jogo"], st, len(entradas)))
                                 log("■ %s: rodada %s — monitoramento encerrado (%d entrada(s) neste jogo)" % (
                                     sinal["jogo"], st, len(entradas)))
                                 return
-                            log("➕ %s: entrada %d aceita — continuo no jogo procurando duplo duplo ou sequência (nunca o "
-                                "mesmo par)" % (sinal["jogo"], len(entradas)))
+                            log("➕ %s: entrada %d de %d aceita — continuo no jogo procurando duplo duplo ou sequência "
+                                "(nunca o mesmo par)" % (sinal["jogo"], len(entradas), maxe))
                             self.estado.set_monitor("%s: %d entrada(s) — procurando reentrada" % (sinal["jogo"], len(entradas)))
                             ultimo_motivo = None
                             cancel.wait(self.cfg["monitor_intervalo_s"])
