@@ -129,7 +129,8 @@ DEFAULTS = {
     "pausa_ps_indisponivel_s": 45,
     "pausa_ps_periodo_indisponivel_s": 180,
     "pos_monitorar": False,           # 18/11: DESLIGADO por padrão
-    "avulsas_permitidas": False,      # 18/11: NUNCA aposta de uma perna só (só reentrada em par)
+    "avulsas_permitidas": False,
+    "cobrir_perna_solta": True,       # 18/11: 1aWin entrou e a PS não -> procura o par na PS a cada rodada      # 18/11: NUNCA aposta de uma perna só (só reentrada em par)
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_intervalo_s": 15,
     "pos_max_coberturas": 3,          # por posição
@@ -3722,6 +3723,7 @@ class Operador:
             return base
 
         geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
+        solta = [None, None]  # [perna da 1aWin sem par, bilhete] — 'sempre buscar pares para cobrir' (18/11)
         indisp_ps = [0]  # quantas vezes a PS disse 'mínima maior que a máxima' neste jogo
 
         def excluir(a, b, jan):
@@ -3839,6 +3841,11 @@ class Operador:
                     vazias += 1
                 self.estado.set_monitor("monitorando %s — rodada %d (%s: 1aWin %d ofertas, PS %d ofertas)" % (
                     sinal["jogo"], rodada, tipo, n1, n2))
+                if solta[0] is not None and n2:
+                    if self._cobrir_perna_solta(solta, lt[CASA_PS]["ofertas"], times, sinal, carteira_local, entradas):
+                        self.estado.set_monitor("%s: perna solta COBERTA — %d entrada(s)" % (sinal["jogo"], len(entradas)))
+                    cancel.wait(self.cfg["monitor_intervalo_s"])
+                    continue
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
                     cfg_par = self.cfg
@@ -3888,6 +3895,16 @@ class Operador:
                                 "(nunca o mesmo par)" % (sinal["jogo"], len(entradas), maxe))
                             self.estado.set_monitor("%s: %d entrada(s) — procurando reentrada" % (sinal["jogo"], len(entradas)))
                             ultimo_motivo = None
+                            cancel.wait(self.cfg["monitor_intervalo_s"])
+                            continue
+                        if st == "exposto" and self.cfg.get("cobrir_perna_solta", True):
+                            # 18/11, operador: 'sempre buscar pares para cobrir' — a 1aWin entrou e a PS não: NÃO para;
+                            # a cada rodada procura na PS uma linha do lado oposto que forme par com a perna solta
+                            solta[0] = dict(bil["pernas"][0], odd=bil["pernas"][0].get("odd_aceita") or bil["pernas"][0]["odd"])
+                            solta[1] = bil
+                            log("‼ %s: perna SOLTA na 1aWin (%s) — vou procurar na PS, a cada rodada, o par para cobrir" % (
+                                sinal["jogo"], bil["pernas"][0]["selecao"]))
+                            self.estado.set_monitor("%s: PERNA SOLTA na 1aWin — procurando o par na PS" % sinal["jogo"])
                             cancel.wait(self.cfg["monitor_intervalo_s"])
                             continue
                         if st in ("incerto", "exposto"):
@@ -3949,6 +3966,63 @@ class Operador:
                 log("erro no monitoramento (segue): %s" % msg.split("\n")[0][:200])
                 log(traceback.format_exc()[-600:])
             cancel.wait(self.cfg["monitor_intervalo_s"])
+
+    def _cobrir_perna_solta(self, solta, ofertas_ps, times, sinal, carteira_local, entradas):
+        """Perna da 1aWin ficou sem par (a PS recusou). Procura na PS o lado OPOSTO, mesmo mercado/período, numa
+        linha que forme par (janela ≥ 0: Over L pede Under ≥ L; Under L pede Over ≤ L), odd ≥ odd_min.
+        Preferência: janela ≥ 1 (middle de verdade), depois a odd mais alta. Stake: a perna padrão da PS (€5)."""
+        p1, bil = solta
+        lado = "abaixo" if p1["lado"] == "acima" else "acima"
+        om = float(self.cfg.get("odd_min") or 1.01)
+        cands = []
+        for o in ofertas_ps or []:
+            if o.get("tipo") != p1["tipo"] or o.get("periodo") != p1["periodo"] or o.get("lado") != lado:
+                continue
+            if o["odd"] < om - 1e-9:
+                continue
+            jan = (o["linha"] - p1["linha"]) if p1["lado"] == "acima" else (p1["linha"] - o["linha"])
+            if jan < -1e-9:
+                continue
+            cands.append((1 if jan >= float(self.cfg.get("janela_min", 1.0)) - 1e-9 else 0, o["odd"], jan, o))
+        if not cands:
+            log("perna solta: nenhuma linha na PS forma par agora (%s) — tento na próxima rodada" % p1["selecao"])
+            return False
+        cands.sort(key=lambda x: (-x[0], -x[1], -x[2]))
+        _, _, jan, o = cands[0]
+        cps = self.casas[CASA_PS]
+        perna = _limpa_oferta(o, CASA_PS, round(self.cfg["perna_ps_eur"] * self.cfg["cambio_brl_eur"], 2))
+        log("perna solta: tentando cobrir com %s @%s na PS (janela %s)" % (perna["selecao"], o["odd"], _br(jan, 1)))
+        with _TRAVA_CLIQUES:
+            m = cps.executar(cps.montar, perna, times, timeout=ESPERA_FASE1_S)
+            if not m["ok"]:
+                log("perna solta: a PS não montou (%s) — tento na próxima rodada" % m["motivo"])
+                return False
+            if self.cfg["modo_teste"]:
+                cps.executar(cps.desfazer, perna, timeout=30)
+                ok = True
+            else:
+                r = cps.executar(cps.confirmar, perna, timeout=120)
+                ok = r["ok"]
+                if ok is None:
+                    log("‼ perna solta: PS INCERTA ao cobrir — confira 'Apostas pendentes' na PS AGORA")
+                    solta[0] = None
+                    return False
+                if not ok:
+                    cps.executar(cps.limpar_cupom, timeout=40)
+                    log("perna solta: a PS recusou a cobertura (%s) — tento na próxima rodada" % r["motivo"])
+                    return False
+        with _TRAVA:
+            bil["pernas"][1] = perna
+            bil["detalhe"]["PS3838"] = "COBERTA depois: %s @%s" % (perna["selecao"], o["odd"])
+            bil["status"] = "confirmado" if not self.cfg["modo_teste"] else "testado"
+        self.estado.salvar()
+        carteira_local.extend([{"casa": x["casa"], "tipo": x["tipo"], "periodo": x["periodo"], "lado": x.get("lado"),
+                                "linha": x["linha"], "odd": x.get("odd_aceita") or x.get("odd_viva") or x["odd"],
+                                "stake": x["stake"]} for x in (p1, perna)])
+        entradas.append(bil.get("id"))
+        log("✔ perna solta COBERTA: %s + %s (janela %s)" % (p1["selecao"], perna["selecao"], _br(jan, 1)))
+        solta[0] = solta[1] = None
+        return True
 
     def _estacionar(self, cancel, sinal):
         """Casa limitada: para de ler/navegar; 1 reload a cada 120s até liberar ou sinal novo."""

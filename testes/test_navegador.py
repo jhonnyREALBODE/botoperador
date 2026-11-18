@@ -979,3 +979,29 @@ def test_avulsa_proibida_por_padrao(casas, cfgc):
     op.gerente.rodada(pos)
     assert not [p for p in pos["pernas"] if p["origem"] == "cobertura"]
     assert pos.get("tabela")  # a carteira continua aparecendo
+
+
+def test_perna_solta_procura_o_par_na_ps(casas, cfgc):
+    """18/11: 'sempre buscar pares para cobrir'. A 1aWin aceitou e a PS recusou 3x (a 1ª + 2 reapostas):
+    o monitoramento NÃO para; na rodada seguinte cobre a perna solta com uma linha oposta da PS."""
+    cfgc["modo_teste"] = False
+    cfgc["monitor_intervalo_s"] = 0.5
+    cfgc["reentrar_mesmo_jogo"] = False
+    servidor.ESTADO["rejeita_ps"] = 3
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    est = P.Estado(cfgc)
+    op = P.Operador(cfgc, est, casas)
+    op.novo_sinal(dict(SINAL, id="solta"))
+    assert esperar(lambda: any("COBERTA" in str((b.get("detalhe") or {}).get("PS3838", "")) for b in est.bilhetes), 150), (
+        [(b["status"], b.get("detalhe")) for b in est.bilhetes], P._LOG_MEM[-15:])
+    b = [b for b in est.bilhetes if "COBERTA" in str((b.get("detalhe") or {}).get("PS3838", ""))][0]
+    assert b["status"] == "confirmado"
+    op._atual[1].set()
+    time.sleep(1.5)
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
