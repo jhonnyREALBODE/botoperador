@@ -4569,8 +4569,23 @@ class GerentePosicoes:
         threading.Thread(target=self._laco, name="posicoes", daemon=True).start()
         return self
 
+    def encerrar_velhas(self, horas=None):
+        """Fecha posições abertas há mais que o tempo máximo (pos_duracao_max_min) — ou que 'horas', no botão
+        Limpar. 19/11: com a cobertura desligada o laço não rodava e posições de ontem ficavam 'monitorando'."""
+        lim = (horas * 3600.0) if horas is not None else float(self.cfg.get("pos_duracao_max_min", 150)) * 60
+        n = 0
+        for pos in [p for p in list(self.estado.posicoes) if p.get("aberta")]:
+            if time.time() - float(pos.get("aberta_em") or 0) > lim:
+                self.fechar(pos, "jogo antigo (aberta há mais de %d min)" % int(lim / 60))
+                n += 1
+        return n
+
     def _laco(self):
         while True:
+            try:
+                self.encerrar_velhas()
+            except Exception:
+                pass
             if not self.cfg.get("pos_monitorar", True):  # desligado pelo painel/config
                 time.sleep(5)
                 continue
@@ -4933,7 +4948,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0}
 .ver{font-size:18px;font-weight:800;margin:8px 0}a{color:#7fb2ff}
 </style></head><body>
 <header><h1>🤖 Bot Operador de Middles</h1><span id="modo" class="tag teste">TESTE</span>
-<span id="params" class="mut"></span><button onclick="calibrar()">🧪 Calibrar agora</button></header>
+<span id="params" class="mut"></span><button onclick="calibrar()">🧪 Calibrar agora</button> <button onclick="post('/api/limpar')">🧹 Limpar painel</button></header>
 <main>
 <div class="card full" id="mon"></div>
 <div class="card" id="calc"><h2>🧮 Calculadora do motor</h2><div class="mut">aguardando a primeira rodada sadia…</div></div>
@@ -4974,7 +4989,8 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
   if(!pa.avulsas_permitidas){document.getElementById('posmodo').innerHTML='<div class="mut" style="margin-bottom:6px">Apostas avulsas (de uma perna só): <b>NUNCA</b>. A janela cresce só com reentradas EM PAR (1aWin + PS). Aqui fica a carteira de cada jogo.</div>';}
   else document.getElementById('posmodo').innerHTML='<div style="margin-bottom:6px">Cobertura: <b class="'+(md=='off'?'no':'ok')+'">'+nome+'</b>'+(d.modo=='TESTE'&&on?' <span class="mut">— modo teste: só SIMULA</span>':'')+bt('auto','Automático')+bt('manual','Manual')+bt('off','Desligar')+
    '</div><div class="mut" style="margin-bottom:6px">Regras: aposta avulsa só se abrir totais NOVOS com lucro na carteira, sem tirar o lucro de nenhum · sem distância mínima: compara com a janela atual da carteira · até '+R(pa.pos_max_por_cobertura_brl)+' por aposta · '+R(pa.pos_max_total_coberturas_brl)+' no total · pior caso da carteira até −'+R(pa.pos_perda_max_total_brl)+' · máx. '+pa.pos_max_coberturas+' avulsas</div>';}
- document.getElementById('pos').innerHTML=(d.posicoes||[]).map(p=>{const r=p.resumo||{};
+ const _pa=(d.posicoes||[]).filter(p=>p.aberta), _pe=(d.posicoes||[]).filter(p=>!p.aberta);
+ const _posHtml=p=>{const r=p.resumo||{};
   let h='<div style="border-bottom:1px solid var(--ln);padding:6px 0"><b>#'+p.id+' '+esc(p.jogo)+'</b> <span class="mut">('+esc(p.periodo)+')'+(p.simulada?' SIMULADA':'')+' — '+esc(p.status)+(p.atualizada?' · '+p.atualizada:'')+'</span>';
   h+='<div>'+p.pernas.map((l,i)=>'<b>A'+(i+1)+'</b> '+(l.origem=='entrada'?'entrada':l.origem=='reentrada'?'reentrada':'<b>cobertura</b>')+': '+(l.casa=='1awin'?'1aWin':'PS')+' '+(l.lado=='acima'?'Acima':'Abaixo')+' de '+l.linha+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</div>';
   if(p.tabela&&p.tabela.length){const tb=p.tabela,gr=[];for(const t of tb){const u=gr[gr.length-1];if(u&&Math.abs(u.liquido-t.liquido)<0.005)u.ate=t.total;else gr.push({de:t.total,ate:t.total,liquido:t.liquido,cobre:t.cobre});}
@@ -4985,7 +5001,9 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
   if(r.pior!=null)h+='<div>pior '+R(r.pior)+' · melhor '+R(r.melhor)+(r.ev!=null?' · EV '+R(r.ev)+' · P(lucro) '+P(100*r.p_lucro,0)+'% · P(prejuízo) '+P(100*r.p_preju,0)+'%':'')+' · lucro se terminar em: '+(r.faixas_lucro||[]).map(f=>f[0]==f[1]?f[0]:f[0]+'–'+f[1]).join(', ')+'</div>';
   if(p.candidatos&&p.candidatos.length)h+='<div class="mut">avulsas avaliadas: '+p.candidatos.slice(0,3).map(c=>(c.ok?'✅':'✖')+' '+(c.lado=='acima'?'Acima':'Abaixo')+' '+c.linha+' @'+c.odd+' '+R(c.stake)+' ('+c.dist+' pts além da borda) → janela nova: '+((c.depois.novos_totais||[]).length?c.depois.novos_totais[0]+'–'+c.depois.novos_totais[c.depois.novos_totais.length-1]:'nenhuma')+' · pior '+R(c.depois.pior)+(c.ok?'':' <i>('+esc(c.motivo||'')+')</i>')).join(' | ')+'</div>';
   if(p.pendente)h+='<div class="am">Oportunidade: '+esc(p.pendente.descricao)+' <button onclick="post(\'/api/cobertura/'+p.id+'\')">APOSTAR COBERTURA</button></div>';
-  return h+'</div>'}).join('')||'Nenhuma posição aberta. Ela abre sozinha logo depois de um middle (confirmado no real, ou testado no modo teste).';
+  return h+'</div>'};
+ document.getElementById('pos').innerHTML=(_pa.map(_posHtml).join('')||'Nenhuma posição aberta. Ela abre sozinha logo depois de um middle (confirmado no real, ou testado no modo teste).')+
+   (_pe.length?'<details style="margin-top:6px"><summary class="mut">encerradas ('+_pe.length+')</summary>'+_pe.slice(0,10).map(_posHtml).join('')+'</details>':'');
  {const re=d.reentrada;const J=j=>j?(j[0]==j[1]?j[0]:j[0]+'–'+j[1]):'—';
   if(!re)document.getElementById('reent').innerHTML='Sem reentrada em avaliação (aparece depois do 1º par aceito num jogo).';
   else{let h='<div><b>'+esc(re.jogo)+'</b> · '+esc(re.hora)+' · janela atual: <b class="ok">'+J(re.janela)+'</b> · linha da PS: '+(re.linha_ps??'?')+' (na última entrada: '+(re.linha_ultima??'?')+') · espera: <b class="'+(re.portao=='liberado'?'ok':'am')+'">'+esc(re.portao)+'</b></div>';
@@ -5061,6 +5079,17 @@ def criar_painel(estado, operador, porta):
                     pass
                 log("📌 cobertura pós-entrada: %s (pelo painel — fica assim também quando o programa reabrir)" % {
                     "auto": "AUTOMÁTICA", "manual": "MANUAL", "off": "DESLIGADA"}[modo])
+                return self._env(200, '{"ok":true}')
+            if p == "/api/limpar":
+                # 🧹 só a TELA: posições velhas (> 3 h) encerradas, backlog e escadinha limpos — nada nas casas
+                n = 0
+                if operador and getattr(operador, "gerente", None):
+                    n = operador.gerente.encerrar_velhas(horas=3)
+                with _TRAVA:
+                    estado.backlog = []
+                    estado.reentrada = None
+                estado.salvar()
+                log("🧹 painel limpo: %d posição(ões) antiga(s) encerrada(s), backlog e escadinha zerados" % n)
                 return self._env(200, '{"ok":true}')
             if p == "/api/calibrar" and operador:
                 operador.calibrar()

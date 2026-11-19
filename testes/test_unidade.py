@@ -1395,3 +1395,17 @@ def test_mesma_perna_e_lado_linha_mercado_e_ancora_parada(cfg):
     fraco = [dict(_p("acima", 231.5, 1.85, 1.0), casa="1awin"), dict(_p("abaixo", 235.5, 1.85, 1.0), casa="ps3838")]
     av = P.avaliar_reentrada(cart, fraco, _cfg_esc(cfg))
     assert not av["ok"] and "não acrescenta total lucrativo novo" in av["motivo"]
+
+
+def test_posicoes_velhas_fecham_sozinhas(cfg):
+    """19/11: com a cobertura desligada, posições de ontem ficavam 'monitorando' no painel."""
+    import time as _t
+    est = P.Estado(cfg)
+    g = P.GerentePosicoes(cfg, est, {})
+    b = {"id": 1, "jogo": "A x B", "times": ["A", "B"], "tipo": "total", "periodo": "jogo",
+         "pernas": [dict(_p("acima", 150.5), casa="1awin"), dict(_p("abaixo", 151.5), casa="ps3838")]}
+    velha = g.abrir(b, {}, simulada=False)
+    velha["aberta_em"] = _t.time() - 5 * 3600
+    nova = g.abrir(dict(b, id=2, jogo="C x D", times=["C", "D"]), {}, simulada=False)
+    assert g.encerrar_velhas() == 1 and not velha["aberta"] and nova["aberta"]
+    assert "jogo antigo" in velha["status"]
