@@ -1182,3 +1182,118 @@ def test_linha_principal_da_escada():
                 {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": L, "odd": ou}]
     assert P.linha_principal(ofs) == 232.5
     assert P.DEFAULTS["reentrada_movimento_min"] == 1.0 and P.DEFAULTS["reentrada_espera_min_s"] == 60
+
+
+# ------------------------------------------------------------------ escadinha (especificação do operador 19/11)
+def _parx(ov, o_ov, un, o_un, cfg, par_id=None):
+    """Par como o programa monta: 1aWin = Over, PS = Under (€5 × câmbio), stake da 1aWin pelo retorno igual."""
+    a = {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": ov, "odd": o_ov}
+    b = {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": un, "odd": o_un}
+    c = P._calcular(a, b, cfg)
+    return [dict(a, casa="1awin", stake=c["stake_1w"], par=par_id), dict(b, casa="ps3838", stake=c["stake_ps"], par=par_id)]
+
+
+def _cfg_esc(cfg):
+    return dict(cfg, perda_max_por_jogo_brl=100.0)
+
+
+def test_esc_janela_continua_pacers(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    assert P.janela_continua(cart) == (232, 234)
+
+
+def test_esc_01_candidato_dentro_da_janela_recusado(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(232.5, 1.85, 233.5, 2.01, cfg), _cfg_esc(cfg))
+    assert not av["ok"] and "não acrescenta total lucrativo novo" in av["motivo"]
+
+
+def test_esc_02_amplia_um_ponto_para_cima(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(234.5, 1.85, 235.5, 2.01, cfg), _cfg_esc(cfg))
+    assert av["ok"] and av["novos"] == [235] and av["janela_nova"] == (232, 235)
+
+
+def test_esc_03_amplia_um_ponto_para_baixo(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(230.5, 1.85, 231.5, 2.01, cfg), _cfg_esc(cfg))
+    assert av["ok"] and av["novos"] == [231] and av["janela_nova"] == (231, 234)
+
+
+def test_esc_04_ilha_separada_recusada(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(239.5, 1.85, 241.5, 2.01, cfg), _cfg_esc(cfg))
+    assert not av["ok"] and "ilha separada" in av["motivo"]
+
+
+def test_esc_05_06_segunda_vez_pode_terceira_nao(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 235.5, 2.01, cfg), _cfg_esc(cfg))
+    assert av["ok"] and 235 in av["novos"]                       # 2ª vez do Over 231.5: amplia -> pode
+    cart += _parx(231.5, 1.85, 235.5, 2.01, cfg, 2)
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 237.5, 2.01, cfg), _cfg_esc(cfg))
+    assert not av["ok"] and "terceira repetição do Over 231.5" in av["motivo"]
+    # o Under 231.5 é outra linha (outro lado): não conta como repetição do Over 231.5
+    av = P.avaliar_reentrada(cart, _parx(229.5, 1.85, 231.5, 2.01, cfg), _cfg_esc(cfg))
+    assert "repetição" not in av["motivo"]
+
+
+def test_esc_07_par_identico_recusado(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 234.0, 2.01, cfg), _cfg_esc(cfg))
+    assert not av["ok"] and "par idêntico" in av["motivo"]
+
+
+def test_esc_08_total_antigo_vira_prejuizo_recusado(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    novas = [dict(_p("acima", 234.5, 1.85, 100.0), casa="1awin"), dict(_p("abaixo", 236.5, 1.85, 5.0), casa="ps3838")]
+    av = P.avaliar_reentrada(cart, novas, _cfg_esc(cfg))
+    assert not av["ok"] and "de lucro em prejuízo" in av["motivo"] and av["piorados"]
+
+
+def test_esc_09_pior_caso_acima_de_100_recusado(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    novas = [dict(_p("acima", 234.5, 1.85, 10.0), casa="1awin"), dict(_p("abaixo", 236.5, 1.80, 300.0), casa="ps3838")]
+    av = P.avaliar_reentrada(cart, novas, _cfg_esc(cfg))
+    assert not av["ok"] and "pior caso ultrapassa" in av["motivo"] and av["pior_depois"] < -100
+
+
+def test_esc_10_11_devolucao_so_em_linha_inteira():
+    over_int, under_int = _p("acima", 231.0, 1.9, 10.0), _p("abaixo", 231.0, 1.9, 10.0)
+    assert P.resultado_perna(over_int, 231) == "D" and P.pagamento_perna(over_int, 231) == 10.0
+    assert P.resultado_perna(under_int, 231) == "D" and P.pagamento_perna(under_int, 231) == 10.0
+    assert P.resultado_perna(over_int, 232) == "G" and P.resultado_perna(under_int, 230) == "G"
+    meio = _p("acima", 231.5, 1.9, 10.0)
+    for k in range(225, 240):
+        assert P.resultado_perna(meio, k) in ("G", "P")       # ,5 nunca devolve
+
+
+def test_esc_12_13_intervalo_e_movimento(cfg):
+    c = dict(cfg, reentrada_espera_min_s=60, min_movimento_linha=0.5)
+    ok, mot = P.portao_reentrada(1000.0, 232.5, 1030.0, 234.0, c)
+    assert not ok and "intervalo mínimo" in mot                 # 30 s < 60 s, mesmo com a linha andando
+    ok, mot = P.portao_reentrada(1000.0, 232.5, 1070.0, 232.5, c)
+    assert not ok and "não se movimentou" in mot                # passou 60 s mas a linha não andou
+    ok, _ = P.portao_reentrada(1000.0, 232.5, 1070.0, 233.0, c)
+    assert ok                                                   # 70 s e andou 0,5
+    assert P.DEFAULTS["min_movimento_linha"] == 0.5
+
+
+def test_esc_15_pacers_x_rockets(cfg):
+    """O caso real: depois de Over 231.5 + Under 234, os Unders 233 e 232.5 NÃO entram; o 235.5 só como 2º uso."""
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    c = _cfg_esc(cfg)
+    assert not P.avaliar_reentrada(cart, _parx(231.5, 1.85, 233.0, 2.01, cfg), c)["ok"]
+    assert not P.avaliar_reentrada(cart, _parx(231.5, 1.85, 232.5, 2.07, cfg), c)["ok"]
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 235.5, 1.806, cfg), c)
+    assert av["ok"] and av["novos"] == [235]
+
+
+def test_esc_16_carteira_usa_o_que_a_casa_aceitou():
+    bil = {"id": 7, "pernas": [
+        {"casa": "1awin", "tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": 195.5, "odd": 2.1,
+         "odd_aceita": 1.61, "stake": 26.29},
+        {"casa": "ps3838", "tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 193.0, "odd": 1.781,
+         "odd_viva": 1.819, "stake": 31.0}]}
+    pa = P.pernas_aceitas(bil)
+    assert pa[0]["odd"] == 1.61 and pa[1]["odd"] == 1.819 and pa[0]["stake"] == 26.29 and pa[0]["par"] == 7

@@ -999,6 +999,10 @@ def test_perna_solta_procura_o_par_na_ps(casas, cfgc):
         [(b["status"], b.get("detalhe")) for b in est.bilhetes], P._LOG_MEM[-15:])
     b = [b for b in est.bilhetes if "COBERTA" in str((b.get("detalhe") or {}).get("PS3838", ""))][0]
     assert b["status"] == "confirmado"
+    # especificação 19/11 (teste 14): falha numa perna = POSIÇÃO INCOMPLETA, alerta, e o jogo não reentra mais
+    assert any("POSIÇÃO INCOMPLETA" in a for a in b.get("avisos", []))
+    assert esperar(lambda: "sem novas reentradas" in est.monitor, 10), est.monitor
+    assert not op._atual[0].is_alive() or esperar(lambda: not op._atual[0].is_alive(), 10)
     op._atual[1].set()
     time.sleep(1.5)
     servidor.ESTADO.clear()
