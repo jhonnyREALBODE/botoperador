@@ -1966,6 +1966,9 @@ def _sem_toast_desfazer(tx):
                      if not re.search(r"evento exclu[ií]do|^\s*(cancelar|desfazer|undo)\s*$|^\s*\d{1,2}\s*$", l, re.I))
 
 
+# motivos de montagem em que a CASA mexeu na linha (vale tentar a âncora na montagem)
+_RX_LINHA_MUDOU = re.compile(r"não está mais na página|cupom sem a linha|não recebeu a seleção|sumiu do cupom|"
+                             r"odd mudou|odd do cupom caiu|travou o mercado|leitura não achou a seleção", re.I)
 _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado (fechado|encerrado)|market closed", re.I)
 _RX_REMOVER_TUDO = re.compile(r"^\s*(remover tudo|remove all|limpar tudo|clear all|apagar tudo)\s*$", re.I)
 _RX_OK_MODAL = re.compile(r"^\s*(ok|sim|confirmar|yes)\s*$", re.I)
@@ -4097,7 +4100,26 @@ class Operador:
                         self.estado.registrar_bilhete(bil, origem)
                         self.estado.atualizar(bil, status="executando")
                         cart_antes = carteira(bil["periodo"])  # antes: a posição ganha as pernas novas ao confirmar
-                        st = self.executar_bilhete(bil)
+                        cfg_sub = cfg_par
+
+                        def substituir(nome_f, b0, _cfg=cfg_sub):
+                            """Relê a casa que falhou e procura, com as MESMAS regras, o melhor par com a perna montada."""
+                            cc = self.casas[nome_f]
+                            lf = cc.executar(cc.ler_escada, times, timeout=60)
+                            if not lf.get("ok") or not lf.get("ofertas"):
+                                return None
+                            idx_ok = 1 if nome_f == CASA_1W else 0
+                            ok_of = {k: v for k, v in b0["pernas"][idx_ok].items() if k not in ("stake", "selecao", "casa")}
+                            e1 = lf["ofertas"] if nome_f == CASA_1W else [ok_of]
+                            e2 = [ok_of] if nome_f == CASA_1W else lf["ofertas"]
+                            novo, _m = achar_par(e1, e2, sinal, _cfg, None, excluir=excluir,
+                                                 preferir=preferir if entradas else None)
+                            if novo and any(abs(novo["pernas"][i]["linha"] - b0["pernas"][i]["linha"]) < 1e-9 and
+                                            novo["pernas"][i]["lado"] == b0["pernas"][i]["lado"] for i in (1 - idx_ok,)):
+                                return None  # a mesma linha que acabou de cair
+                            return novo
+
+                        st = self.executar_bilhete(bil, substituir=substituir)
                         if st in ("testado", "confirmado"):
                             novas = pernas_aceitas(bil)
                             if bil["tipo"] == "total":
@@ -4290,9 +4312,12 @@ class Operador:
             log("%s ainda limitada — próxima sonda em %ds" % (", ".join(c.rotulo for c in ainda), SONDA_LIMITE_S))
 
     # ---------------------------------------------- execução de um bilhete
-    def executar_bilhete(self, bil):
+    def executar_bilhete(self, bil, substituir=None):
         """Monta as duas casas em paralelo. Teste: fotografa e desfaz. Real: confirma
-        1aWin primeiro, PS depois. Qualquer montagem falhou -> nada confirma."""
+        1aWin primeiro, PS depois. Qualquer montagem falhou -> nada confirma.
+        substituir(casa_que_falhou, bil) -> bilhete novo | None: ÂNCORA NA MONTAGEM (operador 20/11) — uma perna
+        montou e a outra caiu porque a casa trocou a linha: segura a montada e troca SÓ a outra por uma linha que
+        ainda existe, se o par novo passar por todas as regras."""
         c1, cps = self.casas[CASA_1W], self.casas[CASA_PS]
         p1, p2 = bil["pernas"]
         times = bil["times"]
@@ -4305,6 +4330,10 @@ class Operador:
                     res[nome] = w()
                 except Exception as e:
                     res[nome] = {"ok": False, "motivo": "erro: %s" % e, "foto": ""}
+            falhas = [n for n, r in res.items() if not r["ok"]]
+            if substituir and len(falhas) == 1 and _RX_LINHA_MUDOU.search(res[falhas[0]]["motivo"] or ""):
+                self._ancora_na_montagem(bil, res, falhas[0], substituir)
+                p1, p2 = bil["pernas"]
             if all(r["ok"] for r in res.values()):
                 # CONFERÊNCIA FINAL, no instante em que o modo real confirmaria: as duas pernas
                 # ainda são as mesmas, na mesma odd? (caso Ratiopharm 15:21: PS 2.000 -> 1.675
@@ -4409,6 +4438,47 @@ class Operador:
             if self.gerente:
                 self.gerente.abrir(bil, urls, simulada=False)
             return "confirmado"
+
+    def _ancora_na_montagem(self, bil, res, nome_f, substituir):
+        """Segura a perna montada e tenta trocar a que caiu. Atualiza bil/res no lugar. Nunca aposta nada aqui."""
+        nome_ok = CASA_PS if nome_f == CASA_1W else CASA_1W
+        idx_f, idx_ok = (0, 1) if nome_f == CASA_1W else (1, 0)
+        try:
+            novo = substituir(nome_f, bil)
+        except Exception as e:
+            log("âncora na montagem: erro ao procurar troca (%s)" % str(e)[:100])
+            return False
+        if not novo:
+            log("âncora na montagem: %s caiu (%s) e nenhuma outra linha da %s forma par válido com %s" % (
+                bil["pernas"][idx_f]["selecao"], res[nome_f]["motivo"][:60], NOME_CASA[nome_f], bil["pernas"][idx_ok]["selecao"]))
+            return False
+        c, c_ok = self.casas[nome_f], self.casas[nome_ok]
+        perna_nova, perna_ok = novo["pernas"][idx_f], bil["pernas"][idx_ok]
+        log("⚓ âncora na montagem: seguro %s na %s e troco %s por %s @%s na %s" % (
+            perna_ok["selecao"], NOME_CASA[nome_ok], bil["pernas"][idx_f]["selecao"], perna_nova["selecao"],
+            perna_nova["odd"], NOME_CASA[nome_f]))
+        m = c.executar(c.montar, perna_nova, bil["times"], timeout=ESPERA_FASE1_S)
+        if not m["ok"]:
+            log("âncora na montagem: a troca também não montou (%s)" % m["motivo"])
+            return False
+        st_ok = novo["pernas"][idx_ok]["stake"]
+        if abs(st_ok - perna_ok["stake"]) > 0.009:
+            # a stake da perna segura depende da odd da outra (retorno igual): redigita
+            valor = st_ok / self.cfg["cambio_brl_eur"] if nome_ok == CASA_PS else st_ok
+            ok, mot = c_ok.executar(c_ok.preencher_stake, round(valor, 2), timeout=30)
+            if not ok:
+                log("âncora na montagem: não consegui ajustar a stake da perna segura (%s) — desfaço a troca" % mot)
+                c.executar(c.desfazer, perna_nova, timeout=30)
+                return False
+            perna_ok["stake"] = st_ok
+        with _TRAVA:
+            bil["pernas"][idx_f] = perna_nova
+            for k in ("janela", "custo", "total", "retorno", "ps_eur"):
+                bil[k] = novo[k]
+            bil.setdefault("avisos", []).append("⚓ âncora na montagem: %s trocada por %s (a casa mudou a linha)" % (
+                NOME_CASA[nome_f], perna_nova["selecao"]))
+        res[nome_f] = m
+        return True
 
     def _conferencia_final(self, res, bil):
         esperas = []

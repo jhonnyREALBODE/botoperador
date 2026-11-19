@@ -1009,3 +1009,38 @@ def test_perna_solta_procura_o_par_na_ps(casas, cfgc):
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
+
+
+
+def test_ancora_na_montagem_troca_so_a_perna_que_caiu(casas, cfgc):
+    """20/11 (operador): 'podia ter tentado âncora'. Lakers 00:40 / Brasov 14:27: uma perna montou e a outra caiu
+    porque a casa trocou a linha. Agora segura a montada e troca SÓ a que caiu por uma linha que ainda forma par."""
+    servidor.ESTADO["linha_sai_uma"] = 150
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    linha_antiga = bil["pernas"][0]["linha"]
+    c1 = casas[P.CASA_1W]
+
+    def substituir(nome_f, b0):
+        assert nome_f == P.CASA_1W
+        lf = c1.executar(c1.ler_escada, TIMES)
+        ok_of = {k: v for k, v in b0["pernas"][1].items() if k not in ("stake", "selecao", "casa")}
+        outras = [o for o in lf["ofertas"] if not (o["lado"] == b0["pernas"][0]["lado"] and o["linha"] == linha_antiga)]
+        # no site falso a outra linha da 1aWin não passa na tabela de custo: o teste afrouxa só o custo (a mecânica
+        # é o que está em teste; no programa as regras são as mesmas da entrada)
+        novo, _ = P.achar_par(outras, [ok_of], SINAL, dict(cfgc, custo_por_janela=None, custo_max=50.0))
+        return novo
+
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    st = P.Operador(cfgc, est, casas).executar_bilhete(bil, substituir=substituir)
+    assert st == "testado", "\n".join(P._LOG_MEM[-14:])
+    assert any("âncora na montagem" in a for a in bil.get("avisos", []))
+    assert bil["pernas"][0]["linha"] != linha_antiga
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)

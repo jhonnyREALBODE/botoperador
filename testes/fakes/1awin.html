@@ -100,6 +100,7 @@ if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
         sel = {jogo: j.t1 + ' - ' + j.t2, mk, rot, odd, morto: mortos.includes(mk)};
         renderCupom();
         if (ESTADO.linha_sai) setTimeout(() => { sel = null; renderCupom(); }, ESTADO.linha_sai);
+        if (ESTADO.linha_sai_uma && !window.__saiu) { window.__saiu = 1; setTimeout(() => { sel = null; renderCupom(); }, ESTADO.linha_sai_uma); }
       };
       m.querySelector('._body_r2').appendChild(b);
     }
