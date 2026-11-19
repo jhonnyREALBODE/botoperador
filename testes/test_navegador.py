@@ -987,6 +987,7 @@ def test_perna_solta_procura_o_par_na_ps(casas, cfgc):
     cfgc["modo_teste"] = False
     cfgc["monitor_intervalo_s"] = 0.5
     cfgc["reentrar_mesmo_jogo"] = False
+    cfgc["cobrir_perna_solta"] = True   # 20/11: desligado por padrão (posição incompleta congela tudo); aqui cobre a mecânica
     servidor.ESTADO["rejeita_ps"] = 3
     ir_jogo(casas)
     for c in casas.values():
@@ -1071,3 +1072,33 @@ def test_jogo_com_par_confirmado_fica_protegido_e_sinal_vai_pra_fila(casas, cfgc
     assert "sem nova entrada confirmada" in est.protecao["liberado"] and est.protecao["fila"] == []
     op._atual[1].set()
     time.sleep(1.5)
+
+
+
+def test_incompleto_bloqueia_tudo_e_a_fila_nao_anda(casas, cfgc):
+    """20/11 (operador): 1aWin confirmada e PS recusada -> INCOMPLETO: BLOQUEADO, alerta com as pernas, a fila NÃO
+    assume (não começa Denver x Boston). Só a resolução do operador libera."""
+    cfgc["modo_teste"] = False
+    cfgc["monitor_intervalo_s"] = 0.5
+    servidor.ESTADO["rejeita_ps"] = 3
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    est = P.Estado(cfgc)
+    op = P.Operador(cfgc, est, casas)
+    op.novo_sinal(dict(SINAL, id="incomp"))
+    assert esperar(lambda: op.bloqueio is not None, 150), [(b["status"], b.get("detalhe")) for b in est.bilhetes]
+    assert op.bloqueio["estado"] == "INCOMPLETO" and "1aWin" in op.bloqueio["confirmada"] and "PS3838" in op.bloqueio["falhou"]
+    assert esperar(lambda: not op._atual[0].is_alive(), 20)
+    s2 = dict(SINAL, id="denver", jogo="Flamengo x Franca", times=["Flamengo", "Franca"])
+    assert op.novo_sinal(s2) is False
+    time.sleep(2)
+    assert op._atual[2]["jogo"] == SINAL["jogo"] and [x["jogo"] for _, x in op._fila] == ["Flamengo x Franca"]
+    assert est.protecao["bloqueio"]["estado"] == "INCOMPLETO"
+    servidor.ESTADO.clear()
+    op._fila = []
+    op.resolver("liberar")
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)

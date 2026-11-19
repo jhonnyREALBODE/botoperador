@@ -419,6 +419,7 @@ def test_cooldown_do_sinal_identico(cfg, monkeypatch):
     op = P.Operador(cfg, P.Estado(cfg), {})
     assert op.novo_sinal(dict(SINAL)) is True
     assert op.novo_sinal(dict(SINAL)) is False
+    op._atual[0].join(3)  # o monitor (vazio, neste teste) terminou
     outro = dict(SINAL, id="outro")
     assert op.novo_sinal(outro) is True
 
@@ -1409,3 +1410,134 @@ def test_posicoes_velhas_fecham_sozinhas(cfg):
     nova = g.abrir(dict(b, id=2, jogo="C x D", times=["C", "D"]), {}, simulada=False)
     assert g.encerrar_velhas() == 1 and not velha["aberta"] and nova["aberta"]
     assert "jogo antigo" in velha["status"]
+
+
+# ------------------------------------------------------------------ segurança operacional (operador 20/11)
+def _l(ok=True, ofertas=(), motivo="", limitada=False):
+    return {"ok": ok, "ofertas": list(ofertas), "motivo": motivo, "limitada": limitada}
+
+
+def test_seg_classificacao_da_leitura():
+    assert P.classificar_leitura(_l(ofertas=[{"x": 1}])) == P.OFERTAS_ENCONTRADAS
+    assert P.classificar_leitura(_l()) == P.VAZIO_CONFIRMADO
+    assert P.classificar_leitura(_l(motivo="PS: mercado travado (cadeado em 32 odds)")) == P.SUSPENSO
+    for ruim in (_l(ok=False, motivo="erro na leitura: timeout"), _l(ok=False, motivo="PS deslogada — odds escondidas"),
+                 _l(ok=False, limitada=True, motivo="casa limitada (Excesso de requisições)"),
+                 _l(ok=False, motivo="a página da 1aWin não é a deste jogo"), None):
+        assert P.classificar_leitura(ruim) == P.ERRO_DE_LEITURA
+
+
+def test_seg_20_vazias_validas_liberam(cfg):
+    c, e, acao = 0, 0, None
+    for _ in range(20):
+        c, e, acao = P.contar_vazio({"1awin": P.VAZIO_CONFIRMADO, "ps3838": P.VAZIO_CONFIRMADO}, c, e, cfg)
+    assert c == 20 and acao == "libera"
+
+
+def test_seg_19_vazias_e_uma_oferta_zera(cfg):
+    c, e = 19, 0
+    c, e, acao = P.contar_vazio({"1awin": P.OFERTAS_ENCONTRADAS, "ps3838": P.VAZIO_CONFIRMADO}, c, e, cfg)
+    assert c == 0 and acao is None
+
+
+def test_seg_erro_e_suspenso_nao_contam_como_vazio(cfg):
+    c, e = 5, 0
+    c, e, _ = P.contar_vazio({"1awin": P.ERRO_DE_LEITURA, "ps3838": P.VAZIO_CONFIRMADO}, c, e, cfg)
+    assert c == 5 and e == 1                                  # erro não soma vazio
+    c, e, _ = P.contar_vazio({"1awin": P.SUSPENSO, "ps3838": P.VAZIO_CONFIRMADO}, c, e, cfg)
+    assert c == 5                                             # suspenso não soma vazio
+    c, e, _ = P.contar_vazio({"1awin": P.VAZIO_CONFIRMADO, "ps3838": P.SUSPENSO}, c, e, cfg)
+    assert c == 5
+    acao = None
+    for _ in range(10):
+        c, e, acao = P.contar_vazio({"1awin": P.ERRO_DE_LEITURA, "ps3838": P.ERRO_DE_LEITURA}, c, e, cfg)
+    assert acao == "alerta_erro" and c == 5                   # erro repetido: alerta, NÃO libera
+
+
+def _op(cfg):
+    est = P.Estado(cfg)
+    op = P.Operador(cfg, est, {})
+    iniciados = []
+    op._puxar_fila_original = op._puxar_fila
+    op.novo_sinal_original = op.novo_sinal
+    return est, op, iniciados
+
+
+def _sinal(nome):
+    a, b = nome.split(" x ")
+    return dict(SINAL, id=nome, jogo=nome, times=[a, b])
+
+
+def _bil(est, jogo="Lakers x Jazz"):
+    b = {"jogo": jogo, "times": jogo.split(" x "), "tipo": "total", "periodo": "jogo", "janela": 1.0, "custo": 1.0,
+         "pernas": [{"casa": "1awin", "selecao": "Abaixo de 234.5 (Jogo)", "linha": 234.5, "lado": "abaixo"},
+                    {"casa": "ps3838", "selecao": "Acima de 233.5 (Jogo)", "linha": 233.5, "lado": "acima"}]}
+    est.registrar_bilhete(b, "sinal")
+    return b
+
+
+def test_seg_incompleto_e_incerto_seguram_a_fila(cfg, monkeypatch):
+    for estado in ("INCOMPLETO", "INCERTO"):
+        est, op, _ = _op(cfg)
+        comecou = []
+        monkeypatch.setattr(threading.Thread, "start", lambda self: comecou.append(self.name))
+        op.bloquear(estado, _bil(est), "1aWin: Abaixo de 234.5", "PS3838: Acima de 233.5")
+        assert op.novo_sinal(_sinal("Denver x Boston")) is False          # não começa: vai para a fila
+        assert [x["jogo"] for _, x in op._fila] == ["Denver x Boston"]
+        op._puxar_fila()
+        assert [n for n in comecou if n != "gravar"] == [] and op._fila   # fila PARADA (nenhum monitor começou)
+        assert est.protecao["bloqueio"]["estado"] == estado
+        assert "1aWin" in est.protecao["bloqueio"]["confirmada"]
+
+
+def test_seg_nenhuma_perna_aceita_pode_liberar(cfg, monkeypatch):
+    est, op, _ = _op(cfg)
+    comecou = []
+    monkeypatch.setattr(op, "novo_sinal", lambda s, origem="sinal": comecou.append((s["jogo"], origem)))
+    op.bloquear("INCERTO", _bil(est), "nenhuma comprovada", "1aWin (incerta)")
+    op._fila = [(time.time(), _sinal("Denver x Boston"))]
+    assert op.resolver("nao_apostado")
+    time.sleep(0.3)
+    assert op.bloqueio is None and comecou == [("Denver x Boston", "fila")]
+    assert est.bilhetes[-1]["status"] == "falhou"
+
+
+def test_seg_liberacao_manual(cfg, monkeypatch):
+    est, op, _ = _op(cfg)
+    comecou = []
+    monkeypatch.setattr(op, "novo_sinal", lambda s, origem="sinal": comecou.append(s["jogo"]))
+    op.bloquear("INCOMPLETO", _bil(est), "1aWin: x", "PS3838: y")
+    op._fila = [(time.time(), _sinal("Denver x Boston"))]
+    assert op.resolver("liberar")
+    time.sleep(0.3)
+    assert op.bloqueio is None and comecou == ["Denver x Boston"]
+    assert any("liberação manual" in a for a in est.bilhetes[-1].get("avisos", []))
+
+
+def test_seg_sinal_expira_na_fila(cfg, monkeypatch):
+    est, op, _ = _op(cfg)
+    comecou = []
+    monkeypatch.setattr(op, "novo_sinal", lambda s, origem="sinal": comecou.append(s["jogo"]))
+    op._fila = [(time.time() - 25 * 60, _sinal("Velho x Jogo"))]     # validade: 20 min
+    op._puxar_fila()
+    time.sleep(0.3)
+    assert comecou == [] and op._fila == []
+    op._fila = [(time.time() - 25 * 60, _sinal("Velho x Jogo")), (time.time() - 60, _sinal("Novo x Jogo"))]
+    op._puxar_fila()
+    time.sleep(0.3)
+    assert comecou == ["Novo x Jogo"]
+
+
+def test_seg_reinicio_preserva_protecao_fila_contador_e_bloqueio(cfg):
+    est, op, _ = _op(cfg)
+    op._prot = {"jogo": "Lakers x Jazz", "pares": 2, "max": 4, "ultima": time.time() - 60,
+                "sinal": _sinal("Lakers x Jazz"), "bilhetes": [1, 2], "linha_ultima": 232.5}
+    op._vazio = [7, 1]
+    op._fila = [(time.time(), _sinal("Denver x Boston"))]
+    op._salvar_oper()
+    op2 = P.Operador(cfg, P.Estado(cfg), {})
+    assert op2._retomar["jogo"] == "Lakers x Jazz" and op2._retomar["bilhetes"] == [1, 2]
+    assert op2._vazio == [7, 1] and [x["jogo"] for _, x in op2._fila] == ["Denver x Boston"]
+    op2.bloquear("INCERTO", _bil(op2.estado), "1aWin: a", "PS3838: b")
+    op3 = P.Operador(cfg, P.Estado(cfg), {})
+    assert op3.bloqueio and op3.bloqueio["estado"] == "INCERTO"

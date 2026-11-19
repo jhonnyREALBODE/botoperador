@@ -53,7 +53,8 @@ PRINTS = os.path.join(DADOS, "prints")
 ARQ_CONFIG = os.path.join(BASE, "config.json")
 ARQ_LOG = os.path.join(BASE, "log-programa.txt")
 ARQ_HIST = os.path.join(DADOS, "historico.json")
-ARQ_PREFS = os.path.join(DADOS, "preferencias.json")  # escolhas feitas no painel (sobrevivem ao reinício)
+ARQ_PREFS = os.path.join(DADOS, "preferencias.json")
+ARQ_OPER = os.path.join(DADOS, "operacao.json")  # jogo protegido, fila, contador e BLOQUEIO (sobrevivem ao reinício)  # escolhas feitas no painel (sobrevivem ao reinício)
 ARQ_LIGAS = os.path.join(DADOS, "memoria_ligas_1awin.json")
 ARQ_URLS = os.path.join(DADOS, "memoria_urls.json")
 
@@ -125,7 +126,9 @@ DEFAULTS = {
     "reentrada_espera_min_s": 60,
     "protecao_sem_entrada_min": 15,    # 20/11: jogo com par confirmado fica protegido; libera após 15 min sem nova dupla
     "protecao_vazias_lib": 20,         # ...ou se o mercado sumir (20 leituras seguidas sem ofertas)
-    "fila_validade_min": 20,           # sinal na fila vale até 20 min (depois descarta)      # ...e com pelo menos 60 s de intervalo
+    "fila_validade_min": 20,
+    "erros_leitura_alerta": 10,        # 20/11: 10 leituras seguidas com erro -> pausa e alerta (não libera o jogo)
+    "cobrir_perna_solta": False,       # 20/11: com posição INCOMPLETA tudo congela (nada de aposta automática)           # sinal na fila vale até 20 min (depois descarta)      # ...e com pelo menos 60 s de intervalo
     "reentrada_custo_max": 15.0,       # reentrada: teto de custo (operador 17/11: até 15%)
     "reentrada_custo_bom": 4.0,        # até aqui entra sempre e tem preferência
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
@@ -136,7 +139,7 @@ DEFAULTS = {
     "pausa_ps_periodo_indisponivel_s": 180,
     "pos_monitorar": False,           # 18/11: DESLIGADO por padrão
     "avulsas_permitidas": False,
-    "cobrir_perna_solta": True,       # 18/11: 1aWin entrou e a PS não -> procura o par na PS a cada rodada      # 18/11: NUNCA aposta de uma perna só (só reentrada em par)
+      # 18/11: NUNCA aposta de uma perna só (só reentrada em par)
     "pos_modo": "auto",               # "auto" = aposta sozinho; "manual" = mostra no painel p/ confirmar
     "pos_intervalo_s": 15,
     "pos_max_coberturas": 3,          # por posição
@@ -1204,6 +1207,47 @@ def portao_reentrada(ultima_t, ultima_ml, agora, ml, cfg):
         return False, "linha não se movimentou o mínimo configurado (%s → %s; mínimo %s)" % (
             _fmt_linha(ultima_ml) if ultima_ml is not None else "?", _fmt_linha(ml) if ml is not None else "?", _br(mov, 1))
     return True, ""
+
+
+# ---------------------------------------------------------------- SEGURANÇA OPERACIONAL (operador 20/11)
+OFERTAS_ENCONTRADAS, VAZIO_CONFIRMADO, SUSPENSO, ERRO_DE_LEITURA = (
+    "OFERTAS_ENCONTRADAS", "VAZIO_CONFIRMADO", "SUSPENSO", "ERRO_DE_LEITURA")
+
+
+def classificar_leitura(l):
+    """Uma leitura de casa -> OFERTAS_ENCONTRADAS | VAZIO_CONFIRMADO | SUSPENSO | ERRO_DE_LEITURA.
+    VAZIO só quando a leitura CONCLUIU na página do jogo e não há linha nenhuma. Deslogada, limitada/captcha,
+    'não é o jogo', erro, timeout, sem resposta = ERRO (nunca conta como mercado vazio)."""
+    if not l or not isinstance(l, dict):
+        return ERRO_DE_LEITURA
+    mot = _sem_acento(l.get("motivo") or "").lower()
+    if l.get("limitada") or not l.get("ok"):
+        return ERRO_DE_LEITURA
+    if l.get("ofertas"):
+        return OFERTAS_ENCONTRADAS
+    if re.search(r"travad|cadeado|suspens|bloquead", mot):
+        return SUSPENSO
+    return VAZIO_CONFIRMADO
+
+
+def contar_vazio(classes, cont, erros, cfg):
+    """Contador do 'mercado sumiu'. classes = {casa: classe}. Só VAZIO_CONFIRMADO nas DUAS casas soma;
+    qualquer oferta zera; suspenso não soma nem zera; erro não soma (conta erros seguidos à parte).
+    Devolve (cont, erros, acao) com acao: 'libera' | 'alerta_erro' | None."""
+    vals = list(classes.values())
+    if any(v == OFERTAS_ENCONTRADAS for v in vals):
+        cont, erros = 0, 0
+    elif vals and all(v == VAZIO_CONFIRMADO for v in vals):
+        cont, erros = cont + 1, 0
+    elif any(v == ERRO_DE_LEITURA for v in vals):
+        erros += 1
+    else:
+        erros = 0  # suspenso: o jogo está vivo; não soma vazio
+    if cont >= int(cfg.get("protecao_vazias_lib", 20)):
+        return cont, erros, "libera"
+    if erros >= int(cfg.get("erros_leitura_alerta", 10)):
+        return cont, erros, "alerta_erro"
+    return cont, erros, None
 
 
 def linha_principal(ofertas, periodo="jogo"):
@@ -3868,6 +3912,10 @@ class Operador:
         self._fila = []             # [(quando, sinal)] sinais que chegaram com um jogo PROTEGIDO (par confirmado)
         self._prot = None           # {"jogo", "pares", "max", "ultima"}: jogo atual protegido
         self._motivo_lib = ""       # por que o último jogo protegido foi liberado
+        self.bloqueio = None        # {"estado": INCOMPLETO|INCERTO, "jogo", "confirmada", "falhou", ...}: tudo congelado
+        self._vazio = [0, 0]        # [leituras VAZIO_CONFIRMADO seguidas, erros de leitura seguidos] do jogo protegido
+        self._retomar = None
+        self._carregar_oper()
 
     def _posicao_aberta(self, times, periodo):
         for p in self.estado.posicoes:
@@ -3891,6 +3939,16 @@ class Operador:
                 log("sinal do mesmo jogo (%s) — já estou monitorando %s: sigo sem reiniciar (todos os mercados já são varridos)" % (
                     sinal.get("mercado") or "—", self._atual[2]["jogo"]))
                 return False
+            if self.bloqueio:
+                if origem in ("sinal", "fila"):
+                    self._fila = [(t, x) for t, x in self._fila if not _mesmo_jogo(x["times"], sinal["times"])]
+                    self._fila.append((time.time(), sinal))
+                    log("📥 BLOQUEADO (%s em %s): sinal %s vai para a fila" % (
+                        self.bloqueio["estado"], self.bloqueio["jogo"], sinal["jogo"]))
+                    self._publicar_protecao()
+                else:
+                    log("BLOQUEADO (%s em %s): nada começa até resolver no painel" % (self.bloqueio["estado"], self.bloqueio["jogo"]))
+                return False
             if origem == "sinal" and self._prot and self._atual and self._atual[0].is_alive() and not self._atual[1].is_set():
                 # 20/11 (operador): com par CONFIRMADO no jogo atual, o sinal novo vai para a FILA — o jogo continua
                 self._fila = [(t, x) for t, x in self._fila if not _mesmo_jogo(x["times"], sinal["times"])]
@@ -3911,14 +3969,79 @@ class Operador:
         th.start()
         return True
 
+    def _carregar_oper(self):
+        d = _ler_json(ARQ_OPER, {}) or {}
+        self.bloqueio = d.get("bloqueio")
+        self._fila = [(float(t), x) for t, x in (d.get("fila") or [])]
+        self._retomar = d.get("prot")
+        if self._retomar:
+            self._vazio = list(self._retomar.get("vazio") or [0, 0])
+
+    def _salvar_oper(self):
+        try:
+            prot = None
+            if self._prot:
+                prot = {k: v for k, v in self._prot.items()}
+                prot["vazio"] = list(self._vazio)
+            _gravar_json(ARQ_OPER, {"bloqueio": self.bloqueio, "fila": [[t, x] for t, x in self._fila], "prot": prot})
+        except Exception as e:
+            log("aviso: não salvei o estado da operação (%s)" % str(e)[:80])
+
+    def bloquear(self, estado_pos, bil, confirmada, falhou):
+        """INCOMPLETO / INCERTO: congela TODA aposta nova (todos os jogos), não puxa a fila, alerta no painel."""
+        self.bloqueio = {"estado": estado_pos, "jogo": bil.get("jogo"), "bilhete": bil.get("id"), "desde": agora(),
+                         "confirmada": confirmada, "falhou": falhou}
+        log("‼‼ BLOQUEADO — %s em %s | confirmada: %s | falhou/incerta: %s — NADA de aposta nova em jogo nenhum até "
+            "resolver (confira o histórico das casas e use os botões do painel)" % (estado_pos, bil.get("jogo"), confirmada, falhou))
+        self._publicar_protecao()
+
+    def resolver(self, acao):
+        """Saída do BLOQUEIO: 'concluido' (as duas aceitas), 'nao_apostado' (nenhuma aceita) ou 'liberar' (manual)."""
+        b = self.bloqueio
+        if not b:
+            return False
+        for bil in self.estado.bilhetes:
+            if bil.get("id") == b.get("bilhete"):
+                with _TRAVA:
+                    bil["status"] = {"concluido": "confirmado", "nao_apostado": "falhou"}.get(acao, bil["status"])
+                    bil.setdefault("avisos", []).append("%s resolvido pelo operador: %s" % (
+                        b["estado"], {"concluido": "as duas pernas aceitas", "nao_apostado": "nenhuma perna aceita",
+                                      "liberar": "liberação manual"}[acao]))
+        self.estado.salvar()
+        self.bloqueio = None
+        self._motivo_lib = "%s (%s) resolvido: %s" % (b["jogo"], b["estado"], acao)
+        log("🔓 bloqueio resolvido (%s) — a fila volta a andar" % acao)
+        self._publicar_protecao()
+        if not (self._atual and self._atual[0].is_alive() and not self._atual[1].is_set()):
+            self._puxar_fila()
+        return True
+
+    def retomar(self):
+        """Depois de reiniciar o programa: bloqueio continua; jogo protegido volta a ser acompanhado; senão, a fila."""
+        if self.bloqueio:
+            log("‼ o programa reabriu BLOQUEADO (%s em %s) — resolva no painel" % (self.bloqueio["estado"], self.bloqueio["jogo"]))
+            self._publicar_protecao()
+            return
+        r = self._retomar
+        if r and r.get("sinal") and time.time() - float(r.get("ultima") or 0) <= \
+                float(self.cfg.get("protecao_sem_entrada_min", 15)) * 60:
+            log("↻ retomo o jogo protegido %s (%d/%d pares, contador de vazio %d)" % (
+                r["jogo"], r.get("pares", 0), r.get("max", 4), self._vazio[0]))
+            self.novo_sinal(r["sinal"], origem="retomada")
+            return
+        self._retomar = None
+        self._puxar_fila()
+
     def _publicar_protecao(self):
+        self._salvar_oper()
         p = self._prot
         with _TRAVA:
             self.estado.protecao = {
                 "jogo": p["jogo"] if p else None, "pares": p["pares"] if p else 0, "max": p["max"] if p else 0,
                 "ultima": p["ultima"] if p else None,
                 "fila": [{"jogo": x["jogo"], "chegou": datetime.fromtimestamp(t).strftime("%H:%M:%S")} for t, x in self._fila],
-                "liberado": self._motivo_lib}
+                "liberado": self._motivo_lib, "bloqueio": self.bloqueio,
+                "vazio": list(self._vazio), "alerta": getattr(self, "_alerta", "")}
 
     def _rodar_monitor(self, sinal, ev, origem):
         try:
@@ -3930,14 +4053,19 @@ class Operador:
                 log("🔓 " + self._motivo_lib)
                 self._prot = None
             self._publicar_protecao()
-            if not cancelado_por_sinal:
+            if not cancelado_por_sinal and not self.bloqueio:
                 self._puxar_fila()
 
     def _puxar_fila(self):
         """Jogo liberado: pega o sinal MAIS RECENTE da fila que ainda vale e começa do zero (relê as linhas)."""
+        if self.bloqueio:
+            return
         with self._trava:
             validade = float(self.cfg.get("fila_validade_min", 20)) * 60
             vivos = [(t, x) for t, x in self._fila if time.time() - t <= validade]
+            for t, x in self._fila:
+                if time.time() - t > validade:
+                    log("⌛ fila: sinal %s expirou (chegou às %s)" % (x["jogo"], datetime.fromtimestamp(t).strftime("%H:%M:%S")))
             self._fila = []
         self._publicar_protecao()
         if not vivos:
@@ -4034,6 +4162,19 @@ class Operador:
             return nota_reentrada(avaliar_reentrada(cart, novas, self.cfg))
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
+        if origem == "retomada" and self._retomar:
+            r = self._retomar
+            for bid in r.get("bilhetes") or []:
+                b = next((x for x in self.estado.bilhetes if x.get("id") == bid), None)
+                if b and b.get("status") in ("confirmado", "testado"):
+                    carteira_local.extend(pernas_aceitas(b))
+                    entradas.append(bid)
+            ultima[0], ultima[1] = float(r.get("ultima") or time.time()), r.get("linha_ultima")
+            self._prot = dict(r)
+            self._prot["pares"] = len(entradas)
+            self._retomar = None
+            log("↻ carteira retomada: %d par(es), contador de vazio %d" % (len(entradas), self._vazio[0]))
+            self._publicar_protecao()
         while not cancel.is_set():
             try:
                 if c1.limitada or cps.limitada:
@@ -4102,17 +4243,33 @@ class Operador:
                     cancel.wait(self.cfg["monitor_intervalo_s"])
                     continue
                 if self._prot and self._prot.get("jogo") == sinal["jogo"]:
-                    # 20/11: liberação do jogo protegido — 15 min sem NOVA dupla confirmada, ou o mercado sumiu
+                    # 20/11: liberação do jogo protegido — 15 min sem NOVA dupla confirmada, ou o mercado REALMENTE
+                    # encerrado (20 leituras VAZIO_CONFIRMADO nas duas casas; erro/suspenso/carregando não contam)
+                    classes = {n: classificar_leitura(lt.get(n)) for n in (CASA_1W, CASA_PS)}
+                    antes_v = list(self._vazio)
+                    self._vazio[0], self._vazio[1], acao = contar_vazio(classes, self._vazio[0], self._vazio[1], self.cfg)
+                    if self._vazio != antes_v:
+                        self._publicar_protecao()
                     sem = time.time() - self._prot["ultima"]
                     lim = float(self.cfg.get("protecao_sem_entrada_min", 15)) * 60
                     if sem > lim:
                         self._motivo_lib = "%d min sem nova entrada confirmada" % int(sem / 60)
                         self.estado.set_monitor("%s: liberado — %s" % (sinal["jogo"], self._motivo_lib))
                         return
-                    if vazias >= int(self.cfg.get("protecao_vazias_lib", 20)):
-                        self._motivo_lib = "mercado sumiu (%d leituras sem ofertas nas duas casas)" % vazias
+                    if acao == "libera":
+                        self._motivo_lib = "mercado encerrado (%d leituras VAZIO_CONFIRMADO nas duas casas)" % self._vazio[0]
                         self.estado.set_monitor("%s: liberado — %s" % (sinal["jogo"], self._motivo_lib))
                         return
+                    if acao == "alerta_erro":
+                        self._alerta = "⚠ %d leituras seguidas com ERRO em %s (%s) — pausado; o jogo NÃO foi liberado" % (
+                            self._vazio[1], sinal["jogo"], ", ".join("%s: %s" % (NOME_CASA[n], c) for n, c in classes.items()))
+                        log(self._alerta)
+                        self._publicar_protecao()
+                        cancel.wait(30)
+                        continue
+                    if getattr(self, "_alerta", "") and self._vazio[1] == 0:
+                        self._alerta = ""
+                        self._publicar_protecao()
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
                     cfg_par = self.cfg
@@ -4201,7 +4358,8 @@ class Operador:
                             entradas.append(bil.get("id"))
                             self._prot = {"jogo": sinal["jogo"], "pares": len(entradas),
                                           "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
-                                          "ultima": time.time()}
+                                          "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas),
+                                          "linha_ultima": ultima[1]}
                             self._motivo_lib = ""
                             self._publicar_protecao()
                             cand_ant[0] = None
@@ -4241,6 +4399,16 @@ class Operador:
                             self.estado.set_monitor("%s: PERNA SOLTA na 1aWin — procurando o par na PS" % sinal["jogo"])
                             cancel.wait(self.cfg["monitor_intervalo_s"])
                             continue
+                        if st in ("incerto", "exposto") and not (st == "exposto" and solta[0] is not None):
+                            p1x, p2x = bil["pernas"]
+                            if st == "exposto":
+                                self.bloquear("INCOMPLETO", bil, "1aWin: " + p1x["selecao"], "PS3838: " + p2x["selecao"])
+                            elif (bil.get("detalhe") or {}).get("1aWin") == "confirmada":
+                                self.bloquear("INCERTO", bil, "1aWin: " + p1x["selecao"], "PS3838 (incerta): " + p2x["selecao"])
+                            else:
+                                self.bloquear("INCERTO", bil, "nenhuma comprovada",
+                                              "1aWin (incerta): " + p1x["selecao"] + " · PS3838 NÃO confirmada: " + p2x["selecao"])
+                            self._motivo_lib = "BLOQUEADO (%s) — a fila fica parada" % self.bloqueio["estado"]
                         if st in ("incerto", "exposto"):
                             if st == "exposto":
                                 st = "POSIÇÃO INCOMPLETA"
@@ -5123,11 +5291,20 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
    ph='<div style="margin-top:4px">🛡️ <b>Jogo protegido:</b> '+esc(pr.jogo)+' · pares confirmados: <b>'+pr.pares+'/'+pr.max+'</b> · última entrada confirmada há <b>'+Math.floor(seg/60)+'m'+String(seg%60).padStart(2,'0')+'s</b> (libera com 15 min sem nova dupla)</div>';}
   if(pr&&pr.fila&&pr.fila.length)ph+='<div>📥 <b>Sinais na fila ('+pr.fila.length+'):</b> '+pr.fila.map(f=>esc(f.jogo)+' <span class="mut">('+f.chegou+')</span>').join(' · ')+'</div>';
   if(pr&&pr.liberado)ph+='<div class="mut">🔓 último: '+esc(pr.liberado)+'</div>';
+  if(pr&&pr.alerta)ph+='<div class="no"><b>'+esc(pr.alerta)+'</b></div>';
+  const bq=pr&&pr.bloqueio;
+  if(bq){ph='<div style="background:#7a0010;color:#fff;padding:10px;border-radius:6px;margin:6px 0"><div style="font-size:18px"><b>🚨 BLOQUEADO — '+esc(bq.estado)+'</b> em '+esc(bq.jogo)+' (desde '+esc(bq.desde)+')</div>'+
+    '<div>✔ confirmada: <b>'+esc(bq.confirmada)+'</b></div><div>✖ falhou / incerta: <b>'+esc(bq.falhou)+'</b></div>'+
+    '<div style="margin:4px 0">Nenhuma aposta nova em jogo nenhum até resolver. Confira o histórico das duas casas e escolha:</div>'+
+    '<button onclick="if(confirm(\'As DUAS pernas aparecem aceitas no histórico?\'))post(\'/api/resolver/concluido\')">As duas foram aceitas (CONCLUÍDO)</button> '+
+    '<button onclick="if(confirm(\'NENHUMA perna foi aceita?\'))post(\'/api/resolver/nao_apostado\')">Nenhuma foi aceita (NÃO APOSTADO)</button> '+
+    '<button onclick="if(confirm(\'Liberar manualmente? Só faça isso se já resolveu a posição nas casas.\'))post(\'/api/resolver/liberar\')">Liberação manual</button></div>'+ph;
+    if(!window._bip||Date.now()-window._bip>8000){window._bip=Date.now();try{const a=new AudioContext(),o=a.createOscillator();o.frequency.value=880;o.connect(a.destination);o.start();setTimeout(()=>o.stop(),600);}catch(e){}}}
   document.getElementById('mon').innerHTML='<b>Monitor:</b> '+esc(d.monitor||'parado — aguardando sinal')+ph;}
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
  const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>b.status!='falhou');
- document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.avisos&&b.avisos.length?'<br><b class="no">'+b.avisos.map(esc).join('<br>')+'</b>':'')+(b.carteira?'<br><span class="mut">carteira: lucro em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
+ document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(({confirmado:'CONCLUÍDO',falhou:'NÃO APOSTADO',exposto:'INCOMPLETO',INCERTO:'INCERTO',testado:'testado (simulado)'})[b.status]||b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.avisos&&b.avisos.length?'<br><b class="no">'+b.avisos.map(esc).join('<br>')+'</b>':'')+(b.carteira?'<br><span class="mut">carteira: lucro em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
  {const on=pa.pos_monitorar, md=on?pa.pos_modo:'off';
   const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];
   const bt=(m,t)=>'<button style="margin-left:6px;'+(md==m?'background:#1e8e3e':'background:#555')+'" onclick="post(\'/api/pos_modo/'+m+'\')">'+t+'</button>';
@@ -5225,6 +5402,10 @@ def criar_painel(estado, operador, porta):
                 log("📌 cobertura pós-entrada: %s (pelo painel — fica assim também quando o programa reabrir)" % {
                     "auto": "AUTOMÁTICA", "manual": "MANUAL", "off": "DESLIGADA"}[modo])
                 return self._env(200, '{"ok":true}')
+            m4 = re.match(r"^/api/resolver/(concluido|nao_apostado|liberar)$", p)
+            if m4 and operador:
+                ok = operador.resolver(m4.group(1))
+                return self._env(200, '{"ok":%s}' % ("true" if ok else "false"))
             if p == "/api/limpar":
                 # 🧹 só a TELA: posições velhas (> 3 h) encerradas, backlog e escadinha limpos — nada nas casas
                 n = 0
@@ -5363,6 +5544,7 @@ def main(argv):
     casas = {CASA_PS: Casa(CASA_PS, cfg).iniciar(), CASA_1W: Casa(CASA_1W, cfg).iniciar()}
     operador = Operador(cfg, estado, casas)
     operador.gerente = GerentePosicoes(cfg, estado, casas).iniciar()  # sempre (o painel liga/desliga)
+    operador.retomar()  # 20/11: bloqueio / jogo protegido / fila sobrevivem ao reinício
     if cfg.get("pos_monitorar", True):
         log("📌 monitoramento pós-entrada LIGADO (modo %s; entra o que acrescentar totais novos à janela da carteira)" % (
             cfg.get("pos_modo", "auto")))
