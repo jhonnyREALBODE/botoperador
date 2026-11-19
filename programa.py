@@ -112,9 +112,9 @@ def log(msg):
 # ---------------------------------------------------------------- config
 DEFAULTS = {
     "janela_min": 1.0,
-    "custo_max": 4.0,            # ordem do operador 13/11 14:54 (era 3,0)
+    "custo_max": 5.0,            # 20/11: +1 (era 4,0)
     # tabela do operador 15/11: [janela de, janela até (exclusiva), perda máxima %]
-    "custo_por_janela": [[1, 2, 2.0], [2, 3, 3.8], [3, 7, 3.99], [7, 11, 7.0]],  # 7–10: 7% (ordem 15/11)
+    "custo_por_janela": [[1, 2, 3.0], [2, 3, 4.8], [3, 7, 4.99], [7, 11, 8.0]],  # 20/11: todos +1 (eram 2 / 3,8 / 3,99 / 7)
     # ---- monitoramento pós-entrada e cobertura dinâmica (ordem do operador 15/11)
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
@@ -129,8 +129,8 @@ DEFAULTS = {
     "fila_validade_min": 20,
     "erros_leitura_alerta": 10,        # 20/11: 10 leituras seguidas com erro -> pausa e alerta (não libera o jogo)
     "cobrir_perna_solta": False,       # 20/11: com posição INCOMPLETA tudo congela (nada de aposta automática)           # sinal na fila vale até 20 min (depois descarta)      # ...e com pelo menos 60 s de intervalo
-    "reentrada_custo_max": 15.0,       # reentrada: teto de custo (operador 17/11: até 15%)
-    "reentrada_custo_bom": 4.0,        # até aqui entra sempre e tem preferência
+    "reentrada_custo_max": 16.0,       # reentrada: teto de custo (20/11: +1, era 15%)
+    "reentrada_custo_bom": 5.0,        # até aqui entra sempre e tem preferência (20/11: +1, era 4%)
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
     "odd_min": 1.78,                   # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
@@ -4135,7 +4135,7 @@ class Operador:
                 tipo = av["tipo"]
                 if av["ok"]:
                     # custo: até 4% entra; acima disso só se VALER A PENA (duplo duplo ou janela ≥ 3 pontos)
-                    bom = float(self.cfg.get("reentrada_custo_bom", 4.0))
+                    bom = float(self.cfg.get("reentrada_custo_bom", 5.0))
                     if c["custo"] > bom + 1e-9 and not (len(av["novos"]) >= 2 or
                                                          jan >= float(self.cfg.get("reentrada_janela_vale", 3.0)) - 1e-9):
                         av = dict(av, ok=False, motivo="custo %s%% acima de %s%% sem valer a pena" % (_br(c["custo"]), _br(bom)))
@@ -4278,7 +4278,7 @@ class Operador:
                     if entradas and self.cfg.get("reentrada_livre", True):
                         # operador 17/11: na reentrada o custo pode ir até 10% SE VALER A PENA; preferência ≤ 4%
                         teto = 100.0 if self.cfg.get("reentrada_sem_tabela_custo", False) else \
-                            float(self.cfg.get("reentrada_custo_max", 15.0))
+                            float(self.cfg.get("reentrada_custo_max", 16.0))
                         cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=teto)
                     del avals[:]
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, cfg_par, raiox,
@@ -4585,7 +4585,7 @@ class Operador:
                 if (o1, o2) != (p1x["odd"], p2x["odd"]):
                     tot = p1x["stake"] + p2x["stake"]
                     custo_vivo = (tot - min(p1x["stake"] * o1, p2x["stake"] * o2)) / tot * 100 if tot else 999
-                    teto = float(self.cfg.get("custo_max_odd_viva", self.cfg.get("reentrada_custo_max", 15.0)))
+                    teto = float(self.cfg.get("custo_max_odd_viva", self.cfg.get("reentrada_custo_max", 16.0)))
                     log("par recalculado com as odds vivas %s × %s: custo %s%% (antes %s%%)" % (
                         o1, o2, _br(custo_vivo), _br(bil["custo"])))
                     if custo_vivo > teto + 1e-9:

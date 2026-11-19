@@ -12,7 +12,7 @@ from conftest import SINAL, TIMES, oferta
 
 # ------------------------------------------------------------------ config
 def test_config_default_custo_4(cfg):
-    assert cfg["custo_max"] == 4.0
+    assert cfg["custo_max"] == 5.0   # 20/11: todos os custos +1
     assert cfg["janela_min"] == 1.0
     assert cfg["perna_ps_eur"] == 5.0
     assert cfg["cambio_brl_eur"] == 6.20
@@ -52,7 +52,7 @@ def test_config_modo_real_so_com_false(tmp_path):
 
 def test_config_imprime_parametros_efetivos(tmp_path):
     P.carregar_config(str(tmp_path / "x.json"))
-    assert any("PARÂMETROS EFETIVOS" in l and "custo_max=4.0" in l for l in P._LOG_MEM)
+    assert any("PARÂMETROS EFETIVOS" in l and "custo_max=5.0" in l for l in P._LOG_MEM)
 
 
 # ------------------------------------------------------------------ texto e números
@@ -750,15 +750,15 @@ def test_ironia_maccabi_ramat_gan_15_11():
 
 
 def test_tabela_perda_por_janela_15_11(cfg):
-    """Tabela do operador: 1 pt até 2%; 2 pts até 3,8%; 3–6 abaixo de 4%."""
+    """Tabela do operador (20/11: todos +1): 1 pt até 3%; 2 pts até 4,8%; 3–6 abaixo de 5%; 7–10 até 8%."""
     f = P.custo_max_para
-    assert f(1.0, cfg) == 2.0 and f(1.5, cfg) == 2.0
-    assert f(2.0, cfg) == 3.8 and f(2.5, cfg) == 3.8
-    assert f(3.0, cfg) == 3.99 and f(6.5, cfg) == 3.99
-    assert f(7.0, cfg) == 7.0 and f(10.5, cfg) == 7.0
-    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.81)
-    b = oferta("ps3838", "total", "jogo", "acima", 213.5, 2.09)   # janela 1, custo ~3%
-    assert P.achar_par([a], [b], SINAL, cfg)[0] is None            # 1 ponto só aceita até 2%
+    assert f(1.0, cfg) == 3.0 and f(1.5, cfg) == 3.0
+    assert f(2.0, cfg) == 4.8 and f(2.5, cfg) == 4.8
+    assert f(3.0, cfg) == 4.99 and f(6.5, cfg) == 4.99
+    assert f(7.0, cfg) == 8.0 and f(10.5, cfg) == 8.0
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.80)
+    b = oferta("ps3838", "total", "jogo", "acima", 213.5, 2.05)   # janela 1, custo ~4,2%
+    assert P.achar_par([a], [b], SINAL, cfg)[0] is None            # 1 ponto só aceita até 3%
 
 
 # ------------------------------------------------------------------ pós-entrada / cobertura
@@ -1137,7 +1137,7 @@ def test_reentrada_livre_so_logica_do_parceiro(cfg):
 def test_reentrada_custo_ate_10_preferindo_4(cfg):
     """Operador 17/11: reentrada até 10% se valer a pena (duplo duplo ou janela ≥ 3); preferência ≤ 4%.
     O par de 22% de 15:48 (1aWin a 1.43) nunca mais entra."""
-    assert P.DEFAULTS["reentrada_custo_max"] == 15.0 and P.DEFAULTS["reentrada_custo_bom"] == 4.0
+    assert P.DEFAULTS["reentrada_custo_max"] == 16.0 and P.DEFAULTS["reentrada_custo_bom"] == 5.0  # 20/11: +1
     a = {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": 195.5, "odd": 1.43}
     b = {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 186.0, "odd": 1.689}
     assert P._calcular(a, b, cfg)["custo"] > 10
