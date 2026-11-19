@@ -1020,6 +1020,7 @@ def test_ancora_na_montagem_troca_so_a_perna_que_caiu(casas, cfgc):
     """20/11 (operador): 'podia ter tentado âncora'. Lakers 00:40 / Brasov 14:27: uma perna montou e a outra caiu
     porque a casa trocou a linha. Agora segura a montada e troca SÓ a que caiu por uma linha que ainda forma par."""
     servidor.ESTADO["linha_sai_uma"] = 150
+    cfgc["retentar_selecao_sumida"] = False   # aqui o teste é da âncora (a 2ª tentativa da mesma seleção tem teste próprio)
     ir_jogo(casas)
     for c in casas.values():
         recarregar(c)
@@ -1105,3 +1106,21 @@ def test_incompleto_bloqueia_tudo_e_a_fila_nao_anda(casas, cfgc):
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
+
+
+
+def test_selecao_que_some_num_lance_tenta_de_novo_uma_vez(casas, cfgc):
+    """20/11 (Osasco/Pato): 'a seleção sumiu durante a stake' — a 1aWin tirou a linha 1–2 s num lance. Agora espera
+    e monta a MESMA seleção mais uma vez (com a mesma conferência)."""
+    servidor.ESTADO["linha_sai_uma"] = 150
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
+    limpar_cupons(casas)
+    l1, _ = ler(casas)
+    o1 = [x for x in l1["ofertas"] if x["linha"] == 214.5 and x["lado"] == "abaixo"][0]
+    r = c1.executar(c1.montar, dict(o1, stake=34.56), TIMES)
+    assert r["ok"], r
+    assert any("tento a mesma seleção mais uma vez" in l for l in P._LOG_MEM[-10:])
+    c1.executar(c1.desfazer, o1)
+    servidor.ESTADO.clear()
+    recarregar(c1)

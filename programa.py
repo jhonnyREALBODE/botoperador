@@ -132,6 +132,8 @@ DEFAULTS = {
     "reentrada_custo_max": 16.0,       # reentrada: teto de custo (20/11: +1, era 15%)
     "reentrada_custo_bom": 5.0,        # até aqui entra sempre e tem preferência (20/11: +1, era 4%)
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
+    "retentar_selecao_sumida": True,   # 20/11: seleção sumiu da 1aWin num lance -> espera e tenta 1x de novo
+    "retentar_espera_s": 1.5,
     "odd_min": 1.78,                   # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
@@ -3080,6 +3082,22 @@ class Casa:
         """Monta UMA perna e registra quanto tempo levou (a casa mexe rápido no ao vivo)."""
         t0 = time.time()
         r = self._montar(perna, times)
+        # 20/11: a 1aWin tira a seleção do cupom por 1–2 s num lance ('sumiu durante/depois da stake') e devolve o
+        # mercado logo depois. Espera um pouco e tenta UMA vez de novo a MESMA seleção (relida pela identidade).
+        if not r["ok"] and self.nome == CASA_1W and re.search(r"sumiu|não recebeu a seleção", r.get("motivo") or "") \
+                and not perna.get("_retentou") and self.cfg.get("retentar_selecao_sumida", True):
+            perna["_retentou"] = True
+            log("%s: %s — espero %.1fs e tento a mesma seleção mais uma vez" % (
+                self.rotulo, r["motivo"][:60], float(self.cfg.get("retentar_espera_s", 1.5))))
+            self.page.wait_for_timeout(int(float(self.cfg.get("retentar_espera_s", 1.5)) * 1000))
+            mid = perna.pop("_mid", None)
+            try:
+                r = self._montar(perna, times)
+            finally:
+                if mid and "_mid" not in perna:
+                    perna["_mid"] = mid
+            if r["ok"]:
+                log("%s: segunda tentativa montou" % self.rotulo)
         r["segundos"] = round(time.time() - t0, 1)
         log("%s: montagem levou %.1fs" % (self.rotulo, r["segundos"]))
         return r
@@ -4728,7 +4746,16 @@ class Operador:
                 ok, mot = w()
             except Exception as e:
                 ok, mot = False, "conferência final falhou: %s" % str(e)[:80]
-            if not ok:
+            if not ok and nome == CASA_1W and "0 seleções" in mot and self.cfg.get("retentar_selecao_sumida", True):
+                # 20/11: a 1aWin tirou a seleção enquanto a PS montava — remonta UMA vez antes de desistir
+                c = self.casas[nome]
+                perna = bil["pernas"][0]
+                log("1aWin: a seleção sumiu antes da conferência final — remonto uma vez")
+                perna.pop("_retentou", None)
+                m = c.executar(c.montar, perna, bil["times"], timeout=ESPERA_FASE1_S)
+                if m["ok"]:
+                    ok, mot = True, ""
+                    res[nome] = m
                 res[nome]["ok"] = False
                 res[nome]["motivo"] = "montou, mas na conferência final: " + mot
                 res[nome]["montada"] = True  # está no cupom: precisa ser desfeita
