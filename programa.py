@@ -120,6 +120,8 @@ DEFAULTS = {
     "max_entradas_por_jogo": 4,
     "reentrada_mesma_janela": True,
     "reentrada_livre": True,
+    "reentrada_movimento_min": 1.0,    # 19/11: a linha principal da PS tem que andar ≥ 1 ponto desde a última entrada
+    "reentrada_espera_min_s": 60,      # ...e com pelo menos 60 s de intervalo
     "reentrada_custo_max": 15.0,       # reentrada: teto de custo (operador 17/11: até 15%)
     "reentrada_custo_bom": 4.0,        # até aqui entra sempre e tem preferência
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
@@ -1031,6 +1033,16 @@ def _txt_totais(ks):
     return ", ".join(("%d" % a) if a == b else ("%d–%d" % (a, b)) for a, b in _faixas(sorted(ks))) or "—"
 
 
+def linha_principal(ofertas, periodo="jogo"):
+    """A linha 'do meio' da escada (Acima e Abaixo com odds mais parecidas) — é ela que mostra se o jogo andou."""
+    pares = {}
+    for o in ofertas or []:
+        if o.get("tipo") == "total" and o.get("periodo") == periodo:
+            pares.setdefault(round(o["linha"], 2), {})[o["lado"]] = o["odd"]
+    melhores = [(abs(1 / d["acima"] - 1 / d["abaixo"]), L) for L, d in pares.items() if "acima" in d and "abaixo" in d]
+    return min(melhores)[1] if melhores else None
+
+
 def tipo_reentrada(carteira, novas):
     """Lógica do PARCEIRO (17/11) para a reentrada de um par (Over + Under) — a única regra das reentradas:
     - nunca o MESMO par (as duas linhas já apostadas nos mesmos lados);
@@ -1046,6 +1058,20 @@ def tipo_reentrada(carteira, novas):
     if any(p["lado"] == "acima" and abs(p["linha"] - lo) < 1e-9 for p in carteira) and \
             any(p["lado"] == "abaixo" and abs(p["linha"] - hi) < 1e-9 for p in carteira):
         return None  # o mesmo par de novo
+    # 19/11 (Pacers x Rockets): repetiu o Acima 231.5 QUATRO vezes. A mesma linha (mesmo lado) só repete UMA vez
+    # — é o duplo duplo do parceiro ('misturo linha igual com uma linha maior'); a 3ª vez não.
+    for p in novas:
+        iguais = sum(1 for q in carteira if q["lado"] == p["lado"] and abs(q["linha"] - p["linha"]) < 1e-9)
+        if iguais >= 2:
+            return None
+    # ESCADINHA: o par novo tem que ESTICAR a janela para fora (cima ou baixo). Par que fica dentro da janela que
+    # a carteira já cobre (ex.: Under 233 depois de Over 231.5/Under 234) não entra.
+    ovs0 = [p["linha"] for p in carteira if p["lado"] == "acima"]
+    uns0 = [p["linha"] for p in carteira if p["lado"] == "abaixo"]
+    if ovs0 and uns0:
+        ini, fim = min(ovs0), max(uns0)  # faixa que a carteira já cobre
+        if not (hi > fim + 1e-9 or lo < ini - 1e-9):
+            return None
     todas = list(carteira) + list(novas)
     ks = faixa_carteira(todas)
     g, g0 = greens_por_total(todas, ks), greens_por_total(carteira, ks)
@@ -3723,6 +3749,7 @@ class Operador:
             return base
 
         geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
+        ultima = [None, None]  # (quando, linha principal da PS) da última entrada aceita — 'esperar a linha andar'
         solta = [None, None]  # [perna da 1aWin sem par, bilhete] — 'sempre buscar pares para cobrir' (18/11)
         indisp_ps = [0]  # quantas vezes a PS disse 'mínima maior que a máxima' neste jogo
 
@@ -3848,6 +3875,23 @@ class Operador:
                     continue
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
+                    if entradas and self.cfg.get("reentrada_livre", True) and ultima[0] is not None:
+                        # 19/11: entrou 4x em 1,5 minuto com a linha parada. Reentrada só depois que a linha PRINCIPAL
+                        # da PS andar ≥ 1 ponto desde a última entrada (e com um intervalo mínimo)
+                        ml = linha_principal(lt[CASA_PS]["ofertas"], "jogo")
+                        andou = ml is not None and ultima[1] is not None and \
+                            abs(ml - ultima[1]) >= float(self.cfg.get("reentrada_movimento_min", 1.0)) - 1e-9
+                        cedo = time.time() - ultima[0] < float(self.cfg.get("reentrada_espera_min_s", 60))
+                        if cedo or not andou:
+                            if rodada % 4 == 0:
+                                log("%s: esperando a linha andar para a próxima entrada (linha principal da PS agora %s; "
+                                    "na última entrada %s)" % (sinal["jogo"], _fmt_linha(ml) if ml is not None else "?",
+                                                               _fmt_linha(ultima[1]) if ultima[1] is not None else "?"))
+                            self.estado.set_monitor("%s: %d entrada(s) — esperando a linha andar (PS %s; última %s)" % (
+                                sinal["jogo"], len(entradas), _fmt_linha(ml) if ml is not None else "?",
+                                _fmt_linha(ultima[1]) if ultima[1] is not None else "?"))
+                            cancel.wait(self.cfg["monitor_intervalo_s"])
+                            continue
                     cfg_par = self.cfg
                     # 17/11 15:48: sem a tabela entraram pares de CUSTO 22% (1aWin a 1.43). A tabela de custo voltou
                     # nas reentradas; só sai com "reentrada_sem_tabela_custo": true no config.json
@@ -3882,6 +3926,7 @@ class Operador:
                                     (" | ⚠ esta entrada AUMENTOU a perda em %s" % _txt_totais(av["piorou_em"])) if av["piorou_em"] else ""))
                             carteira_local.extend(novas)
                             entradas.append(bil.get("id"))
+                            ultima[0], ultima[1] = time.time(), linha_principal(lt[CASA_PS]["ofertas"], "jogo")
                             janela_padrao.setdefault(bil["periodo"], bil["janela"])
                             maxe = int(self.cfg.get("max_entradas_por_jogo", 1))
                             # 18/11: 'e assim por diante até bater 4 linhas' — o limite de 4 entradas por jogo voltou

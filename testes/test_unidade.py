@@ -1158,3 +1158,27 @@ def test_odd_minima_1_78(cfg):
     pos = _pos(250.5, 252.5)
     m, av = P.avaliar_cobertura(pos, {"1awin": _ofs(254.5, odd=1.60)}, None, dict(c, pos_perda_max_total_brl=100))
     assert m is None and av == []
+
+
+def test_escadinha_pacers_x_rockets(cfg):
+    """19/11: repetiu o Acima 231.5 quatro vezes e entrou com Unders DENTRO da janela (233, 232.5).
+    Agora: a reentrada tem que esticar a janela para fora e a mesma linha só repete uma vez."""
+    def par(ov, un):
+        return [dict(_p("acima", ov, 1.85, 33.68), casa="1awin"), dict(_p("abaixo", un, 2.01, 31.0), casa="ps3838")]
+    cart = par(231.5, 234.0)
+    assert P.tipo_reentrada(cart, par(231.5, 233.0)) is None      # dentro da janela
+    assert P.tipo_reentrada(cart, par(231.5, 232.5)) is None      # dentro da janela
+    assert P.tipo_reentrada(cart, par(231.5, 235.5)) == "duplo duplo"  # repete o Over UMA vez e estica
+    cart += par(231.5, 235.5)
+    assert P.tipo_reentrada(cart, par(231.5, 237.5)) is None      # 3ª vez o mesmo Acima 231.5: não
+    assert P.tipo_reentrada(cart, par(234.5, 236.5)) in ("sequência", "duplo duplo")  # escadinha pra cima
+    assert P.tipo_reentrada(cart, par(229.5, 231.5)) in ("sequência", "duplo duplo")  # escadinha pra baixo
+
+
+def test_linha_principal_da_escada():
+    ofs = []
+    for L, oa, ou in [(229.5, 1.55, 2.40), (231.5, 1.80, 2.02), (232.5, 1.91, 1.91), (234.5, 2.20, 1.66)]:
+        ofs += [{"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": L, "odd": oa},
+                {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": L, "odd": ou}]
+    assert P.linha_principal(ofs) == 232.5
+    assert P.DEFAULTS["reentrada_movimento_min"] == 1.0 and P.DEFAULTS["reentrada_espera_min_s"] == 60
