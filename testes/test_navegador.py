@@ -273,8 +273,11 @@ def test_handicap_religado(casas, cfgc):
     ir_jogo(casas)
     limpar_cupons(casas)
     bil = achar(casas, cfgc)
-    assert bil["tipo"] == "handicap" and bil["janela"] == 5.0
-    assert bil["pernas"][0]["linha"] == 9.5 and bil["pernas"][1]["linha"] == -4.5
+    # 20/11 (custos +1): com o limite maior, um par de janela 7 passou a valer e é o escolhido (maior janela)
+    assert bil["tipo"] == "handicap" and bil["janela"] >= 5.0
+    assert bil["custo"] <= P.custo_max_para(bil["janela"], cfgc) + 1e-9
+    l1, l2 = bil["pernas"][0]["linha"], bil["pernas"][1]["linha"]
+    assert (l1 > 0) != (l2 > 0)  # handicap: sinais opostos
     op = P.Operador(cfgc, P.Estado(cfgc), casas)
     assert op.executar_bilhete(bil) == "testado", bil.get("detalhe")
 
