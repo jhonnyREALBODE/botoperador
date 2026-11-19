@@ -120,7 +120,8 @@ DEFAULTS = {
     "max_entradas_por_jogo": 4,        # = max_pares_por_jogo (o nome novo também é aceito no config.json)
     "reentrada_mesma_janela": True,
     "reentrada_livre": True,
-    "min_movimento_linha": 0.5,        # 19/11: a linha principal da PS tem que andar ≥ 0,5 desde a última entrada
+    "min_movimento_linha": 0.5,
+    "max_repeticoes_mesma_perna": 4,   # 19/11: a mesma perna pode ser âncora de até 4 pares (se cada um ampliar)        # 19/11: a linha principal da PS tem que andar ≥ 0,5 desde a última entrada
     "reentrada_espera_min_s": 60,      # ...e com pelo menos 60 s de intervalo
     "reentrada_custo_max": 15.0,       # reentrada: teto de custo (operador 17/11: até 15%)
     "reentrada_custo_bom": 4.0,        # até aqui entra sempre e tem preferência
@@ -800,7 +801,10 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
         restricao = " [restrição ativa: só totais %s; handicap desligado]" % "/".join(
             p for p in PERIODOS_TODOS if p in permitidos)
     if validos:
-        validos.sort(key=lambda x: (-x[5], -x[1], x[2]["custo"]))
+        if preferir and any(isinstance(x[5], tuple) for x in validos):
+            validos.sort(key=lambda x: (x[5] if isinstance(x[5], tuple) else (), x[1], -x[2]["custo"]), reverse=True)
+        else:
+            validos.sort(key=lambda x: (-x[5], -x[1], x[2]["custo"]))
         _, jan, c, a, b, _ = validos[0]
         bil = _montar_bilhete(sinal, a, b, jan, c)
         if raiox is not None:
@@ -1093,11 +1097,17 @@ def avaliar_reentrada(carteira, novas, cfg):
     if identico:
         r["motivo"] = "par idêntico já utilizado (%s + %s)" % (_nome_perna(ov[0]), _nome_perna(un[0]))
         return r
+    # repetir uma perna é PERMITIDO (âncora) enquanto amplia; o limite é configurável (operador 19/11: 4)
+    max_rep = int(cfg.get("max_repeticoes_mesma_perna", 4))
+    usos = {}
     for p in (ov[0], un[0]):
         n = sum(1 for q in carteira if q["lado"] == p["lado"] and abs(q["linha"] - p["linha"]) < 1e-9)
-        if n >= 2:
-            r["motivo"] = "terceira repetição do %s" % _nome_perna(p)
+        usos[_nome_perna(p)] = n + 1
+        if n >= max_rep:
+            r["motivo"] = "%s já usado %d vezes (máximo %d)" % (_nome_perna(p), n, max_rep)
             return r
+    r["ancora"] = [k for k, v in usos.items() if v > 1]
+    r["tipo"] = "âncora" if r["ancora"] else "escadinha"
     todas = list(carteira) + list(novas)
     ks = faixa_carteira(todas)
     antes, depois = liquido_por_placar(carteira, ks), liquido_por_placar(todas, ks)
@@ -1134,12 +1144,31 @@ def avaliar_reentrada(carteira, novas, cfg):
     if r["pior_depois"] < -lim - 1e-9:
         r["motivo"] = "pior caso ultrapassa −R$ %s (ficaria %s)" % (_br(lim), _br(r["pior_depois"]))
         return r
-    g, g0 = greens_por_total(todas, ks), greens_por_total(carteira, ks)
-    r["tipo"] = "duplo duplo" if any(g[k] >= 4 and g0[k] < 4 for k in ks) else "sequência"
+    # métricas da escolha entre candidatos (operador 19/11)
+    r["capital"] = round(sum(p["stake"] for p in novas), 2)
+    r["lucro_min_janela"] = round(min(depois[k] for k in range(jn[0], jn[1] + 1)), 2)
+    conc = {}
+    for p in todas:
+        conc[_nome_perna(p)] = conc.get(_nome_perna(p), 0) + 1
+    r["concentracao"] = conc
+    r["concentracao_max"] = max(conc.values())
     r["ok"] = True
-    r["motivo"] = "amplia a janela %s → %s (%s)" % (
-        ("%d–%d" % ja) if ja else "—", "%d–%d" % jn, r["tipo"])
+    r["motivo"] = "amplia a janela %s → %s (%s%s)" % (
+        ("%d–%d" % ja) if ja else "—", "%d–%d" % jn, r["tipo"],
+        (": repete " + ", ".join(r["ancora"])) if r["ancora"] else "")
     return r
+
+
+def nota_reentrada(av):
+    """Ordem de escolha (operador 19/11), maior = melhor: 1) mais totais novos contíguos; 2) menor pior perda;
+    3) menor capital adicional; 4) maior lucro mínimo na janela; 5) menor concentração numa linha.
+    Valores PARECIDOS (R$ 2 / R$ 5) empatam de propósito, para cair no desempate: a escadinha completa."""
+    return (len(av.get("novos") or []),
+            round((av.get("pior_depois") or 0) / 2.0),
+            -round((av.get("capital") or 0) / 5.0),
+            round((av.get("lucro_min_janela") or 0) / 2.0),
+            -(av.get("concentracao_max") or 0),
+            1 if av.get("tipo") == "escadinha" else 0)
 
 
 def pernas_aceitas(bil):
@@ -3913,7 +3942,7 @@ class Operador:
                 if av["ok"]:
                     # custo: até 4% entra; acima disso só se VALER A PENA (duplo duplo ou janela ≥ 3 pontos)
                     bom = float(self.cfg.get("reentrada_custo_bom", 4.0))
-                    if c["custo"] > bom + 1e-9 and not (tipo == "duplo duplo" or
+                    if c["custo"] > bom + 1e-9 and not (len(av["novos"]) >= 2 or
                                                          jan >= float(self.cfg.get("reentrada_janela_vale", 3.0)) - 1e-9):
                         av = dict(av, ok=False, motivo="custo %s%% acima de %s%% sem valer a pena" % (_br(c["custo"]), _br(bom)))
                 avals.append({"pernas": [{"casa": x["casa"], "lado": x["lado"], "linha": x["linha"], "odd": x["odd"],
@@ -3929,22 +3958,14 @@ class Operador:
             return not avaliar_nova_entrada(cart, novas, self.cfg)["ok"]
 
         def preferir(a, b, c):
-            """Parceiro 17/11: 'se der, misturo linha igual com uma linha maior pra ter chance de DUPLO DUPLO;
-            senão vou em sequência'. Nota = quantos totais da carteira passam a ter 4+ greens."""
+            """Escolha entre candidatos válidos pela simulação da carteira inteira (ordem do operador 19/11)."""
             if a["tipo"] != "total":
-                return 0
+                return ()
             cart = carteira(a["periodo"])
             if not cart:
-                return 0
+                return ()
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
-            todas = cart + novas
-            ks = faixa_carteira(todas)
-            g = greens_por_total(todas, ks)
-            g0 = greens_por_total(cart, ks)
-            duplo = sum(1 for k in ks if g[k] >= 4 and g0[k] < 4)
-            # 1º critério: custo até 4% (operador 17/11); 2º: duplo duplo; depois a janela e o custo (no achar_par)
-            barato = 1 if c["custo"] <= float(self.cfg.get("reentrada_custo_bom", 4.0)) + 1e-9 else 0
-            return barato * 1000 + duplo
+            return nota_reentrada(avaliar_reentrada(cart, novas, self.cfg))
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
         while not cancel.is_set():
@@ -4957,8 +4978,8 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  {const re=d.reentrada;const J=j=>j?(j[0]==j[1]?j[0]:j[0]+'–'+j[1]):'—';
   if(!re)document.getElementById('reent').innerHTML='Sem reentrada em avaliação (aparece depois do 1º par aceito num jogo).';
   else{let h='<div><b>'+esc(re.jogo)+'</b> · '+esc(re.hora)+' · janela atual: <b class="ok">'+J(re.janela)+'</b> · linha da PS: '+(re.linha_ps??'?')+' (na última entrada: '+(re.linha_ultima??'?')+') · espera: <b class="'+(re.portao=='liberado'?'ok':'am')+'">'+esc(re.portao)+'</b></div>';
-   h+='<table style="font-size:12px;margin-top:4px"><tr><th></th><th>Par</th><th>Custo</th><th>Janela atual → simulada</th><th>Novos</th><th>Pior antes → depois</th><th>Investido</th><th>Motivo</th></tr>'+
-   (re.candidatos||[]).map(c=>'<tr><td>'+(c.ok?'✅':'✖')+'</td><td>'+c.pernas.map(x=>(x.casa=='1awin'?'1aWin':'PS')+' '+(x.lado=='acima'?'Over':'Under')+' '+x.linha+' @'+x.odd+' '+R(x.stake)).join('<br>')+'</td><td>'+P(c.custo)+'%</td><td>'+J(c.janela_antiga)+' → '+J(c.janela_nova)+'</td><td>'+((c.novos||[]).join(', ')||'—')+'</td><td>'+(c.pior_antes!=null?R(c.pior_antes)+' → '+R(c.pior_depois):'—')+'</td><td>'+R(c.investido_depois)+'</td><td>'+esc(c.motivo||'')+'</td></tr>').join('')+'</table>';
+   h+='<table style="font-size:12px;margin-top:4px"><tr><th></th><th>Tipo</th><th>Par</th><th>Custo</th><th>Janela atual → simulada</th><th>Novos</th><th>Pior antes → depois</th><th>Capital do par</th><th>Concentração</th><th>Motivo</th></tr>'+
+   (re.candidatos||[]).map(c=>'<tr><td>'+(c.ok?'✅':'✖')+'</td><td>'+esc(c.tipo||'—')+'</td><td>'+c.pernas.map(x=>(x.casa=='1awin'?'1aWin':'PS')+' '+(x.lado=='acima'?'Over':'Under')+' '+x.linha+' @'+x.odd+' '+R(x.stake)).join('<br>')+'</td><td>'+P(c.custo)+'%</td><td>'+J(c.janela_antiga)+' → '+J(c.janela_nova)+'</td><td>'+((c.novos||[]).join(', ')||'—')+'</td><td>'+(c.pior_antes!=null?R(c.pior_antes)+' → '+R(c.pior_depois):'—')+'</td><td>'+(c.capital!=null?R(c.capital):'—')+'</td><td>'+(c.concentracao?Object.entries(c.concentracao).filter(([k,v])=>v>1).map(([k,v])=>esc(k)+' ×'+v).join('<br>')||'nenhuma repetida':'—')+'</td><td>'+esc(c.motivo||'')+'</td></tr>').join('')+'</table>';
    const e=re.escolhido||(re.candidatos||[]).find(c=>c.saldos&&c.saldos.length);
    if(e&&e.saldos&&e.saldos.length)h+='<details><summary class="mut">saldo por total final (antes → depois) do '+(re.escolhido?'escolhido':'1º candidato')+'</summary><table style="font-size:12px">'+e.saldos.map(t=>'<tr><td>'+t[0]+'</td><td class="'+(t[1]>0?'ok':'no')+'">'+R(t[1])+'</td><td>→</td><td class="'+(t[2]>0?'ok':'no')+'">'+R(t[2])+'</td></tr>').join('')+'</table></details>';
    document.getElementById('reent').innerHTML=h;}}

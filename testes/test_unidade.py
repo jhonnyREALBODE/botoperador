@@ -1231,8 +1231,12 @@ def test_esc_05_06_segunda_vez_pode_terceira_nao(cfg):
     av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 235.5, 2.01, cfg), _cfg_esc(cfg))
     assert av["ok"] and 235 in av["novos"]                       # 2ª vez do Over 231.5: amplia -> pode
     cart += _parx(231.5, 1.85, 235.5, 2.01, cfg, 2)
-    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 237.5, 2.01, cfg), _cfg_esc(cfg))
-    assert not av["ok"] and "terceira repetição do Over 231.5" in av["motivo"]
+    # 19/11 (ajuste): a 3ª vez PODE, se ampliar — o limite é max_repeticoes_mesma_perna (4)
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 236.5, 2.01, cfg), _cfg_esc(cfg))
+    assert av["ok"] and av["tipo"] == "âncora", av["motivo"]
+    c2 = dict(_cfg_esc(cfg), max_repeticoes_mesma_perna=2)
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 236.5, 2.01, cfg), c2)
+    assert not av["ok"] and "já usado 2 vezes" in av["motivo"]
     # o Under 231.5 é outra linha (outro lado): não conta como repetição do Over 231.5
     av = P.avaliar_reentrada(cart, _parx(229.5, 1.85, 231.5, 2.01, cfg), _cfg_esc(cfg))
     assert "repetição" not in av["motivo"]
@@ -1297,3 +1301,80 @@ def test_esc_16_carteira_usa_o_que_a_casa_aceitou():
          "odd_viva": 1.819, "stake": 31.0}]}
     pa = P.pernas_aceitas(bil)
     assert pa[0]["odd"] == 1.61 and pa[1]["odd"] == 1.819 and pa[0]["stake"] == 26.29 and pa[0]["par"] == 7
+
+
+
+# ------------------------------------------------------------------ âncora × escadinha (ajuste do operador 19/11)
+def test_anc_1_mesma_perna_repetida_ampliando_aceita(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 236.5, 2.01, cfg), _cfg_esc(cfg))
+    assert av["ok"] and av["tipo"] == "âncora" and av["novos"] == [235, 236] and av["ancora"] == ["Over 231.5"]
+
+
+def test_anc_2_mesma_perna_repetida_sem_ampliar_recusa(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    for un in (233.0, 232.5):
+        av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, un, 2.01, cfg), _cfg_esc(cfg))
+        assert not av["ok"] and "não acrescenta total lucrativo novo" in av["motivo"]
+
+
+def test_anc_3_par_identico_recusa(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 234.0, 2.01, cfg), _cfg_esc(cfg))
+    assert not av["ok"] and "par idêntico" in av["motivo"]
+
+
+def test_anc_4_escadinha_para_cima_aceita(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1) + _parx(231.5, 1.85, 235.5, 2.01, cfg, 2)   # janela 232–235
+    assert P.janela_continua(cart) == (232, 235)
+    av = P.avaliar_reentrada(cart, _parx(234.5, 1.85, 236.5, 2.01, cfg), _cfg_esc(cfg))
+    assert av["ok"] and av["tipo"] == "escadinha" and av["janela_nova"] == (232, 236)
+    cart += _parx(234.5, 1.85, 236.5, 2.01, cfg, 3)
+    av = P.avaliar_reentrada(cart, _parx(236.5, 1.85, 238.5, 2.01, cfg), _cfg_esc(cfg))
+    assert av["ok"] and av["janela_nova"][1] == 238
+
+
+def test_anc_5_escadinha_para_baixo_aceita(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1) + _parx(231.5, 1.85, 235.5, 2.01, cfg, 2)
+    av = P.avaliar_reentrada(cart, _parx(229.5, 1.85, 231.5, 2.01, cfg), _cfg_esc(cfg))
+    assert av["ok"] and av["tipo"] == "escadinha" and av["janela_nova"] == (230, 235)
+
+
+def test_anc_6_ilha_separada_recusa(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(239.5, 1.85, 241.5, 2.01, cfg), _cfg_esc(cfg))
+    assert not av["ok"] and "ilha separada" in av["motivo"]
+
+
+def test_anc_7_amplia_mas_passa_de_100_recusa(cfg):
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    novas = [dict(_p("acima", 231.5, 1.85, 10.0), casa="1awin"), dict(_p("abaixo", 236.5, 1.80, 300.0), casa="ps3838")]
+    av = P.avaliar_reentrada(cart, novas, _cfg_esc(cfg))
+    assert not av["ok"] and "pior caso ultrapassa" in av["motivo"] and 235 in (av.get("novos") or [235])
+
+
+def test_anc_8_escolha_entre_ancora_e_escadinha(cfg):
+    """Vários candidatos: simula todos e escolhe pela ordem (novos, pior, capital, lucro mínimo, concentração),
+    com empate prático decidido a favor da escadinha completa."""
+    c = _cfg_esc(cfg)
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+
+    def preferir(a, b, cc):
+        novas = [dict(a, casa="1awin", stake=cc["stake_1w"]), dict(b, casa="ps3838", stake=cc["stake_ps"])]
+        return P.nota_reentrada(P.avaliar_reentrada(cart, novas, c))
+
+    def excluir(a, b, jan):
+        cc = P._calcular(a, b, c)
+        novas = [dict(a, casa="1awin", stake=cc["stake_1w"]), dict(b, casa="ps3838", stake=cc["stake_ps"])]
+        return not P.avaliar_reentrada(cart, novas, c)["ok"]
+    # âncora Over 231.5 × Under 235.5 (+235) contra escadinha Over 234.5 × Under 236.5 (+235–236): mais totais novos vence
+    w1 = [oferta("1awin", "total", "jogo", "acima", 231.5, 1.85), oferta("1awin", "total", "jogo", "acima", 234.5, 1.85)]
+    ps = [oferta("ps3838", "total", "jogo", "abaixo", 235.5, 2.01), oferta("ps3838", "total", "jogo", "abaixo", 236.5, 2.01)]
+    bil, _ = P.achar_par(w1, ps, SINAL, c, excluir=excluir, preferir=preferir)
+    assert bil and P.avaliar_reentrada(cart, bil["pernas"], c)["novos"] == [235, 236]
+    # mesma ampliação (+235) e números parecidos: âncora Over 231.5 × Under 235.5 contra escadinha Over 232.5 × Under 235.5
+    w1 = [oferta("1awin", "total", "jogo", "acima", 231.5, 1.85), oferta("1awin", "total", "jogo", "acima", 232.5, 1.85)]
+    ps = [oferta("ps3838", "total", "jogo", "abaixo", 235.5, 2.01)]
+    bil, _ = P.achar_par(w1, ps, SINAL, c, excluir=excluir, preferir=preferir)
+    av = P.avaliar_reentrada(cart, bil["pernas"], c)
+    assert av["ok"] and av["novos"] == [235] and av["tipo"] == "escadinha"   # empate prático -> escadinha
