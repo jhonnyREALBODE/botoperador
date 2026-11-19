@@ -1071,8 +1071,19 @@ def _nome_perna(p):
     return "%s %s" % ("Over" if p["lado"] == "acima" else "Under", _fmt_linha(p["linha"]))
 
 
+def _mesma_perna(p, q):
+    """'Mesma perna' = mesmo LADO + mesma LINHA + mesmo MERCADO (tipo + período). Casa e odd não entram."""
+    return (p["lado"] == q["lado"] and abs(p["linha"] - q["linha"]) < 1e-9
+            and p.get("tipo", "total") == q.get("tipo", "total") and p.get("periodo", "jogo") == q.get("periodo", "jogo"))
+
+
 def avaliar_reentrada(carteira, novas, cfg):
-    """Simula a carteira INTEIRA (apostas aceitas) + o par candidato e decide pela regra da escadinha.
+    """REGRAS OBRIGATÓRIAS da reentrada (filtro). Simula a carteira INTEIRA (apostas aceitas) + o par candidato.
+    - A ampliação é decidida pelo LUCRO LÍQUIDO da carteira em cada total final, nunca pela linha nominal.
+    - Âncora: uma perna repetida (mesmo lado + linha + mercado) pode ficar PARADA; basta a outra perna ter ido
+      para fora e o lucro da carteira cobrir totais novos contíguos.
+    - Escadinha: as duas linhas se movem; mesmas exigências.
+    A ORDEM DE ESCOLHA (nota_reentrada) só é aplicada depois, entre os candidatos que passaram aqui.
     Devolve dict: ok, motivo, tipo, janela_antiga, janela_nova, novos, piorados, pior_antes, pior_depois,
     melhor_depois, investido_antes, investido_depois, saldos [(total, antes, depois)]."""
     r = {"ok": False, "motivo": "", "tipo": None, "janela_antiga": None, "janela_nova": None, "novos": [],
@@ -1090,10 +1101,9 @@ def avaliar_reentrada(carteira, novas, cfg):
     for p in carteira:
         grupos.setdefault(p.get("par", id(p)), []).append(p)
     tem_par = any(p.get("par") is not None for p in carteira)
-    def _tem(lst, lado, L):
-        return any(q["lado"] == lado and abs(q["linha"] - L) < 1e-9 for q in lst)
-    identico = any(_tem(g, "acima", lo) and _tem(g, "abaixo", hi) for g in grupos.values()) if tem_par else \
-        (_tem(carteira, "acima", lo) and _tem(carteira, "abaixo", hi))
+    identico = any(any(_mesma_perna(ov[0], q) for q in g) and any(_mesma_perna(un[0], q) for q in g)
+                   for g in grupos.values()) if tem_par else \
+        (any(_mesma_perna(ov[0], q) for q in carteira) and any(_mesma_perna(un[0], q) for q in carteira))
     if identico:
         r["motivo"] = "par idêntico já utilizado (%s + %s)" % (_nome_perna(ov[0]), _nome_perna(un[0]))
         return r
@@ -1101,7 +1111,7 @@ def avaliar_reentrada(carteira, novas, cfg):
     max_rep = int(cfg.get("max_repeticoes_mesma_perna", 4))
     usos = {}
     for p in (ov[0], un[0]):
-        n = sum(1 for q in carteira if q["lado"] == p["lado"] and abs(q["linha"] - p["linha"]) < 1e-9)
+        n = sum(1 for q in carteira if _mesma_perna(p, q))
         usos[_nome_perna(p)] = n + 1
         if n >= max_rep:
             r["motivo"] = "%s já usado %d vezes (máximo %d)" % (_nome_perna(p), n, max_rep)
@@ -1160,7 +1170,8 @@ def avaliar_reentrada(carteira, novas, cfg):
 
 
 def nota_reentrada(av):
-    """Ordem de escolha (operador 19/11), maior = melhor: 1) mais totais novos contíguos; 2) menor pior perda;
+    """Só para candidatos que JÁ PASSARAM nas regras obrigatórias (avaliar_reentrada ok). Ordem de escolha
+    (operador 19/11), maior = melhor: 1) mais totais novos contíguos; 2) menor pior perda;
     3) menor capital adicional; 4) maior lucro mínimo na janela; 5) menor concentração numa linha.
     Valores PARECIDOS (R$ 2 / R$ 5) empatam de propósito, para cair no desempate: a escadinha completa."""
     return (len(av.get("novos") or []),

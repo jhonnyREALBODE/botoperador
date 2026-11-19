@@ -1378,3 +1378,20 @@ def test_anc_8_escolha_entre_ancora_e_escadinha(cfg):
     bil, _ = P.achar_par(w1, ps, SINAL, c, excluir=excluir, preferir=preferir)
     av = P.avaliar_reentrada(cart, bil["pernas"], c)
     assert av["ok"] and av["novos"] == [235] and av["tipo"] == "escadinha"   # empate prático -> escadinha
+
+
+def test_mesma_perna_e_lado_linha_mercado_e_ancora_parada(cfg):
+    """Operador 19/11: 'mesma perna' = lado + linha + mercado; ampliação pelo LUCRO da carteira; na âncora
+    o lado repetido fica PARADO e só a outra perna vai para fora."""
+    o = _p("acima", 231.5)
+    assert P._mesma_perna(o, dict(o, casa="ps3838", odd=2.2))            # casa/odd não importam
+    assert not P._mesma_perna(o, dict(o, lado="abaixo"))                 # outro lado
+    assert not P._mesma_perna(o, dict(o, periodo="q3"))                  # outro mercado (período)
+    assert not P._mesma_perna(o, dict(o, linha=232.5))                   # outra linha
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+    av = P.avaliar_reentrada(cart, _parx(231.5, 1.85, 235.5, 2.01, cfg), _cfg_esc(cfg))  # Over parado, Under fora
+    assert av["ok"] and av["tipo"] == "âncora" and av["novos"] == [235]
+    # linha nominal 'nova' sem lucro novo não amplia: Under 235.5 com stake mínima não põe 235 no lucro
+    fraco = [dict(_p("acima", 231.5, 1.85, 1.0), casa="1awin"), dict(_p("abaixo", 235.5, 1.85, 1.0), casa="ps3838")]
+    av = P.avaliar_reentrada(cart, fraco, _cfg_esc(cfg))
+    assert not av["ok"] and "não acrescenta total lucrativo novo" in av["motivo"]
