@@ -121,7 +121,8 @@ DEFAULTS = {
     "reentrada_mesma_janela": True,
     "reentrada_livre": True,
     "min_movimento_linha": 0.5,
-    "max_repeticoes_mesma_perna": 4,   # 19/11: a mesma perna pode ser âncora de até 4 pares (se cada um ampliar)        # 19/11: a linha principal da PS tem que andar ≥ 0,5 desde a última entrada
+    "max_repeticoes_mesma_perna": 4,
+    "odd_min_ancora": 1.50,            # 20/11: na âncora a perna REPETIDA pode ter odd menor (a nova segue odd_min)   # 19/11: a mesma perna pode ser âncora de até 4 pares (se cada um ampliar)        # 19/11: a linha principal da PS tem que andar ≥ 0,5 desde a última entrada
     "reentrada_espera_min_s": 60,      # ...e com pelo menos 60 s de intervalo
     "reentrada_custo_max": 15.0,       # reentrada: teto de custo (operador 17/11: até 15%)
     "reentrada_custo_bom": 4.0,        # até aqui entra sempre e tem preferência
@@ -3947,6 +3948,16 @@ class Operador:
             if self.cfg.get("reentrada_livre", True):
                 # ORDEM DO OPERADOR 17/11: nas reentradas SÓ a lógica do parceiro — duplo duplo ou em sequência,
                 # nunca o mesmo par. A linha pode andar pros dois lados; nada de adivinhar direção.
+                # 20/11: odd mínima na reentrada — a perna NOVA (a que vai para fora) precisa de odd_min (1.78); a perna
+                # ÂNCORA (mesmo lado + linha + mercado já na carteira) pode ter menos, até odd_min_ancora (1.50): quando
+                # o jogo anda, a linha antiga fica barata — é exatamente a hora da âncora (Lakers x Jazz 19/11 00:40)
+                om = self.cfg.get("odd_min")
+                om_anc = float(self.cfg.get("odd_min_ancora", 1.50))
+                for x in novas:
+                    ancora = any(_mesma_perna(x, q) for q in cart)
+                    piso = om_anc if ancora else (float(om) if om else 1.01)
+                    if x["odd"] < piso - 1e-9:
+                        return True
                 # 19/11 (especificação do operador): escadinha REAL — a carteira inteira + o par simulados juntos
                 av = avaliar_reentrada(cart, novas, self.cfg)
                 tipo = av["tipo"]
@@ -4055,7 +4066,7 @@ class Operador:
                         # operador 17/11: na reentrada o custo pode ir até 10% SE VALER A PENA; preferência ≤ 4%
                         teto = 100.0 if self.cfg.get("reentrada_sem_tabela_custo", False) else \
                             float(self.cfg.get("reentrada_custo_max", 15.0))
-                        cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=teto)
+                        cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=teto, odd_min=None)
                     del avals[:]
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, cfg_par, raiox,
                                             excluir=excluir, preferir=preferir if entradas else None)

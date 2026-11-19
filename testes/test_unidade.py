@@ -1409,3 +1409,15 @@ def test_posicoes_velhas_fecham_sozinhas(cfg):
     nova = g.abrir(dict(b, id=2, jogo="C x D", times=["C", "D"]), {}, simulada=False)
     assert g.encerrar_velhas() == 1 and not velha["aberta"] and nova["aberta"]
     assert "jogo antigo" in velha["status"]
+
+
+def test_ancora_com_odd_baixa_ainda_amplia(cfg):
+    """20/11 (Lakers x Jazz): o jogo subiu e o Over antigo ficou barato (< 1.78). Na âncora essa perna pode ter
+    odd menor (odd_min_ancora 1.50); a conta da carteira inteira decide se amplia."""
+    assert P.DEFAULTS["odd_min_ancora"] == 1.50
+    E = cfg["perna_ps_eur"] * cfg["cambio_brl_eur"]
+    cart = [dict(_p("abaixo", 234.5, 1.85, 35.4), casa="1awin", par=1), dict(_p("acima", 233.5, 2.11, E), casa="ps3838", par=1)]
+    assert P.janela_continua(cart) == (234, 234)
+    novas = [dict(_p("abaixo", 236.5, 1.85, 30.0), casa="1awin"), dict(_p("acima", 233.5, 1.62, E), casa="ps3838")]
+    av = P.avaliar_reentrada(cart, novas, dict(cfg, perda_max_por_jogo_brl=100.0))
+    assert av["ok"] and av["tipo"] == "âncora" and av["novos"] == [235, 236], av["motivo"]
