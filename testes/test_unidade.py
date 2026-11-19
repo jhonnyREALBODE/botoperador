@@ -1181,7 +1181,7 @@ def test_linha_principal_da_escada():
         ofs += [{"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": L, "odd": oa},
                 {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": L, "odd": ou}]
     assert P.linha_principal(ofs) == 232.5
-    assert P.DEFAULTS["reentrada_movimento_min"] == 1.0 and P.DEFAULTS["reentrada_espera_min_s"] == 60
+    assert P.DEFAULTS["min_movimento_linha"] == 0.5 and P.DEFAULTS["reentrada_espera_min_s"] == 60  # especificação 19/11
 
 
 # ------------------------------------------------------------------ escadinha (especificação do operador 19/11)
