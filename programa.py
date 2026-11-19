@@ -122,7 +122,10 @@ DEFAULTS = {
     "reentrada_livre": True,
     "min_movimento_linha": 0.5,
     "max_repeticoes_mesma_perna": 4,   # 19/11: a mesma perna pode ser âncora de até 4 pares (se cada um ampliar)        # 19/11: a linha principal da PS tem que andar ≥ 0,5 desde a última entrada
-    "reentrada_espera_min_s": 60,      # ...e com pelo menos 60 s de intervalo
+    "reentrada_espera_min_s": 60,
+    "protecao_sem_entrada_min": 15,    # 20/11: jogo com par confirmado fica protegido; libera após 15 min sem nova dupla
+    "protecao_vazias_lib": 20,         # ...ou se o mercado sumir (20 leituras seguidas sem ofertas)
+    "fila_validade_min": 20,           # sinal na fila vale até 20 min (depois descarta)      # ...e com pelo menos 60 s de intervalo
     "reentrada_custo_max": 15.0,       # reentrada: teto de custo (operador 17/11: até 15%)
     "reentrada_custo_bom": 4.0,        # até aqui entra sempre e tem preferência
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
@@ -3741,6 +3744,7 @@ class Estado:
         self.calculadora = None    # raio-x da última rodada sadia
         self.monitor = ""          # texto de status do monitoramento
         self.reentrada = None      # última avaliação de reentrada (escadinha) para o painel
+        self.protecao = None       # jogo protegido (par confirmado), fila de sinais e último motivo de liberação
         self._seq = max([b.get("id", 0) for b in self.bilhetes] + [0])
         self._trava_gravar = threading.Lock()
         self._sujo = threading.Event()
@@ -3820,6 +3824,7 @@ class Estado:
                 "calculadora": calc,
                 "monitor": self.monitor,
                 "reentrada": json.loads(json.dumps(self.reentrada, default=str)) if self.reentrada else None,
+                "protecao": dict(self.protecao) if self.protecao else None,
                 "posicoes": [_pos_painel(p) for p in self.posicoes[-20:]][::-1],
                 "log": _LOG_MEM[-80:],
             }
@@ -3860,6 +3865,9 @@ class Operador:
         self._atual = None          # (thread, evento_cancelar, sinal)
         self._trava = threading.Lock()
         self._ultimo_por_id = {}
+        self._fila = []             # [(quando, sinal)] sinais que chegaram com um jogo PROTEGIDO (par confirmado)
+        self._prot = None           # {"jogo", "pares", "max", "ultima"}: jogo atual protegido
+        self._motivo_lib = ""       # por que o último jogo protegido foi liberado
 
     def _posicao_aberta(self, times, periodo):
         for p in self.estado.posicoes:
@@ -3883,17 +3891,61 @@ class Operador:
                 log("sinal do mesmo jogo (%s) — já estou monitorando %s: sigo sem reiniciar (todos os mercados já são varridos)" % (
                     sinal.get("mercado") or "—", self._atual[2]["jogo"]))
                 return False
+            if origem == "sinal" and self._prot and self._atual and self._atual[0].is_alive() and not self._atual[1].is_set():
+                # 20/11 (operador): com par CONFIRMADO no jogo atual, o sinal novo vai para a FILA — o jogo continua
+                self._fila = [(t, x) for t, x in self._fila if not _mesmo_jogo(x["times"], sinal["times"])]
+                self._fila.append((time.time(), sinal))
+                log("📥 sinal novo na FILA (%s) — %s está protegido (%d/%d pares)" % (
+                    sinal["jogo"], self._prot["jogo"], self._prot["pares"], self._prot["max"]))
+                self._publicar_protecao()
+                return False
             if self._atual:
                 self._atual[1].set()
                 log("sinal novo assume — monitoramento de %s cancelado" % self._atual[2]["jogo"])
             ev = threading.Event()
-            th = threading.Thread(target=self._monitorar, args=(sinal, ev, origem), name="monitor", daemon=True)
+            th = threading.Thread(target=self._rodar_monitor, args=(sinal, ev, origem), name="monitor", daemon=True)
             self._atual = (th, ev, sinal)
         with _TRAVA:
             self.estado.sinais.append({"jogo": sinal["jogo"], "mercado": sinal.get("mercado", ""), "liga": sinal.get("liga", ""),
                                        "hora": agora(), "origem": origem})
         th.start()
         return True
+
+    def _publicar_protecao(self):
+        p = self._prot
+        with _TRAVA:
+            self.estado.protecao = {
+                "jogo": p["jogo"] if p else None, "pares": p["pares"] if p else 0, "max": p["max"] if p else 0,
+                "ultima": p["ultima"] if p else None,
+                "fila": [{"jogo": x["jogo"], "chegou": datetime.fromtimestamp(t).strftime("%H:%M:%S")} for t, x in self._fila],
+                "liberado": self._motivo_lib}
+
+    def _rodar_monitor(self, sinal, ev, origem):
+        try:
+            self._monitorar(sinal, ev, origem)
+        finally:
+            cancelado_por_sinal = ev.is_set()
+            if self._prot and self._prot.get("jogo") == sinal["jogo"]:
+                self._motivo_lib = "%s liberado: %s" % (sinal["jogo"], self._motivo_lib or "monitoramento encerrado")
+                log("🔓 " + self._motivo_lib)
+                self._prot = None
+            self._publicar_protecao()
+            if not cancelado_por_sinal:
+                self._puxar_fila()
+
+    def _puxar_fila(self):
+        """Jogo liberado: pega o sinal MAIS RECENTE da fila que ainda vale e começa do zero (relê as linhas)."""
+        with self._trava:
+            validade = float(self.cfg.get("fila_validade_min", 20)) * 60
+            vivos = [(t, x) for t, x in self._fila if time.time() - t <= validade]
+            self._fila = []
+        self._publicar_protecao()
+        if not vivos:
+            return
+        t, sinal = max(vivos, key=lambda tx: tx[0])
+        log("📤 fila: começo %s (sinal das %s) — linhas relidas agora, validação completa" % (
+            sinal["jogo"], datetime.fromtimestamp(t).strftime("%H:%M:%S")))
+        threading.Thread(target=self.novo_sinal, args=(sinal, "fila"), daemon=True).start()
 
     # ---------------------------------------------- monitoramento sem limite
     def _monitorar(self, sinal, cancel, origem):
@@ -4049,6 +4101,18 @@ class Operador:
                         return
                     cancel.wait(self.cfg["monitor_intervalo_s"])
                     continue
+                if self._prot and self._prot.get("jogo") == sinal["jogo"]:
+                    # 20/11: liberação do jogo protegido — 15 min sem NOVA dupla confirmada, ou o mercado sumiu
+                    sem = time.time() - self._prot["ultima"]
+                    lim = float(self.cfg.get("protecao_sem_entrada_min", 15)) * 60
+                    if sem > lim:
+                        self._motivo_lib = "%d min sem nova entrada confirmada" % int(sem / 60)
+                        self.estado.set_monitor("%s: liberado — %s" % (sinal["jogo"], self._motivo_lib))
+                        return
+                    if vazias >= int(self.cfg.get("protecao_vazias_lib", 20)):
+                        self._motivo_lib = "mercado sumiu (%d leituras sem ofertas nas duas casas)" % vazias
+                        self.estado.set_monitor("%s: liberado — %s" % (sinal["jogo"], self._motivo_lib))
+                        return
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
                     cfg_par = self.cfg
@@ -4135,12 +4199,18 @@ class Operador:
                                 x["par"] = bil.get("id")
                             carteira_local.extend(novas)
                             entradas.append(bil.get("id"))
+                            self._prot = {"jogo": sinal["jogo"], "pares": len(entradas),
+                                          "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
+                                          "ultima": time.time()}
+                            self._motivo_lib = ""
+                            self._publicar_protecao()
                             cand_ant[0] = None
                             ultima[0], ultima[1] = time.time(), linha_principal(lt[CASA_PS]["ofertas"], "jogo")
                             janela_padrao.setdefault(bil["periodo"], bil["janela"])
                             maxe = int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 1))
                             # 18/11: 'e assim por diante até bater 4 linhas' — o limite de 4 entradas por jogo voltou
                             if not self.cfg.get("reentrar_mesmo_jogo") or len(entradas) >= maxe:
+                                self._motivo_lib = "completou %d/%d pares" % (len(entradas), maxe)
                                 self.estado.set_monitor("%s: %s — monitoramento encerrado (%d entrada(s))" % (
                                     sinal["jogo"], st, len(entradas)))
                                 log("■ %s: rodada %s — monitoramento encerrado (%d entrada(s) neste jogo)" % (
@@ -5048,7 +5118,12 @@ function calc(c){if(!c)return '<h2>🧮 Calculadora do motor</h2><div class="mut
 async function tick(){try{const d=await (await fetch('/api/estado')).json();
  const m=document.getElementById('modo');m.textContent=d.modo;m.className='tag '+(d.modo=='REAL'?'real':'teste');
  const pa=d.params;document.getElementById('params').textContent='janela ≥ '+P(pa.janela_min,1)+' · custo ≤ '+P(pa.custo_max,1)+'% · PS €'+P(pa.perna_ps_eur)+' · câmbio '+P(pa.cambio_brl_eur)+(pa.so_totais?' · só totais '+pa.totais_periodos.join('/'):'');
- document.getElementById('mon').innerHTML='<b>Monitor:</b> '+esc(d.monitor||'parado — aguardando sinal');
+ {const pr=d.protecao;let ph='';
+  if(pr&&pr.jogo){const seg=pr.ultima?Math.max(0,Math.round(Date.now()/1000-pr.ultima)):0;
+   ph='<div style="margin-top:4px">🛡️ <b>Jogo protegido:</b> '+esc(pr.jogo)+' · pares confirmados: <b>'+pr.pares+'/'+pr.max+'</b> · última entrada confirmada há <b>'+Math.floor(seg/60)+'m'+String(seg%60).padStart(2,'0')+'s</b> (libera com 15 min sem nova dupla)</div>';}
+  if(pr&&pr.fila&&pr.fila.length)ph+='<div>📥 <b>Sinais na fila ('+pr.fila.length+'):</b> '+pr.fila.map(f=>esc(f.jogo)+' <span class="mut">('+f.chegou+')</span>').join(' · ')+'</div>';
+  if(pr&&pr.liberado)ph+='<div class="mut">🔓 último: '+esc(pr.liberado)+'</div>';
+  document.getElementById('mon').innerHTML='<b>Monitor:</b> '+esc(d.monitor||'parado — aguardando sinal')+ph;}
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
  const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>b.status!='falhou');

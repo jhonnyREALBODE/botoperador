@@ -1044,3 +1044,30 @@ def test_ancora_na_montagem_troca_so_a_perna_que_caiu(casas, cfgc):
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
+
+
+def test_jogo_com_par_confirmado_fica_protegido_e_sinal_vai_pra_fila(casas, cfgc):
+    """20/11 (operador): com par confirmado, o sinal novo NÃO cancela o jogo — vai para a fila. O jogo é liberado
+    (aqui: tempo sem nova entrada, encurtado no teste) e aí o sinal MAIS RECENTE da fila começa do zero."""
+    servidor.ESTADO.clear()
+    cfgc["reentrar_mesmo_jogo"] = True
+    cfgc["monitor_intervalo_s"] = 0.5
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    est = P.Estado(cfgc)
+    op = P.Operador(cfgc, est, casas)
+    op.novo_sinal(dict(SINAL, id="prot"))
+    assert esperar(lambda: est.bilhetes and est.bilhetes[-1]["status"] == "testado", 90)
+    assert esperar(lambda: op._prot is not None, 10)
+    assert est.protecao["jogo"] == SINAL["jogo"] and est.protecao["pares"] == 1
+    s2 = dict(SINAL, id="outro", jogo="Flamengo x Franca", times=["Flamengo", "Franca"])
+    s3 = dict(SINAL, id="outro2", jogo="Atlético de Atenas x São Lourenço", times=["Atlético de Atenas", "São Lourenço"])
+    assert op.novo_sinal(s2) is False and op.novo_sinal(s3) is False   # foram para a fila
+    assert op._atual[2]["jogo"] == SINAL["jogo"] and op._atual[0].is_alive()
+    assert [f["jogo"] for f in est.protecao["fila"]] == [s2["jogo"], s3["jogo"]]
+    cfgc["protecao_sem_entrada_min"] = 0.01   # libera já (no programa: 15 min)
+    assert esperar(lambda: op._atual and op._atual[2]["jogo"] == s3["jogo"], 30), est.protecao
+    assert "sem nova entrada confirmada" in est.protecao["liberado"] and est.protecao["fila"] == []
+    op._atual[1].set()
+    time.sleep(1.5)
