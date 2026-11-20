@@ -134,6 +134,7 @@ DEFAULTS = {
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
     "retentar_selecao_sumida": True,   # 20/11: seleção sumiu da 1aWin num lance -> espera e tenta 1x de novo
     "retentar_espera_s": 1.5,
+    "retentar_1awin_recusa": True,     # 20/11: 1aWin recusou e limpou o cupom (nada apostado) -> remonta e tenta 1x
     "odd_min": 1.78,                   # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
@@ -4358,6 +4359,7 @@ class Operador:
                                 return None  # a mesma linha que acabou de cair
                             return novo
 
+                        bil["_reentrada"] = bool(entradas)
                         st = self.executar_bilhete(bil, substituir=substituir)
                         if st in ("testado", "confirmado"):
                             novas = pernas_aceitas(bil)
@@ -4647,6 +4649,41 @@ class Operador:
                     "A PS está montada e NÃO foi confirmada.")
                 self.estado.atualizar(bil, status="INCERTO", detalhe=detalhe, fotos=fotos)
                 return "incerto"
+            if r1["ok"] is False and "limpou o cupom sem aceitar" in (r1.get("motivo") or "") \
+                    and self.cfg.get("retentar_1awin_recusa", True):
+                # 20/11 (Tatuí x Assis): a 1aWin recusou e limpou o cupom (odd mexeu no atraso do ao vivo; 'sempre
+                # aceitar alterações' desligado). NADA foi apostado e a PS segue montada: remonta a 1aWin com a odd
+                # que estiver lá e tenta UMA vez mais — só se o par recalculado ainda couber no limite da janela.
+                log("1aWin recusou sem apostar — remonto com a odd atual e tento mais uma vez")
+                p1.pop("_retentou", None)
+                p1.pop("odd_viva", None)
+                m1 = c1.executar(c1.montar, p1, times, timeout=ESPERA_FASE1_S)
+                if m1["ok"]:
+                    o1 = p1.get("odd_viva") or p1["odd"]
+                    o2 = p2.get("odd_viva") or p2["odd"]
+                    s2 = p2["stake"]
+                    s1n = round(s2 * o2 / o1, 2)
+                    tot = s1n + s2
+                    cv = (tot - min(s1n * o1, s2 * o2)) / tot * 100
+                    teto = custo_max_para(bil["janela"], self.cfg)
+                    if bil.get("_reentrada"):
+                        teto = float(self.cfg.get("reentrada_custo_max", 16.0))
+                    if cv <= teto + 1e-9 and o1 >= float(self.cfg.get("odd_min") or 1.01) - 1e-9:
+                        if abs(s1n - p1["stake"]) > 0.009:
+                            okst, _m = c1.executar(c1.preencher_stake, s1n, timeout=30)
+                            if okst:
+                                p1["stake"] = s1n
+                        log("1aWin remontada a %s (par a %s%%) — confirmo de novo" % (o1, _br(cv)))
+                        r1 = c1.executar(c1.confirmar, p1, timeout=120)
+                        fotos.append(r1.get("foto", ""))
+                        if r1["ok"] is None:
+                            detalhe["1aWin"] = r1["motivo"]
+                            detalhe["PS3838"] = "NÃO confirmada (montada, parada esperando você)"
+                            self.estado.atualizar(bil, status="INCERTO", detalhe=detalhe, fotos=fotos)
+                            return "incerto"
+                    else:
+                        log("1aWin remontada a %s, mas o par ficaria a %s%% (limite %s%%) — desisto" % (o1, _br(cv), _br(teto)))
+                        c1.executar(c1.limpar_cupom, timeout=30)
             if not r1["ok"]:
                 detalhe["1aWin"] = "não confirmou: " + r1["motivo"]
                 try:

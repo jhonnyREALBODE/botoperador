@@ -1124,3 +1124,25 @@ def test_selecao_que_some_num_lance_tenta_de_novo_uma_vez(casas, cfgc):
     c1.executar(c1.desfazer, o1)
     servidor.ESTADO.clear()
     recarregar(c1)
+
+
+
+def test_1awin_recusa_sem_apostar_remonta_e_tenta_de_novo(casas, cfgc):
+    """20/11 (Tatuí x Assis): 'a casa limpou o cupom sem aceitar (saldo continua)' — nada apostado e a PS montada.
+    Agora remonta a 1aWin e confirma mais uma vez (se o par ainda couber no limite)."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO["limpa_sem_apostar_uma"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+    assert st == "confirmado", (bil.get("detalhe"), P._LOG_MEM[-10:])
+    assert any("tento mais uma vez" in l for l in P._LOG_MEM[-30:])
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)

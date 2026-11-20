@@ -40,6 +40,7 @@ function renderCupom() {
     '<button type="button" class="_acc_x1">Fazer uma aposta</button><div id="msg"></div>';
   f.querySelector('._acc_x1').onclick = () => {
     if (ESTADO.limpa_sem_apostar) { sel = null; renderCupom(); return; }
+    if (ESTADO.limpa_sem_apostar_uma && !window.__limpou) { window.__limpou = 1; sel = null; renderCupom(); return; }
     if (ESTADO.processa_e_some) {  // 1aWin real 15/11 17:02: spinner, saldo cai, e a aposta NÃO entra
       const b = f.querySelector('._acc_x1'); b.setAttribute('aria-busy', 'true');
       const v = parseFloat(f.querySelector('input').value.replace(',', '.'));
