@@ -802,8 +802,8 @@ def test_ps_janela_confirmar_apostas_e_aviso_velho(casas, cfgc):
     cps = casas[P.CASA_PS]
     real_montar = cps.preparar
 
-    def montar_com_aviso(perna, times, cancel=None, prazo=None):
-        r = real_montar(perna, times, cancel, prazo)
+    def montar_com_aviso(perna, times, *a):
+        r = real_montar(perna, times, *a)
         cps.page.evaluate("""() => { const d = document.createElement('div');
             d.textContent = 'Odds have changed from 1.780 to 1.800'; document.getElementById('sels').prepend(d); }""")
         return r
@@ -877,9 +877,9 @@ def test_ps_aguardando_processamento(casas, final, esperado):
 
 def test_1awin_processa_e_nao_entra(casas, cfgc):
     """15/11 17:02: spinner, saldo cai, depois volta e o cupom limpa — a 1aWin NÃO entrou.
-    22/11 (modo conservador pedido pelo operador): 'processando' é a prova IMEDIATA de que o clique foi recebido, então a
-    PS é disparada logo em seguida. Se a 1aWin não entra, sobra a PS sozinha: PERNA_ORFA — a PS (aceita) NUNCA é
-    repetida, a 1aWin é tentada de novo dentro das regras e, sem sucesso, tudo para (exposto -> bloqueio INCOMPLETO)."""
+    22/11 (modo sequencial_processando): 'processando' é a prova IMEDIATA de que o clique foi recebido, então a PS é
+    disparada logo em seguida. A 1aWin não entra e some SEM recusa comprovada: PERNA_ORFA ambígua -> INCERTO (congela,
+    nada é repetido)."""
     cfgc["modo_teste"] = False
     servidor.ESTADO["processa_e_some"] = True
     ir_jogo(casas)
@@ -890,9 +890,12 @@ def test_1awin_processa_e_nao_entra(casas, cfgc):
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
     try:
-        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "exposto", bil["detalhe"]
+        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "incerto", bil["detalhe"]
         assert bil["_orfa"] == {"aceita": P.CASA_PS, "falta": P.CASA_1W}
-        assert bil["detalhe"]["PS3838"] == "confirmada" and "sem aceitar" in bil["detalhe"]["1aWin"]
+        # 22/11 (item 3): o cupom sumiu SEM recusa comprovada -> INCERTO, congela e a 1aWin NÃO é repetida
+        assert bil["detalhe"]["PS3838"] == "confirmada" and "sem recusa comprovada" in bil["detalhe"]["1aWin"]
+        c1 = casas[P.CASA_1W]
+        assert not any("PERNA_ORFA: tentativa" in l for l in P._LOG_MEM[-40:])
     finally:
         servidor.ESTADO.clear()
         for c in casas.values():
@@ -1171,9 +1174,9 @@ def test_r22_preparacao_concorrente_no_navegador(casas, cfgc, monkeypatch):
     marcas = {}
     original = P.Casa.preparar
 
-    def preparar_registrando(self, perna, times, cancel=None, prazo=None):
+    def preparar_registrando(self, perna, times, *a):
         t0 = time.time()
-        r = original(self, perna, times, cancel, prazo)
+        r = original(self, perna, times, *a)
         marcas[self.nome] = (t0, time.time())
         return r
     monkeypatch.setattr(P.Casa, "preparar", preparar_registrando)
@@ -1206,7 +1209,7 @@ def test_r22_dom_redesenhado_elemento_antigo_invalido(casas, cfgc):
     time.sleep(1.6)
     assert c1.executar(lambda: c1.page.locator('[data-mid="%s"]' % mid_velho).count()) == 0   # o nó velho sumiu
     perna = dict(o1, stake=34.56)
-    r = c1.executar(c1.preparar, perna, TIMES, None, time.time() + 15)
+    r = c1.executar(c1.preparar, perna, TIMES, None, 15.0)
     assert r["ok"], r
     assert any("cliquei a seleção" in l and "(relida)" in l for l in P._LOG_MEM[-15:])
     c1.executar(c1.desfazer, perna)

@@ -41,6 +41,18 @@ function renderCupom() {
   f.querySelector('._acc_x1').onclick = () => {
     if (ESTADO.limpa_sem_apostar) { sel = null; renderCupom(); return; }
     if (ESTADO.limpa_sem_apostar_uma && !window.__limpou) { window.__limpou = 1; sel = null; renderCupom(); return; }
+    if (ESTADO.processa_e_recusa && (ESTADO.processa_e_recusa === 'sempre' || !window.__recusou)) {
+      // 22/11: spinner e depois RECUSA EXPLÍCITA ('Aposta rejeitada'); a seleção fica no cupom
+      window.__recusou = 1; const b = f.querySelector('._acc_x1'); b.setAttribute('aria-busy', 'true');
+      setTimeout(() => { b.setAttribute('aria-busy', 'false'); document.getElementById('msg').textContent = 'Aposta rejeitada'; }, 1500);
+      return;
+    }
+    if (ESTADO.aceita_atrasada) {  // 22/11: spinner e a aceitação só chega depois
+      const b = f.querySelector('._acc_x1'); b.setAttribute('aria-busy', 'true');
+      setTimeout(() => { b.setAttribute('aria-busy', 'false'); window.__aceitas = (window.__aceitas || 0) + 1;
+        document.getElementById('msg').textContent = 'Aposta aceita'; }, ESTADO.aceita_atrasada);
+      return;
+    }
     if (ESTADO.processa_e_some) {  // 1aWin real 15/11 17:02: spinner, saldo cai, e a aposta NÃO entra
       const b = f.querySelector('._acc_x1'); b.setAttribute('aria-busy', 'true');
       const v = parseFloat(f.querySelector('input').value.replace(',', '.'));
@@ -55,10 +67,10 @@ function renderCupom() {
       if (ESTADO.saldo_volta) setTimeout(() => d.remove(), 3000);  // 20:46 conferido: a casa devolveu
       return; }
     if (ESTADO.so_saldo) { const v = parseFloat(f.querySelector('input').value.replace(',', '.')); document.getElementById('saldo').textContent = 'BRL ' + (120 - v).toFixed(2).replace('.', ','); sel = null; renderCupom(); return; }
-    if (ESTADO.recibo) { document.getElementById('slip').innerHTML = '<div class="_ok_r1"><p>Aposta aceita</p><a>Ir para o histórico</a></div><div data-scope="CouponCard"><span>Aberto • Simples</span><span>1.4</span><div>' + sel.mk + ', ' + sel.rot + '</div></div>'; return; }
+    if (ESTADO.recibo) { window.__aceitas = (window.__aceitas || 0) + 1; document.getElementById('slip').innerHTML = '<div class="_ok_r1"><p>Aposta aceita</p><a>Ir para o histórico</a></div><div data-scope="CouponCard"><span>Aberto • Simples</span><span>1.4</span><div>' + sel.mk + ', ' + sel.rot + '</div></div>'; return; }
     if (ESTADO.aceita_pior) {  // 1aWin real 16/11 09:10: conferido a 2.1, aceito a 1.61
       const bd = document.querySelector('[data-scope="SelectionCfBadge"] span'); if (bd) bd.textContent = '1.61'; }
-    if (!ESTADO.confirma_mudo) document.getElementById('msg').textContent = 'Aposta aceita'; };
+    if (!ESTADO.confirma_mudo) { window.__aceitas = (window.__aceitas || 0) + 1; document.getElementById('msg').textContent = 'Aposta aceita'; } };
   s.appendChild(f);
 }
 renderCupom();

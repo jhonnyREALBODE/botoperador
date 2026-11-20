@@ -136,10 +136,15 @@ DEFAULTS = {
     "retentar_espera_s": 1.5,
     # ---- execução do par em estados (operador 22/11, caso Bucks x Portland): PREPARAR -> BARREIRA_FINAL ->
     #      DISPARAR -> RECONCILIAR (-> PERNA_ORFA / INCERTO)
-    "tempo_max_preparacao_seg": 2.0,   # os DOIS cupons prontos (seleção + conferência + stake) dentro deste prazo
+    "tempo_max_preparacao_seg": 3.0,   # cada cupom pronto (seleção + conferência + stake) neste prazo; o cronômetro
+                                       # começa quando a casa COMEÇA a preparar (sem caça do jogo nem carregamento)
     "barreira_janela_ms": 300,         # as duas leituras finais dos cupons têm que terminar a até 300 ms uma da outra
-    "confirmacao": "conservadora",     # "conservadora" (1aWin, prova imediata, PS) ou "rapida" (os dois cliques juntos)
-    "disparo_intervalo_max_ms": 1500,  # conservadora: espera no máximo isto pela prova imediata da 1aWin
+    # "sequencial_processando": clica a 1aWin e dispara a PS assim que a 1aWin ACEITA ou mostra 'processando'.
+    #     RISCO: se a 1aWin processar e não aceitar, a PS fica ÓRFÃ (caso 15/11 17:02).
+    # "sequencial_aceita": a PS só dispara depois que a 1aWin ACEITA (mais lento, sem esse risco).
+    # "rapida": os dois cliques juntos (100–300 ms); qualquer uma pode ficar órfã.
+    "confirmacao": "sequencial_processando",
+    "disparo_intervalo_max_ms": 1500,  # modos sequenciais: espera no máximo isto pela prova imediata da 1aWin
     "cooldown_par_s": 60,              # o MESMO par (assinatura) que falhou fica de fora este tempo
     "max_substituicoes_tentativa": 1,  # trocas de perna (âncora/escadinha) dentro de UMA tentativa
     "max_tentativas_por_minuto": 6,    # tentativas de montagem no MESMO jogo por minuto
@@ -3287,7 +3292,7 @@ class Casa:
             if cancel is not None and cancel.is_set():
                 return "cancelada (a outra casa falhou ou o par mudou)"
             if prazo is not None and time.time() > prazo:
-                return "passou do prazo de preparação (%.1fs)" % float(self.cfg.get("tempo_max_preparacao_seg", 2.0))
+                return "passou do prazo de preparação (%.1fs)" % float(self.cfg.get("tempo_max_preparacao_seg", 3.0))
             return ""
 
         def abortar(mot):
@@ -3449,9 +3454,13 @@ class Casa:
         r.update(ok=True, foto=self.foto("montado") if (self.cfg.get("modo_teste", True) and not rapido) else "")
         return r
 
-    def preparar(self, perna, times, cancel=None, prazo=None):
-        """Estado PREPARAR (22/11): seleção + conferência + stake, SEM confirmar, com cancelamento e prazo."""
+    def preparar(self, perna, times, cancel=None, prazo_s=None, marcas=None):
+        """Estado PREPARAR (22/11): seleção + conferência + stake, SEM confirmar, com cancelamento e prazo.
+        O cronômetro (prazo_s) começa AQUI, quando a casa começa a preparar — não conta caça nem fila da casa."""
         t0 = time.time()
+        if marcas is not None:
+            marcas[self.nome] = t0
+        prazo = t0 + float(prazo_s) if prazo_s else None
         log("%s: PREPARAR início %s" % (self.rotulo, _hms_ms(t0)))
         try:
             r = self._montar(perna, times, cancel=cancel, prazo=prazo, rapido=True)
@@ -3751,7 +3760,9 @@ class Casa:
                 explicita = re.search(r"rejected|declined|not accepted|recusada|rejeitada|n[aã]o aceita", m.group(0), re.I)
                 # recusa EXPLÍCITA da casa ('Your bet has been rejected.') = nada apostado, já
                 if explicita or (time.time() - t_clique > 2 and self.itens_cupom()):
-                    return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar")}
+                    # 'comprovada' = a casa DISSE que recusou ('rejected', 'recusada'...). Só ela autoriza tentar de novo.
+                    return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar"),
+                            "comprovada": bool(explicita)}
         if novas:
             log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:20])))
         vazio = not self.itens_cupom()
@@ -3799,13 +3810,13 @@ class Casa:
         if perna is not None:
             ok, mot = self.conferir_cupom(perna)
             if not ok:
-                return {"ok": False, "motivo": "não confirmei — " + mot, "foto": self.foto("confirmar")}
+                return {"ok": False, "motivo": "não confirmei — " + mot, "foto": self.foto("confirmar"), "comprovada": True}  # não clicou
         a = self.armar_disparo(perna)
         if not a["ok"]:
-            return {"ok": False, "motivo": a["motivo"], "foto": self.foto("confirmar")}
+            return {"ok": False, "motivo": a["motivo"], "foto": self.foto("confirmar"), "comprovada": True}  # não clicou
         d = self.disparar(perna)
         if not d["clicou"]:
-            return {"ok": False, "motivo": d["motivo"], "foto": self.foto("confirmar")}
+            return {"ok": False, "motivo": d["motivo"], "foto": self.foto("confirmar"), "comprovada": True}  # não clicou
         return self.apurar(perna)
 
     def recolocar(self, perna, times):
@@ -5007,14 +5018,14 @@ class Operador:
         outra na hora — nenhuma tarefa segue com um candidato velho."""
         c1, cps = self.casas[CASA_1W], self.casas[CASA_PS]
         p1, p2 = bil["pernas"]
-        prazo_s = float(self.cfg.get("tempo_max_preparacao_seg", 2.0))
+        prazo_s = float(self.cfg.get("tempo_max_preparacao_seg", 3.0))
         cancel = threading.Event()
         t0 = time.time()
-        prazo = t0 + prazo_s
-        jobs = {CASA_1W: c1.enfileirar(c1.preparar, p1, bil["times"], cancel, prazo),
-                CASA_PS: cps.enfileirar(cps.preparar, p2, bil["times"], cancel, prazo)}
+        marcas = {}  # instante em que CADA casa começou a preparar (o cronômetro é de cada uma)
+        jobs = {CASA_1W: c1.enfileirar(c1.preparar, p1, bil["times"], cancel, prazo_s, marcas),
+                CASA_PS: cps.enfileirar(cps.preparar, p2, bil["times"], cancel, prazo_s, marcas)}
         res = {}
-        teto = prazo + 25  # uma casa presa numa chamada do navegador
+        teto = t0 + prazo_s + 40  # uma casa presa numa chamada do navegador
         while len(res) < 2:
             for n, (ev, caixa) in jobs.items():
                 if n in res or not ev.is_set():
@@ -5025,9 +5036,12 @@ class Operador:
                     cancel.set()
                     log("PREPARAR: %s falhou (%s) — cancelo a tarefa da outra casa" % (NOME_CASA[n], (r["motivo"] or "")[:80]))
             if len(res) < 2:
-                if not cancel.is_set() and time.time() > prazo + 0.15:
+                agora_t = time.time()
+                estouro = [n for n in jobs if n not in res and n in marcas and agora_t > marcas[n] + prazo_s + 0.15]
+                if not cancel.is_set() and estouro:
                     cancel.set()
-                    log("PREPARAR: prazo de %ss estourado — cancelo o que ainda não ficou pronto" % _br(prazo_s, 1))
+                    log("PREPARAR: prazo de %ss estourado na %s — cancelo o que ainda não ficou pronto" % (
+                        _br(prazo_s, 1), " e ".join(NOME_CASA[n] for n in estouro)))
                 if time.time() > teto:
                     for n in jobs:
                         res.setdefault(n, {"ok": False, "motivo": "a casa não respondeu à preparação", "foto": "", "montada": True})
@@ -5040,7 +5054,12 @@ class Operador:
                 return "pronta %ss" % _br(seg)
             return "falhou%s (%s)" % ((" %ss" % _br(seg)) if seg is not None else "", (r.get("motivo") or "")[:70])
         fim = max([r.get("t_fim") or time.time() for r in res.values()])
-        log("PREPARAR: 1aWin %s | PS %s | total %ss" % (txt(res[CASA_1W]), txt(res[CASA_PS]), _br(fim - t0)))
+        ini = min([r.get("t_ini") or t0 for r in res.values()])
+        log("PREPARAR: 1aWin %s | PS %s | total %ss (cronômetro só da preparação dos cupons; prazo %ss)" % (
+            txt(res[CASA_1W]), txt(res[CASA_PS]), _br(fim - ini), _br(prazo_s, 1)))
+        with _TRAVA:
+            bil["tempos_preparacao"] = {NOME_CASA[n]: r.get("segundos") for n, r in res.items()}
+            bil["tempos_preparacao"]["total"] = round(fim - ini, 2)
         return res
 
     def _barreira(self, bil, carteira, armar):
@@ -5203,10 +5222,15 @@ class Operador:
             return st
         # ---------------------------------------------------------------- DISPARAR
         p1, p2 = bil["pernas"]
-        modo = (self.cfg.get("confirmacao") or "conservadora").lower()
+        modo = (self.cfg.get("confirmacao") or "sequencial_processando").lower()
+        if modo == "conservadora":  # nome antigo (22/11): era exatamente este comportamento
+            modo = "sequencial_processando"
+        if modo not in ("sequencial_processando", "sequencial_aceita", "rapida"):
+            log("confirmacao '%s' desconhecida — uso 'sequencial_aceita' (o mais seguro)" % modo)
+            modo = "sequencial_aceita"
         self._transicao(ex, "DISPARAR", " (modo %s)" % modo)
         disp, final, fotos = {}, {}, []
-        if modo.startswith("rap"):
+        if modo == "rapida":
             sinc = threading.Barrier(2)
             w1 = c1.em_paralelo(c1.disparar, p1, b["o1"], sinc, timeout=30)
             w2 = cps.em_paralelo(cps.disparar, p2, b["o2"], sinc, timeout=30)
@@ -5222,8 +5246,9 @@ class Operador:
             except Exception as e:
                 d1 = {"clicou": False, "talvez": True, "t": None, "motivo": "erro no disparo: %s" % str(e)[:80]}
             disp[CASA_1W] = d1
-            if (d1["clicou"] or d1["talvez"]) and d1.get("evidencia") in ("aceita", "processando"):
-                log("conservadora: 1aWin %s em %d ms — disparo a PS JÁ" % (
+            provas = ("aceita", "processando") if modo == "sequencial_processando" else ("aceita",)
+            if (d1["clicou"] or d1["talvez"]) and d1.get("evidencia") in provas:
+                log("%s: 1aWin %s em %d ms — disparo a PS JÁ" % (modo,
                     "aceitou" if d1["evidencia"] == "aceita" else "recebeu o clique (processando)",
                     (time.time() - d1["t"]) * 1000 if d1.get("t") else -1))
                 disp[CASA_PS] = cps.executar(cps.disparar, p2, b["o2"], timeout=30)
@@ -5231,8 +5256,8 @@ class Operador:
                 disp[CASA_PS] = None  # a 1aWin nem clicou: a PS não é disparada
             else:
                 # recusa imediata, clique duvidoso ou nenhuma prova no limite: a PS espera a prova DEFINITIVA da 1aWin
-                log("conservadora: sem prova imediata da 1aWin em %d ms (%s) — a PS espera o resultado definitivo" % (
-                    lim * 1000, d1.get("evidencia") or "nenhum sinal"))
+                log("%s: sem a prova imediata exigida da 1aWin em %d ms (%s) — a PS espera o resultado definitivo" % (
+                    modo, lim * 1000, d1.get("evidencia") or "nenhum sinal"))
                 try:
                     final[CASA_1W] = c1.executar(c1.apurar, p1, timeout=120)
                 except Exception as e:
@@ -5255,7 +5280,7 @@ class Operador:
                 continue
             d = disp.get(n)
             if not d or (not d["clicou"] and not d["talvez"]):
-                final[n] = {"ok": False, "nao_disparada": True, "foto": "",
+                final[n] = {"ok": False, "nao_disparada": True, "comprovada": True, "foto": "",
                             "motivo": (d or {}).get("motivo") or "NÃO disparada"}
             else:
                 c = self.casas[n]
@@ -5296,14 +5321,22 @@ class Operador:
                             pf["selecao"], NOME_CASA[falta], (final[falta].get("motivo") or "")[:80]))
             with _TRAVA:
                 bil["_orfa"] = {"aceita": aceita, "falta": falta}
-            rec, mot = self._recuperar_orfa(bil, falta, carteira)
+            rf = final[falta]
+            if rf.get("nao_disparada") or rf.get("comprovada"):
+                rec, mot = self._recuperar_orfa(bil, falta, carteira)
+            else:
+                # processando / sem ID / cupom sumiu / ambíguo: pode ter entrado — repetir seria aposta DUPLICADA
+                rec = "incerto"
+                mot = "resultado ambíguo na %s (%s) — sem recusa comprovada, NÃO repito" % (
+                    NOME_CASA[falta], (rf.get("motivo") or "?")[:90])
+                log("‼ PERNA_ORFA: " + mot)
             if rec == "confirmada":
                 final[falta] = {"ok": True, "motivo": "", "foto": ""}
                 bil.pop("_orfa", None)
                 cls = "AMBAS_CONFIRMADAS"
                 log("PERNA_ORFA resolvida: %s colocada na %s dentro das regras" % (pf["selecao"], NOME_CASA[falta]))
             elif rec == "incerto":
-                final[falta] = {"ok": None, "motivo": mot, "foto": ""}
+                final[falta] = {"ok": None, "motivo": "INCERTO — " + mot, "foto": ""}
                 cls = "INCERTO"
             else:
                 final[falta]["motivo"] = (final[falta].get("motivo") or "") + ("; recuperação: " + mot if mot else "")
@@ -5346,47 +5379,110 @@ class Operador:
         self.estado.atualizar(bil, status="falhou", detalhe=detalhe, fotos=fotos)
         return "falhou"
 
+    def _candidato_orfa(self, bil, falta, acc, carteira, tentadas):
+        """Perna para proteger a perna ACEITA (acc = linha, odd e stake realmente aceitas). Pode ser a mesma linha que
+        faltou ou outra linha da casa que faltou; o par (aceita + nova) passa por TODAS as regras com a carteira do jogo
+        (odd mínima, tabela de custo, janela, perda máxima de R$ 100). Nunca a perna já aceita. -> (perna, motivo)"""
+        c = self.casas[falta]
+        idx = 0 if falta == CASA_1W else 1
+        orig = bil["pernas"][idx]
+        try:
+            lf = c.executar(c.ler_escada, bil["times"], timeout=60)
+        except Exception as e:
+            return None, "não consegui reler a %s (%s)" % (NOME_CASA[falta], str(e)[:60])
+        ofs = (lf or {}).get("ofertas") or []
+        lado_quero = "abaixo" if acc.get("lado") == "acima" else "acima"
+        melhor, motivo = None, "nenhuma linha da %s protege a perna aceita dentro das regras" % NOME_CASA[falta]
+        for o in ofs:
+            if o.get("tipo") != acc.get("tipo") or o.get("periodo") != acc.get("periodo") or o.get("lado") != lado_quero:
+                continue
+            chave = (o["lado"], round(o["linha"], 2))
+            if chave in tentadas:
+                continue
+            if falta == CASA_PS:
+                st = round(self.cfg["perna_ps_eur"] * self.cfg["cambio_brl_eur"], 2)
+            else:
+                st = round(acc["stake"] * acc["odd"] / o["odd"], 2)
+            nova = _limpa_oferta(o, falta, st)
+            p1, p2 = (nova, acc) if falta == CASA_1W else (acc, nova)
+            ov, un = (p1, p2) if p1["lado"] == "acima" else (p2, p1)
+            jan = _janela_total(ov, un)
+            if jan < float(self.cfg.get("janela_min", 1.0)) - 1e-9:
+                continue
+            b2 = dict(bil, pernas=[p1, p2], janela=jan)
+            ok, mot, custo, pior = validar_par_vivo(b2, p1["odd"], p2["odd"], self.cfg, carteira)
+            if not ok:
+                motivo = mot
+                continue
+            mesma = abs(o["linha"] - orig["linha"]) < 1e-9 and o["lado"] == orig["lado"]
+            nota = (1 if mesma else 0, -custo)
+            if melhor is None or nota > melhor[0]:
+                melhor = (nota, nova, mesma, jan)
+        if not melhor:
+            return None, motivo
+        _, nova, mesma, jan = melhor
+        nova["_mesma"] = mesma
+        nova["_janela"] = jan
+        return nova, ""
+
     def _recuperar_orfa(self, bil, falta, carteira):
-        """PERNA_ORFA: tenta colocar SÓ a perna que faltou (nunca repete a aceita), dentro das MESMAS regras (odd mínima,
-        tabela de custo, perda máxima, carteira). Sem recuperação segura -> para e pede intervenção.
+        """PERNA_ORFA (só depois de recusa COMPROVADA da perna que faltou): protege a perna aceita com a MESMA linha ou
+        outra linha da casa que faltou, recalculando a carteira com a linha, odd e stake realmente ACEITAS. Respeita
+        odd mínima, tabela de custo e perda máxima; nunca repete a perna aceita; resultado ambíguo -> INCERTO (não repete).
         Devolve (confirmada|incerto|recusada|falhou, motivo)."""
         n_max = int(self.cfg.get("orfa_tentativas", 2))
         c = self.casas[falta]
         idx = 0 if falta == CASA_1W else 1
-        perna, outra = bil["pernas"][idx], bil["pernas"][1 - idx]
-        odd_outra = outra.get("odd_aceita") or outra.get("odd_viva") or outra["odd"]
+        pa = bil["pernas"][1 - idx]
+        acc = dict(pa, odd=pa.get("odd_aceita") or pa.get("odd_viva") or pa["odd"])
+        tentadas = set()
         motivo = ""
         for i in range(1, n_max + 1):
-            log("PERNA_ORFA: tentativa %d/%d de colocar %s na %s (mesmas regras de odd, custo e perda)" % (
-                i, n_max, perna["selecao"], NOME_CASA[falta]))
+            nova, mot = self._candidato_orfa(bil, falta, acc, carteira, tentadas)
+            if not nova:
+                mot = "; ".join(x for x in (motivo, mot) if x)
+                log("PERNA_ORFA: sem proteção segura — %s" % mot)
+                return "recusada", mot
+            tentadas.add((nova["lado"], round(nova["linha"], 2)))
+            log("PERNA_ORFA: tentativa %d/%d — protejo %s @%s (aceita, stake R$ %s) com %s @%s na %s (%s)" % (
+                i, n_max, acc["selecao"], acc["odd"], _br(acc["stake"]), nova["selecao"], nova["odd"], NOME_CASA[falta],
+                "mesma linha" if nova["_mesma"] else "outra linha"))
             try:
-                rr = c.executar(c.recolocar, perna, bil["times"], timeout=ESPERA_FASE1_S)
+                rr = c.executar(c.recolocar if nova["_mesma"] else c.montar, nova, bil["times"], timeout=ESPERA_FASE1_S)
             except Exception as e:
                 rr = {"ok": False, "motivo": "erro: %s" % str(e)[:80]}
             if not rr["ok"]:
                 motivo = rr["motivo"]
-                log("PERNA_ORFA: não consegui recolocar (%s)" % motivo[:80])
+                log("PERNA_ORFA: não consegui montar (%s)" % motivo[:80])
+                c.executar(c.limpar_cupom, nova, timeout=30)
                 continue
-            L = c.executar(c.ler_cupom, perna, timeout=20)
-            if not L["ok"]:
-                motivo = L["motivo"]
-                log("PERNA_ORFA: o cupom não confere (%s)" % motivo[:80])
-                c.executar(c.desfazer, perna, timeout=30)
-                continue
-            odds = (L["odd"], odd_outra) if falta == CASA_1W else (odd_outra, L["odd"])
-            ok, mot, custo, _ = validar_par_vivo(bil, odds[0], odds[1], self.cfg, carteira)
+            L = c.executar(c.ler_cupom, nova, timeout=20)
+            p1, p2 = (nova, acc) if falta == CASA_1W else (acc, nova)
+            b2 = dict(bil, pernas=[p1, p2], janela=nova["_janela"])
+            ok, mot, custo, pior = (False, L["motivo"], None, None) if not L["ok"] else validar_par_vivo(
+                b2, L["odd"] if falta == CASA_1W else acc["odd"], acc["odd"] if falta == CASA_1W else L["odd"],
+                self.cfg, carteira)
             if not ok:
+                motivo = mot
                 log("PERNA_ORFA: recuperação RECUSADA pelas regras — %s" % mot)
-                c.executar(c.desfazer, perna, timeout=30)
-                return "recusada", mot
-            r = c.executar(c.confirmar, perna, timeout=150)
+                c.executar(c.desfazer, nova, timeout=30)
+                continue
+            r = c.executar(c.confirmar, nova, timeout=150)
             if r["ok"] is True:
-                perna["odd_aceita"] = r.get("odd_aceita") or L["odd"]
+                nova["odd_aceita"] = r.get("odd_aceita") or L["odd"]
+                with _TRAVA:
+                    if not nova["_mesma"]:
+                        bil.setdefault("avisos", []).append("PERNA_ORFA protegida com OUTRA linha: %s" % nova["selecao"])
+                    bil["pernas"][idx] = {k: v for k, v in nova.items() if not k.startswith("_") or k in ("_mid", "_aid")}
+                    bil["janela"] = nova["_janela"]
+                    bil["custo_vivo"] = round(custo, 2)
                 return "confirmada", ""
             if r["ok"] is None:
                 return "incerto", r["motivo"]
+            if not r.get("comprovada"):
+                return "incerto", "resultado ambíguo na nova tentativa (%s) — não repito" % (r.get("motivo") or "?")[:80]
             motivo = r["motivo"]
-            log("PERNA_ORFA: a %s recusou de novo (%s)" % (NOME_CASA[falta], motivo[:80]))
+            log("PERNA_ORFA: a %s recusou de novo, comprovado (%s)" % (NOME_CASA[falta], motivo[:80]))
         return "falhou", motivo
 
     def _ancora_na_montagem(self, bil, res, nome_f, substituir):
@@ -5408,8 +5504,8 @@ class Operador:
         log("⚓ âncora na montagem: seguro %s na %s e troco %s por %s @%s na %s" % (
             perna_ok["selecao"], NOME_CASA[nome_ok], bil["pernas"][idx_f]["selecao"], perna_nova["selecao"],
             perna_nova["odd"], NOME_CASA[nome_f]))
-        prazo = time.time() + float(self.cfg.get("tempo_max_preparacao_seg", 2.0))
-        m = c.executar(c.preparar, perna_nova, bil["times"], None, prazo, timeout=ESPERA_FASE1_S)
+        m = c.executar(c.preparar, perna_nova, bil["times"], None, float(self.cfg.get("tempo_max_preparacao_seg", 3.0)),
+                       timeout=ESPERA_FASE1_S)
         if not m["ok"]:
             log("âncora na montagem: a troca também não montou (%s)" % m["motivo"])
             return False
