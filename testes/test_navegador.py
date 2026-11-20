@@ -497,8 +497,10 @@ def test_odd_que_cai_mas_fica_no_piso_1_78_e_aceita(casas, cfgc):
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
     st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
-    assert st == "testado", bil["detalhe"]
-    assert bil["pernas"][1].get("odd_viva") == 1.72 and bil.get("custo_vivo") is not None, "\n".join(P._LOG_MEM[-25:])
+    # a odd que caiu até o piso é ACEITA no cupom; o par é recalculado e, desde 21/11, tem que caber na TABELA da
+    # janela (aqui as odds do site falso deixam o par caro -> recusa com o motivo; nada é confirmado)
+    assert bil["pernas"][1].get("odd_viva") == 1.72, "\n".join(P._LOG_MEM[-25:])
+    assert st == "falhou" and "com a odd nova o par custa" in bil["detalhe"]["PS3838"], bil["detalhe"]
     # caindo para 1.675 (abaixo do piso) continua reprovando
     servidor.ESTADO["odd_nova"] = "1.675"
     cfgc["odd_min"] = 1.70
@@ -1113,6 +1115,7 @@ def test_selecao_que_some_num_lance_tenta_de_novo_uma_vez(casas, cfgc):
     """20/11 (Osasco/Pato): 'a seleção sumiu durante a stake' — a 1aWin tirou a linha 1–2 s num lance. Agora espera
     e monta a MESMA seleção mais uma vez (com a mesma conferência)."""
     servidor.ESTADO["linha_sai_uma"] = 150
+    cfgc["retentar_selecao_sumida"] = True   # 21/11: desligado por padrão (não insistir); aqui testa o mecanismo
     c1, _ = ir_jogo(casas)
     recarregar(c1)
     limpar_cupons(casas)
