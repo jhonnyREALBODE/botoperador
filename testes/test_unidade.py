@@ -2232,3 +2232,13 @@ def test_r22a_7_ambas_aceitam(cfg):
     op, casas, est, cfg2 = _op_aceita(cfg)
     bil = _bucks(cfg2)
     assert _rodar(op, est, bil) == "confirmado" and bil["estado_execucao"] == "AMBAS_CONFIRMADAS"
+
+
+def test_ncaa_sigla_com_u_de_university():
+    """23/11 (Santa Clara x Virginia Commonwealth): a 1aWin escreve o nome, a PS usa a sigla 'VCU'."""
+    assert P._nome_bate("VCU", "Virginia Commonwealth")
+    assert P._nome_bate("Virginia Commonwealth", "VCU")
+    assert P._nome_bate("UCF", "Central Florida")
+    assert P._nome_bate("VCU Rams", "Virginia Commonwealth", leniente=True)
+    assert not P._nome_bate("VCU", "Virginia Tech")
+    assert not P._nome_bate("Virginia Commonwealth", "Virginia Tech")

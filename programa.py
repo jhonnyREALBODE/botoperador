@@ -380,11 +380,25 @@ def _iniciais(s):
     return "".join(t[0] for t in _norm(s).split() if len(t) >= 3 and not _generico(t))
 
 
+def _formas_sigla(w):
+    """Sigla e a sigla sem o 'U' de University/Universidade (NCAA 23/11: 'VCU' = 'Virginia Commonwealth';
+    'UCF' = 'Central Florida'). Regra geral de sigla, nenhum time no código."""
+    out = [w]
+    if len(w) >= 3 and w.isalpha():
+        if w.endswith("u"):
+            out.append(w[:-1])
+        if w.startswith("u"):
+            out.append(w[1:])
+    return out
+
+
 def _sigla_bate(a, b):
     """'Co Basketbol' x 'Cedi Osman Basketbol': a sigla curta de um = iniciais seguidas do outro."""
+    ini = _iniciais(b)
     for w in _norm(a).split():
-        if 2 <= len(w) <= 4 and not _generico(w) and len(w) <= len(_iniciais(b)) and w in _iniciais(b) \
-                and not [t for t in _tokens(a) if len(t) >= 4]:
+        if not (2 <= len(w) <= 4) or _generico(w) or [t for t in _tokens(a) if len(t) >= 4]:
+            continue
+        if any(len(f) >= 2 and len(f) <= len(ini) and f in ini for f in _formas_sigla(w)):
             return True
     return False
 
@@ -406,10 +420,17 @@ def _sigla_expandida(a, b):
         # 'sc' é genérico ('Sport Club'), mas aqui só vale se bater com as iniciais de palavras PRÓPRIAS de b
         if not (2 <= len(w) <= 4) or w in _PREFIXOS_CLUBE or w.isdigit() or w in _CODIGOS_CLUBE:
             continue
-        n = len(w)
-        for i in range(len(pb) - n + 1):
-            if "".join(t[0] for t in pb[i:i + n]) == w:
-                out += [t for t in pb[i:i + n] if t not in out]
+        for f in _formas_sigla(w):
+            n = len(f)
+            if n < 2:
+                continue
+            achou = False
+            for i in range(len(pb) - n + 1):
+                if "".join(t[0] for t in pb[i:i + n]) == f:
+                    out += [t for t in pb[i:i + n] if t not in out]
+                    achou = True
+                    break
+            if achou:
                 break
     return out
 

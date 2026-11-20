@@ -643,6 +643,7 @@ def test_modo_real_incerto_para_tudo_e_nao_desfaz(casas, cfgc, monkeypatch):
 
 def test_botao_ps_fazer_1_aposta_e_clique_unico(casas):
     _, cps = ir_jogo(casas)
+    recarregar(cps)   # sem resíduo do teste anterior (página com estado do site falso de outro teste)
     limpar_cupons(casas)
     _, lp = ler(casas)
     o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
