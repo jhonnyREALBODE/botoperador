@@ -3815,6 +3815,11 @@ class Casa:
             if not ainda:
                 log("%s: o saldo caiu durante o processamento ('%s') e voltou para %s — a casa não aceitou" % (
                     self.rotulo, desconto_visto, _br(saldo0)))
+                # 15/11 20:46 conferido pelo operador: caiu e VOLTOU = nada entrou — mesmo com a seleção ainda no cupom
+                # (log 20/11 07:47: a 1aWin manteve a seleção e o programa travou tudo como INCERTO à toa)
+                if s1 is None or abs(s1 - saldo0) < 0.01:
+                    return {"ok": False, "foto": self.foto("confirmar"),
+                            "motivo": "o saldo caiu durante o processamento e voltou para %s — nada foi apostado" % _br(saldo0)}
                 desconto_visto = None
         if desconto_visto:
             self.dump("incerto")

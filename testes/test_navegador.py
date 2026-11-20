@@ -1260,3 +1260,26 @@ def test_sinal_novo_interrompe_a_caca_em_andamento(casas):
     assert time.time() - t0 < 12
     # a caça seguinte (do sinal NOVO) funciona normalmente
     assert cps.executar(cps.cacar, TIMES)["ok"]
+
+
+def test_1awin_saldo_cai_e_volta_com_selecao_no_cupom_nao_e_incerto(casas, cfgc):
+    """Log 20/11 07:47 (Wyverns x Samuraiz): saldo 465,68 -> 436,48 -> 465,68 e a seleção FICOU no cupom. Era INCERTO e
+    travou tudo. Saldo que caiu e voltou = nada apostado (conferido pelo operador 15/11): falhou, a PS nem dispara."""
+    cfgc["modo_teste"] = False
+    servidor.ESTADO.update(saldo_noutro_lugar=True, saldo_volta=True, mantem_selecao=True)
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    try:
+        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "falhou", bil["detalhe"]
+        assert "voltou" in bil["detalhe"]["1aWin"]
+        assert "Aposta aceita" not in casas[P.CASA_PS].executar(casas[P.CASA_PS].texto)
+    finally:
+        servidor.ESTADO.clear()
+        for c in casas.values():
+            recarregar(c)
+        limpar_cupons(casas)
