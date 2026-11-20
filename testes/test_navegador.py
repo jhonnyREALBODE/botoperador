@@ -1000,7 +1000,10 @@ def test_perna_solta_procura_o_par_na_ps(casas, cfgc):
     cfgc["monitor_intervalo_s"] = 0.5
     cfgc["reentrar_mesmo_jogo"] = False
     cfgc["cobrir_perna_solta"] = True   # 20/11: desligado por padrão (posição incompleta congela tudo); aqui cobre a mecânica
-    servidor.ESTADO["rejeita_ps"] = 3
+    # 22/11: a PS recusa 2x (a 1ª + 1 recuperação, ambas COMPROVADAS por texto novo): 1 tentativa só, porque a 2ª recusa
+    # numa linha nova repetiria o MESMO texto na tela -> sem prova nova -> INCERTO (comportamento seguro, outro teste)
+    cfgc["orfa_tentativas"] = 1
+    servidor.ESTADO["rejeita_ps"] = 2
     ir_jogo(casas)
     for c in casas.values():
         recarregar(c)
@@ -1096,6 +1099,7 @@ def test_incompleto_bloqueia_tudo_e_a_fila_nao_anda(casas, cfgc):
     assume (não começa Denver x Boston). Só a resolução do operador libera."""
     cfgc["modo_teste"] = False
     cfgc["monitor_intervalo_s"] = 0.5
+    cfgc["orfa_tentativas"] = 1   # 22/11: 1 recuperação com recusa comprovada -> INCOMPLETO (ver test_perna_solta…)
     servidor.ESTADO["rejeita_ps"] = 3
     ir_jogo(casas)
     for c in casas.values():
