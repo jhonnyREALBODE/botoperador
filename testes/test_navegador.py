@@ -621,9 +621,9 @@ def test_1awin_desmarca_pelo_mercado_quando_x_e_lixeira_falham(casas):
     assert c1.executar(c1.itens_cupom) == []
 
 
-def test_modo_real_incerto_para_tudo_e_nao_desfaz(casas, cfgc, monkeypatch):
-    """Clicou em apostar e a casa não disse nada (nem aceita, nem recusada): INCERTO — para,
-    avisa, e NÃO confirma a outra casa nem desfaz nada."""
+def test_modo_real_casa_que_nao_reage_ao_clique_nao_apostou(casas, cfgc):
+    """Clicou em apostar e a 1aWin não fez NADA: sem mensagem, saldo igual, seleção no cupom, sem processamento.
+    20/11 16:42/16:47 (#244/#247) isso virava INCERTO e travava tudo; é 'não apostado'. A PS NÃO é disparada."""
     cfgc["modo_teste"] = False
     servidor.ESTADO["confirma_mudo"] = True
     ir_jogo(casas)
@@ -633,12 +633,13 @@ def test_modo_real_incerto_para_tudo_e_nao_desfaz(casas, cfgc, monkeypatch):
     bil = achar(casas, cfgc)
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
-    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "incerto"
-    assert bil["status"] == "INCERTO" and "NÃO confirmada" in bil["detalhe"]["PS3838"]
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "falhou", bil["detalhe"]
+    assert "não reagiu ao clique" in bil["detalhe"]["1aWin"] and "NÃO confirmada" in bil["detalhe"]["PS3838"]
     assert "Aposta aceita" not in casas[P.CASA_PS].executar(casas[P.CASA_PS].texto)
     servidor.ESTADO.clear()
     for c in casas.values():
         recarregar(c)
+    limpar_cupons(casas)
 
 
 def test_botao_ps_fazer_1_aposta_e_clique_unico(casas):
@@ -1345,4 +1346,37 @@ def test_operador_diz_que_so_a_1awin_entrou_e_o_programa_cobre_e_segue(casas, cf
         servidor.ESTADO.clear()
         for c in casas.values():
             recarregar(c)
+        limpar_cupons(casas)
+
+
+def test_sinal_novo_do_mesmo_jogo_carrega_os_pares_ja_confirmados(casas, cfgc):
+    """23/11 (bilhetes #245/#250): depois de 'liberação manual' o mesmo jogo voltou por outro sinal e recomeçou do zero
+    (entrou ilha e par sem total novo). Agora o monitoramento carrega os pares já confirmados do jogo: o MESMO par não
+    entra de novo e a reentrada segue as regras."""
+    cfgc["monitor_intervalo_s"] = 0.5
+    cfgc["reentrar_mesmo_jogo"] = True
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    est = P.Estado(cfgc)
+    ir_jogo(casas)
+    bil = achar(casas, cfgc)
+    bil.update(jogo=SINAL["jogo"], times=TIMES)
+    est.registrar_bilhete(bil, "sinal")
+    est.atualizar(bil, status="testado")
+    op = P.Operador(cfgc, est, casas)
+    try:
+        op.novo_sinal(dict(SINAL, id="de-novo"))
+        assert esperar(lambda: any("1 par(es) já confirmado(s) neste jogo" in l for l in P._LOG_MEM[-60:]), 30)
+        assert esperar(lambda: op._prot and op._prot.get("pares") == 1, 10)
+        time.sleep(4)
+        # o mesmo par (identico) NUNCA entra de novo
+        novos = [b for b in est.bilhetes if b["id"] != bil["id"] and b.get("status") == "testado"]
+        assert all(not (b["pernas"][0]["linha"] == bil["pernas"][0]["linha"] and b["pernas"][1]["linha"] == bil["pernas"][1]["linha"])
+                   for b in novos), novos
+    finally:
+        if op._atual:
+            op._atual[1].set()
+        time.sleep(1.5)
         limpar_cupons(casas)

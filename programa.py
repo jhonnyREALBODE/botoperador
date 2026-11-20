@@ -3734,6 +3734,7 @@ class Casa:
         antes, saldo0, valor, talvez = d.get("antes"), d.get("saldo0"), d.get("valor", 0), d.get("talvez", False)
         linhas0 = set(l.strip() for l in (d.get("texto_antes") or "").splitlines())
         novas, fotos_rapidas = [], 0
+        viu_processando = False
         t_clique = d.get("t") or time.time()
         fim = t_clique + 25  # ao vivo tem atraso de aceitação
         self._disp = None
@@ -3765,6 +3766,7 @@ class Casa:
             # PS ao vivo: 'Aguarde… sendo processada… Aguardando -> Pendente' — o saldo JÁ desconta e
             # a aposta ainda pode ser rejeitada depois (15/11 15:57). Espera o resultado final.
             if re.search(r"sendo processada|aguardando|being processed|pending acceptance", tx, re.I):
+                viu_processando = True
                 fim = min(max(fim, time.time() + 10), t_clique + 60)
                 continue
             # 1aWin processando (botão com spinner / aria-busy) — o saldo já cai e a aposta ainda pode
@@ -3774,6 +3776,7 @@ class Casa:
             except Exception:
                 ocupado = False
             if ocupado:
+                viu_processando = True
                 fim = min(max(fim, time.time() + 10), t_clique + 60)
                 continue
             depois = self._pendentes()
@@ -3834,6 +3837,13 @@ class Casa:
             return {"ok": None, "foto": self.foto("incerto"),
                     "motivo": "INCERTO — sem mensagem de aceita, mas a casa mostrou saldo descontado da stake ('%s'; "
                               "antes %s). Confira em Apostas pendentes/Histórico" % (desconto_visto, _br(saldo0))}
+        if not vazio and not viu_processando and not talvez and saldo0 is not None and s1 is not None \
+                and abs(saldo0 - s1) < 0.01 and not any(re.search(r"BRL|R\$|EUR|€", l) for l in novas):
+            # 20/11 16:42 e 16:47 (#244/#247): nenhuma mensagem, saldo IGUAL, a seleção CONTINUA no cupom e nada entrou em
+            # processamento em 25 s = a casa não reagiu ao clique; nada foi apostado (era INCERTO e travava tudo)
+            return {"ok": False, "foto": self.foto("confirmar"),
+                    "motivo": "a casa não reagiu ao clique (sem mensagem, saldo continua %s, seleção ainda no cupom) — "
+                              "nada foi apostado" % _br(s1)}
         if vazio and saldo0 is not None and s1 is not None and abs(saldo0 - s1) < 0.01 and not talvez:
             # 1aWin 14/11 23:58: limpou o cupom SEM apostar (histórico vazio, saldo igual)
             return {"ok": False, "foto": self.foto("confirmar"),
@@ -4318,6 +4328,7 @@ class Estado:
         with _TRAVA:
             self._seq += 1
             bil.update({"id": self._seq, "origem": origem, "criado": datetime.now().strftime("%d/%m %H:%M:%S"),
+                        "criado_ts": time.time(),
                         "status": "registrado", "detalhe": {}, "fotos": [], "desfecho": ""})
             self.bilhetes.append(bil)
         self.salvar()
@@ -4378,6 +4389,16 @@ class Estado:
                 "posicoes": [_pos_painel(p) for p in self.posicoes[-20:]][::-1],
                 "log": _LOG_MEM[-80:],
             }
+
+
+def _ts_bilhete(b):
+    """Quando o bilhete foi criado (s). Bilhetes antigos só têm o texto 'dd/mm HH:MM:SS'."""
+    if b.get("criado_ts"):
+        return float(b["criado_ts"])
+    try:
+        return datetime.strptime("%d/%s" % (datetime.now().year, b.get("criado", "")), "%Y/%d/%m %H:%M:%S").timestamp()
+    except Exception:
+        return 0.0
 
 
 def _pos_painel(p):
@@ -4692,6 +4713,9 @@ class Operador:
             for casa_n, o in ((CASA_1W, a), (CASA_PS, b)):
                 if geladeira.get((casa_n, _chave_oferta(o)), 0) > agora_s:
                     return "linha da %s falhou há pouco (geladeira)" % NOME_CASA[casa_n]
+            maxe = int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4))
+            if len(entradas) >= maxe:
+                return "este jogo já tem %d de %d pares confirmados" % (len(entradas), maxe)
             falta = self._tent.cooldown(assinatura_par(times, a, b), agora_s)
             if falta:
                 return "o mesmo par falhou há pouco — cooldown de mais %ds (não repito o mesmo par na hora)" % int(falta + 0.99)
@@ -4737,6 +4761,30 @@ class Operador:
             self._retomar = None
             log("↻ carteira retomada: %d par(es), contador de vazio %d" % (len(entradas), self._vazio[0]))
             self._publicar_protecao()
+        # 23/11 (print dos bilhetes #245/#250): depois de 'liberação manual' o mesmo jogo voltou por outro sinal e
+        # recomeçou do ZERO — entrou ilha (148 com 147 no prejuízo) e par sem total novo. Agora TODO monitoramento
+        # carrega os pares JÁ CONFIRMADOS deste jogo (as regras de reentrada valem sempre, venha de onde vier o sinal).
+        idade_max = float(self.cfg.get("pos_duracao_max_min", 150)) * 60
+        st_ok = "testado" if self.cfg.get("modo_teste", True) else "confirmado"
+        for b in list(self.estado.bilhetes):
+            if b.get("id") in entradas or b.get("status") != st_ok or not _mesmo_jogo(b.get("times") or ["", ""], times):
+                continue
+            if time.time() - _ts_bilhete(b) > idade_max:
+                continue
+            carteira_local.extend(pernas_aceitas(b))
+            entradas.append(b.get("id"))
+        if entradas and ultima[0] is None:
+            ult_b = max((b for b in self.estado.bilhetes if b.get("id") in entradas), key=_ts_bilhete)
+            ultima[0] = _ts_bilhete(ult_b)
+            ultima[1] = round(sum(p["linha"] for p in ult_b["pernas"]) / 2 * 2) / 2   # meio do último par (aprox. da linha)
+            if not self._prot:
+                self._prot = {"jogo": sinal["jogo"], "pares": len(entradas),
+                              "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
+                              "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas), "linha_ultima": ultima[1]}
+                self._publicar_protecao()
+        if entradas and origem not in ("retomada", "perna_solta"):
+            log("↻ %s: %d par(es) já confirmado(s) neste jogo entram na carteira — reentrada segue as regras "
+                "(escadinha/âncora, sem ilha, sem par repetido)" % (sinal["jogo"], len(entradas)))
         while not cancel.is_set():
             try:
                 if c1.limitada or cps.limitada:
