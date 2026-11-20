@@ -179,7 +179,7 @@ DEFAULTS = {
     "modo_teste": True,
     "auto_aprovar": False,       # legado da era do painel
     "so_totais": True,           # restrição temporária 13/11 23:26 (false/null religa handicap)
-    "totais_periodos": ["jogo"],  # operador 16/11: só o total do JOGO INTEIRO (quartos ao vivo: linha some antes do clique)
+    "totais_periodos": ["jogo", "q1", "q2", "q3"],  # operador 23/11: jogo inteiro + quartos de novo (4º quarto: sempre proibido)
     "url_grok": "",
     "url_1awin": "https://1wcwlx.life",
     "url_ps3838": "https://www.ps3838.com",

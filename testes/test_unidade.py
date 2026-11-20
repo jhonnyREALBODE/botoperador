@@ -933,13 +933,16 @@ def test_tabela_carteira_resultado_por_total():
     assert P._txt_totais([223, 224, 225, 228]) == "223–225, 228"
 
 
-def test_padrao_so_total_do_jogo_inteiro(tmp_path):
-    """Operador 16/11: só totais do jogo inteiro (os quartos ao vivo trocavam a linha antes do clique)."""
+def test_padrao_jogo_inteiro_e_quartos_sem_o_4o(tmp_path):
+    """Operador 23/11: totais do jogo inteiro E dos quartos (16/11 era só o jogo). O 4º quarto continua proibido."""
     c = P.carregar_config(str(tmp_path / "nada.json"), avisar=False)
-    assert c["totais_periodos"] == ["jogo"]
+    assert c["totais_periodos"] == ["jogo", "q1", "q2", "q3"]
     a = oferta("1awin", "total", "q2", "abaixo", 54.5, 2.10)
     b = oferta("ps3838", "total", "q2", "acima", 53.5, 2.10)
     bil, mot = P.achar_par([a], [b], SINAL, c)
+    assert bil and bil["periodo"] == "q2", mot
+    a4, b4 = dict(a, periodo="q4"), dict(b, periodo="q4")
+    bil, mot = P.achar_par([a4], [b4], SINAL, c)
     assert bil is None
 
 
