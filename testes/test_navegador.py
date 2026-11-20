@@ -466,7 +466,7 @@ def test_carimbo_que_virou_outra_linha_nao_e_clicado(casas):
     c1.executar(c1.desfazer, o1)
 
 
-@pytest.mark.parametrize("ms", [600, 1100])
+@pytest.mark.parametrize("ms", [150, 300])  # 22/11: a preparação ficou ~0,6 s; a odd muda antes da barreira
 def test_odd_que_cai_depois_de_montado_reprova_tudo(casas, cfgc, ms):
     """Caso Ratiopharm 14/11 15:21: PS 'Odds have changed from 2.000 to 1.675' DEPOIS de montado.
     No modo real teria confirmado a 1.675. Agora a conferência final reprova e desfaz as duas."""
@@ -813,7 +813,7 @@ def test_ps_janela_confirmar_apostas_e_aviso_velho(casas, cfgc):
         est.registrar_bilhete(bil, "sinal")
         assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "confirmado", bil["detalhe"]
     finally:
-        cps.preparar = real_montar
+        del cps.preparar   # volta ao método da classe (sem deixar resíduo para os outros testes)
         servidor.ESTADO.clear()
         for c in casas.values():
             recarregar(c)
@@ -876,7 +876,10 @@ def test_ps_aguardando_processamento(casas, final, esperado):
 
 
 def test_1awin_processa_e_nao_entra(casas, cfgc):
-    """15/11 17:02: spinner, saldo cai, depois volta e o cupom limpa — NÃO entrou. A PS não é apostada."""
+    """15/11 17:02: spinner, saldo cai, depois volta e o cupom limpa — a 1aWin NÃO entrou.
+    22/11 (modo conservador pedido pelo operador): 'processando' é a prova IMEDIATA de que o clique foi recebido, então a
+    PS é disparada logo em seguida. Se a 1aWin não entra, sobra a PS sozinha: PERNA_ORFA — a PS (aceita) NUNCA é
+    repetida, a 1aWin é tentada de novo dentro das regras e, sem sucesso, tudo para (exposto -> bloqueio INCOMPLETO)."""
     cfgc["modo_teste"] = False
     servidor.ESTADO["processa_e_some"] = True
     ir_jogo(casas)
@@ -887,8 +890,9 @@ def test_1awin_processa_e_nao_entra(casas, cfgc):
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
     try:
-        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "falhou", bil["detalhe"]
-        assert "Aposta aceita" not in casas[P.CASA_PS].executar(casas[P.CASA_PS].texto)
+        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "exposto", bil["detalhe"]
+        assert bil["_orfa"] == {"aceita": P.CASA_PS, "falta": P.CASA_1W}
+        assert bil["detalhe"]["PS3838"] == "confirmada" and "sem aceitar" in bil["detalhe"]["1aWin"]
     finally:
         servidor.ESTADO.clear()
         for c in casas.values():
@@ -1022,6 +1026,9 @@ def test_ancora_na_montagem_troca_so_a_perna_que_caiu(casas, cfgc):
     """20/11 (operador): 'podia ter tentado âncora'. Lakers 00:40 / Brasov 14:27: uma perna montou e a outra caiu
     porque a casa trocou a linha. Agora segura a montada e troca SÓ a que caiu por uma linha que ainda forma par."""
     servidor.ESTADO["linha_sai_uma"] = 150
+    # no site falso a outra linha da 1aWin não passa na tabela de custo: o teste afrouxa SÓ o custo (na troca e na
+    # barreira) — a mecânica é o que está em teste; no programa as regras são as mesmas da entrada
+    cfgc["custo_por_janela"], cfgc["custo_max"] = None, 50.0
     cfgc["retentar_selecao_sumida"] = False   # aqui o teste é da âncora (a 2ª tentativa da mesma seleção tem teste próprio)
     ir_jogo(casas)
     for c in casas.values():
