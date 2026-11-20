@@ -134,7 +134,7 @@ DEFAULTS = {
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
     "retentar_selecao_sumida": True,   # 20/11: seleção sumiu da 1aWin num lance -> espera e tenta 1x de novo
     "retentar_espera_s": 1.5,
-    "retentar_1awin_recusa": True,     # 20/11: 1aWin recusou e limpou o cupom (nada apostado) -> remonta e tenta 1x
+
     "odd_min": 1.78,                   # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
@@ -3296,27 +3296,34 @@ class Casa:
         saldo0 = self._saldo()
         valor = (perna or {}).get("stake", 0) / (self.cfg["cambio_brl_eur"] if self.nome == CASA_PS else 1)
         log("%s: saldo antes de apostar = %s" % (self.rotulo, saldo0))
-        clicou, erro = False, ""
+        clicou, erro, talvez = False, "", False
         for tentativa in range(3):
             try:
-                self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=1500)
+                self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=1500, no_wait_after=True)
                 clicou = True
                 break
             except Exception as e:
                 erro = str(e)
-                # 16/11 22:32: a 1aWin REDESENHOU o botão entre a marca e o clique (a marca sumiu) e o clique ficou
-                # 3s esperando um elemento que não existia. 'waiting for locator' = o clique NÃO aconteceu: remarca.
-                # Qualquer outro erro: não sei se clicou -> não repito (dois cliques = duas apostas).
-                if "waiting for locator" not in erro and "not attached" not in erro and "detached" not in erro:
+                # 19/11 21:06:46 (Tatuí x Assis): o clique ACONTECEU, a aposta entrou, e o Playwright ainda devolveu erro
+                # de tempo; 'waiting for locator' aparece em TODO erro dele, então não prova nada. Só é 'não cliquei'
+                # se o registro do Playwright NÃO mostra a ação de clique. Mostrou ('performing click action'/'click
+                # action done') ou não dá para saber -> trato como CLICADO e decido pelas provas da casa.
+                if re.search(r"performing click|click action|clicking|dispatch", erro, re.I) or \
+                        not re.search(r"waiting for locator|not attached|detached|resolved to 0 elements", erro, re.I):
+                    talvez = True
                     break
                 b = self._marcar_botao_apostar()
                 if b.get("n") != 1 or b.get("desabilitado"):
-                    erro = "botão de apostar sumiu/desabilitou depois de redesenhar (achei %s)" % b.get("n", 0)
+                    # o botão sumiu/desabilitou: pode ser porque a aposta JÁ foi feita -> provas, nunca 'não apostou'
+                    talvez = True
                     break
                 log("%s: o botão de apostar foi redesenhado antes do clique — marquei de novo (%d)" % (self.rotulo, tentativa + 1))
-        if not clicou:
+        if not clicou and not talvez:
             return {"ok": False, "motivo": "o clique em apostar não aconteceu (%s)" % erro.split("\n")[0][:80],
                     "foto": self.foto("confirmar")}
+        if talvez:
+            log("%s: o clique deu erro, mas pode ter acontecido — decido pelas provas da casa (%s)" % (
+                self.rotulo, erro.split("\n")[0][:80]))
         log("%s: cliquei em APOSTAR" % self.rotulo)
         linhas0 = set(l.strip() for l in (getattr(self, "_texto_antes", "") or "").splitlines())
         novas, fotos_rapidas = [], 0
@@ -3405,7 +3412,7 @@ class Casa:
             return {"ok": None, "foto": self.foto("incerto"),
                     "motivo": "INCERTO — sem mensagem de aceita, mas a casa mostrou saldo descontado da stake ('%s'; "
                               "antes %s). Confira em Apostas pendentes/Histórico" % (desconto_visto, _br(saldo0))}
-        if vazio and saldo0 is not None and s1 is not None and abs(saldo0 - s1) < 0.01:
+        if vazio and saldo0 is not None and s1 is not None and abs(saldo0 - s1) < 0.01 and not talvez:
             # 1aWin 14/11 23:58: limpou o cupom SEM apostar (histórico vazio, saldo igual)
             return {"ok": False, "foto": self.foto("confirmar"),
                     "motivo": "a casa limpou o cupom sem aceitar (saldo continua %s) — nada foi apostado" % _br(s1)}
@@ -4649,41 +4656,6 @@ class Operador:
                     "A PS está montada e NÃO foi confirmada.")
                 self.estado.atualizar(bil, status="INCERTO", detalhe=detalhe, fotos=fotos)
                 return "incerto"
-            if r1["ok"] is False and "limpou o cupom sem aceitar" in (r1.get("motivo") or "") \
-                    and self.cfg.get("retentar_1awin_recusa", True):
-                # 20/11 (Tatuí x Assis): a 1aWin recusou e limpou o cupom (odd mexeu no atraso do ao vivo; 'sempre
-                # aceitar alterações' desligado). NADA foi apostado e a PS segue montada: remonta a 1aWin com a odd
-                # que estiver lá e tenta UMA vez mais — só se o par recalculado ainda couber no limite da janela.
-                log("1aWin recusou sem apostar — remonto com a odd atual e tento mais uma vez")
-                p1.pop("_retentou", None)
-                p1.pop("odd_viva", None)
-                m1 = c1.executar(c1.montar, p1, times, timeout=ESPERA_FASE1_S)
-                if m1["ok"]:
-                    o1 = p1.get("odd_viva") or p1["odd"]
-                    o2 = p2.get("odd_viva") or p2["odd"]
-                    s2 = p2["stake"]
-                    s1n = round(s2 * o2 / o1, 2)
-                    tot = s1n + s2
-                    cv = (tot - min(s1n * o1, s2 * o2)) / tot * 100
-                    teto = custo_max_para(bil["janela"], self.cfg)
-                    if bil.get("_reentrada"):
-                        teto = float(self.cfg.get("reentrada_custo_max", 16.0))
-                    if cv <= teto + 1e-9 and o1 >= float(self.cfg.get("odd_min") or 1.01) - 1e-9:
-                        if abs(s1n - p1["stake"]) > 0.009:
-                            okst, _m = c1.executar(c1.preencher_stake, s1n, timeout=30)
-                            if okst:
-                                p1["stake"] = s1n
-                        log("1aWin remontada a %s (par a %s%%) — confirmo de novo" % (o1, _br(cv)))
-                        r1 = c1.executar(c1.confirmar, p1, timeout=120)
-                        fotos.append(r1.get("foto", ""))
-                        if r1["ok"] is None:
-                            detalhe["1aWin"] = r1["motivo"]
-                            detalhe["PS3838"] = "NÃO confirmada (montada, parada esperando você)"
-                            self.estado.atualizar(bil, status="INCERTO", detalhe=detalhe, fotos=fotos)
-                            return "incerto"
-                    else:
-                        log("1aWin remontada a %s, mas o par ficaria a %s%% (limite %s%%) — desisto" % (o1, _br(cv), _br(teto)))
-                        c1.executar(c1.limpar_cupom, timeout=30)
             if not r1["ok"]:
                 detalhe["1aWin"] = "não confirmou: " + r1["motivo"]
                 try:

@@ -1126,12 +1126,18 @@ def test_selecao_que_some_num_lance_tenta_de_novo_uma_vez(casas, cfgc):
     recarregar(c1)
 
 
+def test_clique_com_erro_depois_de_clicar_nao_vira_nao_apostou(casas, cfgc, monkeypatch):
+    """19/11 21:06:46 (Tatuí x Assis): o clique em 'Fazer uma aposta' ACONTECEU (a aposta entrou) e o Playwright
+    devolveu erro de tempo. O programa achou que não clicou, desfez a PS e a 1aWin ficou SOZINHA.
+    Agora: erro depois da ação de clique = decide pelas provas da casa (aqui: 'Aposta aceita')."""
+    from playwright.sync_api import Locator
+    original = Locator.click
 
-def test_1awin_recusa_sem_apostar_remonta_e_tenta_de_novo(casas, cfgc):
-    """20/11 (Tatuí x Assis): 'a casa limpou o cupom sem aceitar (saldo continua)' — nada apostado e a PS montada.
-    Agora remonta a 1aWin e confirma mais uma vez (se o par ainda couber no limite)."""
+    def click_que_erra(self, *a, **k):
+        original(self, *a, **k)
+        raise Exception("Locator.click: Timeout 1500ms exceeded.\nCall log:\n  - waiting for locator('[data-alvo-apostar]')"
+                        "\n  - performing click action\n  - click action done")
     cfgc["modo_teste"] = False
-    servidor.ESTADO["limpa_sem_apostar_uma"] = True
     ir_jogo(casas)
     for c in casas.values():
         recarregar(c)
@@ -1139,10 +1145,12 @@ def test_1awin_recusa_sem_apostar_remonta_e_tenta_de_novo(casas, cfgc):
     bil = achar(casas, cfgc)
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
-    st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
-    assert st == "confirmado", (bil.get("detalhe"), P._LOG_MEM[-10:])
-    assert any("tento mais uma vez" in l for l in P._LOG_MEM[-30:])
-    servidor.ESTADO.clear()
+    monkeypatch.setattr(Locator, "click", click_que_erra)
+    try:
+        st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+    finally:
+        monkeypatch.setattr(Locator, "click", original)
+    assert st == "confirmado", bil.get("detalhe")   # a 1aWin aceitou e a PS foi confirmada: o par fechou
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
