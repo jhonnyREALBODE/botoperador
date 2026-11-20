@@ -4597,7 +4597,7 @@ class Operador:
         r["bilhetes"] = list(r.get("bilhetes") or [])
         if acao == "concluido" and b.get("bilhete") not in r["bilhetes"]:
             r["bilhetes"].append(b.get("bilhete"))
-        if cart and acao in ("concluido", "nao_apostado") and r["bilhetes"] and cart.get("sinal", {}).get("times"):
+        if cart and acao in ("concluido", "nao_apostado", "liberar") and r["bilhetes"] and cart.get("sinal", {}).get("times"):
             # o jogo já tinha par(es) confirmado(s): volta para ELE com a carteira (escadinha/âncora continuam)
             self._retomar = r
             log("🔓 bloqueio resolvido (%s) — volto para %s com a carteira (%d par(es)) para seguir escadinha/âncora" % (

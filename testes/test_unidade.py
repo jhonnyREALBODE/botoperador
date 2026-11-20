@@ -2292,7 +2292,8 @@ def test_bloqueio_resolvido_volta_ao_jogo_com_a_carteira(cfg, acao, esperado):
     assert op._retomar["bilhetes"] == [bil["id"] if x == "BIL" else x for x in esperado]
 
 
-def test_bloqueio_liberacao_manual_nao_volta_ao_jogo(cfg):
+def test_bloqueio_liberacao_manual_tambem_volta_ao_jogo_com_pares(cfg):
+    """23/11 (operador): 'foi porque ele não voltou a monitorar' — a liberação manual também volta ao jogo que já tem par."""
     est = P.Estado(cfg)
     op = P.Operador(dict(cfg, modo_teste=False), est, {})
     chamadas = []
@@ -2300,4 +2301,4 @@ def test_bloqueio_liberacao_manual_nao_volta_ao_jogo(cfg):
     op._prot = {"jogo": SINAL["jogo"], "pares": 1, "max": 4, "ultima": time.time(), "sinal": dict(SINAL), "bilhetes": [5]}
     op.bloquear("INCERTO", {"id": 9, "jogo": SINAL["jogo"], "times": TIMES}, "x", "y")
     op._prot = None
-    assert op.resolver("liberar") and chamadas == []
+    assert op.resolver("liberar") and chamadas == ["retomada"] and op._retomar["bilhetes"] == [5]
