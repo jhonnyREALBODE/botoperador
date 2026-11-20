@@ -1283,3 +1283,31 @@ def test_1awin_saldo_cai_e_volta_com_selecao_no_cupom_nao_e_incerto(casas, cfgc)
         for c in casas.values():
             recarregar(c)
         limpar_cupons(casas)
+
+
+@pytest.mark.parametrize("modo", ["sequencial_aceita", "sequencial_processando"])
+def test_ps_odd_mudou_no_clique_e_recusa_comprovada_e_recupera(casas, cfgc, modo):
+    """20/11 08:26 (Hapoel Beer Sheva x Ironi Ness Ziona): 1aWin aceita; a PS 'Odds have changed from 1.813 to 1.800' e a
+    seleção ficou no boletim (NÃO apostou). Era INCERTO e a 1aWin ficou sozinha. Agora: recusa comprovada -> refaz a conta
+    com a odd nova (dentro das regras) -> coloca a PS -> par fechado. Nada duplicado."""
+    cfgc["modo_teste"] = False
+    cfgc["confirmacao"] = modo
+    servidor.ESTADO["odd_muda_no_clique"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    try:
+        st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+        assert st == "confirmado", (bil["detalhe"], "\n".join(P._LOG_MEM[-25:]))
+        a = [c.executar(lambda c=c: c.page.evaluate("() => window.__aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
+        assert a == [1, 1], a
+        assert bil["pernas"][1].get("odd_aceita") or bil["pernas"][1].get("odd_viva") == 1.79
+    finally:
+        servidor.ESTADO.clear()
+        for c in casas.values():
+            recarregar(c)
+        limpar_cupons(casas)

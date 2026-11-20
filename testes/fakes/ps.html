@@ -44,6 +44,11 @@ document.getElementById('tab-slip').onclick = () => mostraSlip(true);
 document.getElementById('tab-all').onclick = () => mostraSlip(false);
 document.getElementById('apostar').onclick = () => {
   if (!sel || ESTADO.confirma_mudo || ESTADO.ps_mudo) return;  // ps_mudo: a PS não responde nada (INCERTO)
+  if (ESTADO.odd_muda_no_clique && !window.__mudou_clique) {  // 20/11 08:26: 'Odds have changed' e a seleção FICA
+    window.__mudou_clique = 1; const de = sel.odd; sel.odd = '1.790'; render();
+    const av = document.createElement('div'); av.className = 'odds-changed'; av.textContent = 'Odds have changed from ' + de + ' to 1.790';
+    document.getElementById('sels').prepend(av); return;
+  }
   if (ESTADO.rejeita_ps > 0) {  // PS real 15/11: 'Your bet has been rejected.' + 'Reutilizar seleção'
     ESTADO.rejeita_ps -= 1; const guard = sel;
     document.getElementById('msg').innerHTML = 'Your bet has been rejected. <a id="reuse">Reutilizar seleção</a>';

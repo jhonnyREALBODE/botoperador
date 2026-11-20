@@ -3788,8 +3788,15 @@ class Casa:
                 # recusa EXPLÍCITA da casa ('Your bet has been rejected.') = nada apostado, já
                 if explicita or (time.time() - t_clique > 2 and self.itens_cupom()):
                     # 'comprovada' = a casa DISSE que recusou ('rejected', 'recusada'...). Só ela autoriza tentar de novo.
+                    # 20/11 08:26 (Hapoel x Ironi, print da PS): 'Odds have changed from 1.813 to 1.800' com a seleção
+                    # AINDA no boletim e o botão esperando outro clique = a PS NÃO apostou. Também é recusa comprovada
+                    # (desde que as apostas pendentes não tenham aumentado).
+                    mudou_odd = re.search(r"odds? (have |has )?changed|cota[cç](ao|oes) (mudou|mudaram)", m.group(0), re.I)
+                    depois_p = self._pendentes()
+                    sem_pendente = antes is None or depois_p is None or depois_p <= antes
+                    comp = bool(explicita) or bool(mudou_odd and self.itens_cupom() and sem_pendente)
                     return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar"),
-                            "comprovada": bool(explicita)}
+                            "comprovada": comp}
         if novas:
             log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:20])))
         vazio = not self.itens_cupom()
