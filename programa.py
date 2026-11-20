@@ -4793,6 +4793,7 @@ class Operador:
                 if m["ok"]:
                     ok, mot = True, ""
                     res[nome] = m
+            if not ok:
                 res[nome]["ok"] = False
                 res[nome]["motivo"] = "montou, mas na conferência final: " + mot
                 res[nome]["montada"] = True  # está no cupom: precisa ser desfeita
