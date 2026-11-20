@@ -500,7 +500,7 @@ def test_odd_que_cai_mas_fica_no_piso_1_78_e_aceita(casas, cfgc):
     # a odd que caiu até o piso é ACEITA no cupom; o par é recalculado e, desde 21/11, tem que caber na TABELA da
     # janela (aqui as odds do site falso deixam o par caro -> recusa com o motivo; nada é confirmado)
     assert bil["pernas"][1].get("odd_viva") == 1.72, "\n".join(P._LOG_MEM[-25:])
-    assert st == "falhou" and "com a odd nova o par custa" in bil["detalhe"]["PS3838"], bil["detalhe"]
+    assert st == "falhou" and "ABORTADO NA BARREIRA: custo vivo" in bil["detalhe"]["PS3838"], bil["detalhe"]
     # caindo para 1.675 (abaixo do piso) continua reprovando
     servidor.ESTADO["odd_nova"] = "1.675"
     cfgc["odd_min"] = 1.70
@@ -800,20 +800,20 @@ def test_ps_janela_confirmar_apostas_e_aviso_velho(casas, cfgc):
     limpar_cupons(casas)
     bil = achar(casas, cfgc)
     cps = casas[P.CASA_PS]
-    real_montar = cps.montar
+    real_montar = cps.preparar
 
-    def montar_com_aviso(perna, times):
-        r = real_montar(perna, times)
+    def montar_com_aviso(perna, times, cancel=None, prazo=None):
+        r = real_montar(perna, times, cancel, prazo)
         cps.page.evaluate("""() => { const d = document.createElement('div');
             d.textContent = 'Odds have changed from 1.780 to 1.800'; document.getElementById('sels').prepend(d); }""")
         return r
-    cps.montar = montar_com_aviso
+    cps.preparar = montar_com_aviso
     try:
         est = P.Estado(cfgc)
         est.registrar_bilhete(bil, "sinal")
         assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "confirmado", bil["detalhe"]
     finally:
-        cps.montar = real_montar
+        cps.preparar = real_montar
         servidor.ESTADO.clear()
         for c in casas.values():
             recarregar(c)
@@ -1159,17 +1159,17 @@ def test_clique_com_erro_depois_de_clicar_nao_vira_nao_apostou(casas, cfgc, monk
     limpar_cupons(casas)
 
 
-def test_r21_1awin_montada_e_validada_antes_da_ps(casas, cfgc, monkeypatch):
-    """21/11: a 1aWin (mais instável) monta e valida PRIMEIRO; a PS só depois."""
-    ordem = []
-    original = P.Casa.montar
+def test_r22_preparacao_concorrente_no_navegador(casas, cfgc, monkeypatch):
+    """22/11 (Bucks x Portland): as duas casas PREPARAM ao mesmo tempo — uma não espera a outra terminar."""
+    marcas = {}
+    original = P.Casa.preparar
 
-    def montar_registrando(self, perna, times):
-        ordem.append(("inicio", self.nome))
-        r = original(self, perna, times)
-        ordem.append(("fim", self.nome))
+    def preparar_registrando(self, perna, times, cancel=None, prazo=None):
+        t0 = time.time()
+        r = original(self, perna, times, cancel, prazo)
+        marcas[self.nome] = (t0, time.time())
         return r
-    monkeypatch.setattr(P.Casa, "montar", montar_registrando)
+    monkeypatch.setattr(P.Casa, "preparar", preparar_registrando)
     ir_jogo(casas)
     for c in casas.values():
         recarregar(c)
@@ -1177,9 +1177,34 @@ def test_r21_1awin_montada_e_validada_antes_da_ps(casas, cfgc, monkeypatch):
     bil = achar(casas, cfgc)
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
-    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "testado"
-    assert ordem[:4] == [("inicio", P.CASA_1W), ("fim", P.CASA_1W), ("inicio", P.CASA_PS), ("fim", P.CASA_PS)], ordem
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "testado", bil.get("detalhe")
+    (a0, a1), (b0, b1) = marcas[P.CASA_1W], marcas[P.CASA_PS]
+    assert b0 < a1 and a0 < b1, marcas            # os intervalos se sobrepõem: montagem concorrente
+    assert any("PREPARAR: 1aWin pronta" in l for l in P._LOG_MEM[-60:])
+    assert any("BARREIRA OK" in l for l in P._LOG_MEM[-60:])
+    for c in casas.values():
+        assert c.executar(c.itens_cupom) == []
+
+
+def test_r22_dom_redesenhado_elemento_antigo_invalido(casas, cfgc):
+    """22/11: a 1aWin redesenhou o mercado depois da leitura (o nó carimbado não existe mais). A preparação NÃO usa o
+    elemento velho: faz UMA busca imediata pela identidade e clica no nó novo."""
+    servidor.ESTADO["redesenha_odds"] = 1200
+    c1, _ = ir_jogo(casas)
+    recarregar(c1)
     limpar_cupons(casas)
+    l1, _ = ler(casas)
+    o1 = [x for x in l1["ofertas"] if x["linha"] == 214.5 and x["lado"] == "abaixo"][0]
+    mid_velho = o1["_mid"]
+    time.sleep(1.6)
+    assert c1.executar(lambda: c1.page.locator('[data-mid="%s"]' % mid_velho).count()) == 0   # o nó velho sumiu
+    perna = dict(o1, stake=34.56)
+    r = c1.executar(c1.preparar, perna, TIMES, None, time.time() + 15)
+    assert r["ok"], r
+    assert any("cliquei a seleção" in l and "(relida)" in l for l in P._LOG_MEM[-15:])
+    c1.executar(c1.desfazer, perna)
+    servidor.ESTADO.clear()
+    recarregar(c1)
 
 
 def test_r21_linha_some_na_montagem_nao_deixa_aposta_isolada(casas, cfgc):
@@ -1197,7 +1222,8 @@ def test_r21_linha_some_na_montagem_nao_deixa_aposta_isolada(casas, cfgc):
     est.registrar_bilhete(bil, "sinal")
     st = P.Operador(cfgc, est, casas).executar_bilhete(bil, substituir=lambda nome_f, b0: None)
     assert st == "falhou", bil.get("detalhe")
-    assert "não montada" in bil["detalhe"]["PS3838"]
+    # 22/11: preparação concorrente — a PS foi cancelada no meio ou, se já estava pronta, desfeita; nunca confirmada
+    assert "não montada" in bil["detalhe"]["PS3838"] or "desfez" in bil["detalhe"]["PS3838"], bil["detalhe"]
     for c in casas.values():
         assert c.executar(c.itens_cupom) == []
         assert "Aposta aceita" not in c.executar(c.texto)

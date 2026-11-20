@@ -37,6 +37,7 @@ def cfg(tmp_path):
     c["totais_periodos"] = ["jogo", "q1", "q2", "q3"]  # os testes cobrem também a lógica dos quartos
     c["odd_fantasma_margem"] = None  # os dados falsos têm odds 'generosas' de propósito; o filtro tem teste próprio
     c["odd_min"] = None  # idem (odds baixas nos dados falsos); a odd mínima tem teste próprio
+    c["tempo_max_preparacao_seg"] = 15.0  # navegador de teste é lento; o prazo de 2 s tem teste próprio
     return c
 
 
@@ -54,6 +55,7 @@ def casas(site, tmp_path_factory):
     cfg["totais_periodos"] = ["jogo", "q1", "q2", "q3"]  # os testes cobrem também a lógica dos quartos
     cfg["odd_fantasma_margem"] = None  # dados falsos generosos; o filtro tem teste próprio
     cfg["odd_min"] = None
+    cfg["tempo_max_preparacao_seg"] = 15.0  # navegador de teste (headless) é lento; o prazo tem teste próprio
     cps = P.Casa(P.CASA_PS, cfg, base_url=site, perfil=str(d / "ps"), headless=True).iniciar()
     c1 = P.Casa(P.CASA_1W, cfg, base_url=site, perfil=str(d / "1w"), headless=True).iniciar()
     yield {P.CASA_1W: c1, P.CASA_PS: cps}

@@ -1622,3 +1622,381 @@ def test_r21_nenhuma_regra_financeira_afrouxada():
     import inspect
     src = inspect.getsource(P.Operador._monitorar)
     assert "custo_max=teto" not in src and "custo_por_janela=None" not in src
+
+
+# ================================================================== 22/11: execução em estados (Bucks x Portland)
+# Casas SIMULADAS (sem navegador): cada uma roda as tarefas em threads próprias, como as casas reais.
+class _Pagina:
+    url = "http://falsa/jogo"
+
+
+class CasaFalsa:
+    def __init__(self, nome, cfg, **r):
+        self.nome, self.cfg, self.r = nome, cfg, r
+        self.page = _Pagina()
+        self.chamadas = []
+        self.leituras = 0
+        self.t_disparo = None
+
+    @property
+    def rotulo(self):
+        return P.NOME_CASA[self.nome]
+
+    def enfileirar(self, fn, *args):
+        ev, caixa = threading.Event(), {}
+
+        def roda():
+            try:
+                caixa["r"] = fn(*args)
+            except Exception as e:  # pragma: no cover
+                caixa["e"] = e
+            ev.set()
+        threading.Thread(target=roda, daemon=True).start()
+        return ev, caixa
+
+    def em_paralelo(self, fn, *args, timeout=180):
+        ev, caixa = self.enfileirar(fn, *args)
+
+        def esperar():
+            assert ev.wait(timeout)
+            if "e" in caixa:
+                raise caixa["e"]
+            return caixa.get("r")
+        return esperar
+
+    def executar(self, fn, *args, timeout=180):
+        return self.em_paralelo(fn, *args, timeout=timeout)()
+
+    # --- PREPARAR
+    def preparar(self, perna, times, cancel=None, prazo=None):
+        self.chamadas.append("preparar")
+        t0 = time.time()
+        r = {"ok": False, "motivo": "", "foto": "", "t_ini": t0}
+        fim = t0 + self.r.get("prep_s", 0.05)
+        while time.time() < fim:
+            if cancel is not None and cancel.is_set():
+                r.update(motivo="cancelada (a outra casa falhou ou o par mudou)", cancelada=True)
+                break
+            if prazo is not None and time.time() > prazo:
+                r.update(motivo="passou do prazo de preparação", cancelada=True)
+                break
+            time.sleep(0.01)
+        else:
+            if self.r.get("prep_falha"):
+                r["motivo"] = self.r["prep_falha"]
+            else:
+                r["ok"] = True
+        r["t_fim"] = time.time()
+        r["segundos"] = round(r["t_fim"] - t0, 2)
+        return r
+
+    def limpar_cupom(self, perna=None):
+        self.chamadas.append("limpar")
+        return True
+
+    def desfazer(self, perna=None):
+        self.chamadas.append("desfazer")
+        return {"ok": True, "foto": "", "motivo": ""}
+
+    def foto(self, tag):
+        return ""
+
+    def preencher_stake(self, valor, rapido=False):
+        return True, ""
+
+    # --- BARREIRA
+    def ler_cupom(self, perna):
+        self.leituras += 1
+        odds = self.r.get("odds_lidas") or [perna["odd"]]
+        odd = odds[min(self.leituras - 1, len(odds) - 1)]
+        st = round(perna["stake"] / self.cfg["cambio_brl_eur"], 2) if self.nome == P.CASA_PS else round(perna["stake"], 2)
+        falha = self.r.get("barreira_falha")
+        if falha and self.leituras == 1:
+            return {"ok": False, "motivo": falha, "odd": None, "stake": st, "t": time.time()}
+        return {"ok": True, "motivo": "", "odd": odd, "stake": self.r.get("stake_lida", st), "t": time.time()}
+
+    def ler_e_armar(self, perna, armar=True):
+        r = self.ler_cupom(perna)
+        if r["ok"] and armar:
+            r["armado"], r["motivo_armar"] = True, ""
+        return r
+
+    # --- DISPARAR / RECONCILIAR
+    def disparar(self, perna, odd_ref=None, sincronia=None):
+        self.chamadas.append("disparar")
+        if sincronia is not None:
+            sincronia.wait(2)
+        self.t_disparo = time.time()
+        return {"clicou": True, "talvez": False, "t": self.t_disparo, "motivo": ""}
+
+    def disparar_e_sentir(self, perna, odd_ref, limite_s):
+        d = self.disparar(perna, odd_ref)
+        d["evidencia"] = self.r.get("evidencia", "processando")
+        return d
+
+    def apurar(self, perna=None):
+        self.chamadas.append("apurar")
+        ok = self.r.get("resultado", True)
+        return {"ok": ok, "foto": "", "motivo": "" if ok else ("INCERTO — sem prova" if ok is None else "a casa recusou: rejected")}
+
+    def recolocar(self, perna, times):
+        self.chamadas.append("recolocar")
+        return {"ok": True, "motivo": ""}
+
+    def confirmar(self, perna=None):
+        self.chamadas.append("confirmar")
+        ok = self.r.get("recuperacao", False)
+        return {"ok": ok, "foto": "", "motivo": "" if ok else "a casa recusou de novo"}
+
+
+def _bucks(cfg, o1=1.85, o2=1.99, l1=231.5, l2=233.5):
+    """O par do log 19/11 23:08:46: Over 231,5 @1,85 (1aWin) + Under 233,5 @1,99 (PS), janela 2,0, custo 4,13%."""
+    a = {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": l1, "odd": o1, "casa": P.CASA_1W, "_mid": "1"}
+    b = {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": l2, "odd": o2, "casa": P.CASA_PS, "_mid": "2"}
+    c = P._calcular(a, b, cfg)
+    return P._montar_bilhete(dict(SINAL, jogo="Milwaukee Bucks x Portland Trail Blazers"), a, b, l2 - l1, c)
+
+
+def _op22(cfg, r1=None, r2=None, modo_teste=False):
+    cfg = dict(cfg, modo_teste=modo_teste, odd_min=1.78, tempo_max_preparacao_seg=2.0)
+    casas = {P.CASA_1W: CasaFalsa(P.CASA_1W, cfg, **(r1 or {})), P.CASA_PS: CasaFalsa(P.CASA_PS, cfg, **(r2 or {}))}
+    est = P.Estado(cfg)
+    return P.Operador(cfg, est, casas), casas, est, cfg
+
+
+def _rodar(op, est, bil, **kw):
+    est.registrar_bilhete(bil, "sinal")
+    return op.executar_bilhete(bil, **kw)
+
+
+def test_r22_bucks_par_do_log_custa_4_13(cfg):
+    bil = _bucks(cfg)
+    assert abs(bil["custo"] - 4.13) < 0.01 and bil["janela"] == 2.0
+
+
+def test_r22_preparacao_realmente_concorrente(cfg):
+    """As duas casas começam JUNTAS: uma não espera a outra terminar."""
+    op, casas, est, cfg2 = _op22(cfg, {"prep_s": 0.4}, {"prep_s": 0.4})
+    bil = _bucks(cfg2)
+    t0 = time.time()
+    res = op._preparar_duas(bil)
+    assert all(r["ok"] for r in res.values())
+    assert time.time() - t0 < 0.7                       # sequencial levaria 0,8 s
+    assert res[P.CASA_PS]["t_ini"] < res[P.CASA_1W]["t_fim"] and res[P.CASA_1W]["t_ini"] < res[P.CASA_PS]["t_fim"]
+    assert any("PREPARAR: 1aWin pronta" in l and "PS pronta" in l for l in P._LOG_MEM[-5:])
+
+
+def test_r22_uma_casa_falhando_cancela_a_outra(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"prep_s": 0.05, "prep_falha": "a linha 231,5 não está mais na página"}, {"prep_s": 1.5})
+    bil = _bucks(cfg2)
+    t0 = time.time()
+    assert _rodar(op, est, bil) == "falhou"
+    assert time.time() - t0 < 0.8                       # a PS NÃO seguiu montando o candidato velho
+    assert "cancelada" in bil["detalhe"]["PS3838"]
+    for c in casas.values():
+        assert "disparar" not in c.chamadas
+
+
+def test_r22_prazo_de_preparacao_estourado_cancela_e_limpa(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"prep_s": 0.3}, {"prep_s": 5.0})
+    op.cfg["tempo_max_preparacao_seg"] = 0.5
+    bil = _bucks(cfg2)
+    t0 = time.time()
+    assert _rodar(op, est, bil) == "falhou"
+    assert time.time() - t0 < 1.5
+    assert "prazo" in bil["detalhe"]["PS3838"]
+    assert "desfazer" in casas[P.CASA_1W].chamadas      # a 1aWin, que ficou pronta, foi limpa
+    assert all("disparar" not in c.chamadas for c in casas.values())
+
+
+def test_r22_custo_vivo_acima_do_limite_aborta_antes_de_clicar(cfg):
+    """19/11 20:19: 'par recalculado ... custo 6,56% (antes 1,87%)' e mesmo assim foi confirmar. Agora: aborta na barreira."""
+    op, casas, est, cfg2 = _op22(cfg, {}, {"odds_lidas": [1.80, 1.80]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "falhou"
+    assert all("disparar" not in c.chamadas for c in casas.values())
+    assert any(l.startswith("ABORTADO NA BARREIRA: custo vivo") and "> limite 4,80%" in l
+               for l in (x.split("] ", 1)[-1] for x in P._LOG_MEM[-30:])), P._LOG_MEM[-10:]
+    assert all("desfazer" in c.chamadas for c in casas.values())
+
+
+def test_r22_odd_viva_abaixo_de_1_78_aborta(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"odds_lidas": [1.77, 1.77]}, {"odds_lidas": [2.30, 2.30]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "falhou"
+    assert "abaixo do mínimo 1,78" in bil["detalhe"]["1aWin"]
+    assert all("disparar" not in c.chamadas for c in casas.values())
+
+
+def test_r22_stake_alterada_aborta(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"stake_lida": 10.0}, {})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "falhou"
+    assert "stake alterada" in bil["detalhe"]["1aWin"]
+
+
+def test_r22_linha_muda_na_barreira_reinicia_uma_vez_e_aborta_se_mudar_de_novo(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {}, {"odds_lidas": [1.98, 1.97]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "falhou"
+    assert casas[P.CASA_PS].leituras == 2                # reiniciou UMA vez
+    assert "mudaram de novo durante a barreira" in bil["detalhe"]["PS3838"]
+    assert all("disparar" not in c.chamadas for c in casas.values())
+
+
+def test_r22_linha_muda_uma_vez_e_estabiliza_segue_com_odd_viva(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {}, {"odds_lidas": [1.98, 1.98]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado"
+    assert bil["pernas"][1]["odd_viva"] == 1.98 and bil["custo_vivo"] > bil["custo"]
+
+
+def test_r22_selecao_some_na_barreira_troca_e_refaz_a_barreira(cfg):
+    """A 1aWin tira a linha DEPOIS de pronta: troca só essa perna (substituir decide, sem tipo preferido) e a barreira
+    é refeita do zero com as linhas novas (não usa a validação do par anterior)."""
+    op, casas, est, cfg2 = _op22(cfg, {"barreira_falha": "cupom com 0 seleções (esperado 1)"}, {})
+    bil = _bucks(cfg2)
+    novo = _bucks(cfg2, o1=1.87, l1=231.0)
+    st = _rodar(op, est, bil, substituir=lambda nome_f, b0: novo if nome_f == P.CASA_1W else None)
+    assert st == "confirmado", bil.get("detalhe")
+    assert bil["pernas"][0]["linha"] == 231.0
+    assert casas[P.CASA_1W].leituras >= 2 and casas[P.CASA_PS].leituras >= 2   # barreira inteira de novo
+    assert casas[P.CASA_1W].chamadas.count("preparar") == 2
+
+
+def test_r22_ambas_confirmadas(cfg):
+    op, casas, est, cfg2 = _op22(cfg)
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado"
+    assert bil["estado_execucao"] == "AMBAS_CONFIRMADAS"
+    assert bil["disparos"]["1aWin"] and bil["disparos"]["PS3838"] and bil["disparos"]["diferenca_ms"] is not None
+    assert any(l.split("] ", 1)[-1].startswith("DISPAROS: 1aWin") and "diferença" in l for l in P._LOG_MEM[-30:])
+
+
+def test_r22_ambas_recusadas_limpa_e_volta(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"resultado": False}, {"resultado": False})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "falhou"
+    assert bil["estado_execucao"] == "AMBAS_RECUSADAS"
+    assert all("desfazer" in c.chamadas for c in casas.values())
+
+
+def test_r22_so_a_1awin_confirmada_vira_perna_orfa_e_nunca_repete_a_aceita(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"resultado": True}, {"resultado": False, "recuperacao": False})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "exposto"
+    assert bil["_orfa"] == {"aceita": P.CASA_1W, "falta": P.CASA_PS}
+    assert casas[P.CASA_1W].chamadas.count("disparar") == 1 and "confirmar" not in casas[P.CASA_1W].chamadas
+    assert casas[P.CASA_PS].chamadas.count("confirmar") == 2      # recuperação limitada (2 tentativas, mesmas regras)
+    assert bil["detalhe"]["1aWin"] == "confirmada"
+
+
+def test_r22_so_a_ps_confirmada_vira_perna_orfa(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"resultado": False, "recuperacao": False}, {"resultado": True})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "exposto"
+    assert bil["_orfa"] == {"aceita": P.CASA_PS, "falta": P.CASA_1W}
+    assert casas[P.CASA_PS].chamadas.count("disparar") == 1 and "confirmar" not in casas[P.CASA_PS].chamadas
+    assert bil["detalhe"]["PS3838"] == "confirmada"
+
+
+def test_r22_perna_orfa_recuperada_dentro_das_regras(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"resultado": True}, {"resultado": False, "recuperacao": True})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado"
+
+
+def test_r22_perna_orfa_sem_recuperacao_segura_nao_aposta(cfg):
+    """A perna que faltou só volta se o par ainda passar nas regras (aqui a odd viva da PS caiu: custo estoura)."""
+    op, casas, est, cfg2 = _op22(cfg, {"resultado": True}, {"resultado": False, "recuperacao": True,
+                                                          "odds_lidas": [1.99, 1.80]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "exposto"
+    assert "confirmar" not in casas[P.CASA_PS].chamadas
+    assert "custo vivo" in bil["detalhe"]["PS3838"]
+
+
+def test_r22_resultado_incerto_congela(cfg):
+    op, casas, est, cfg2 = _op22(cfg, {"resultado": None}, {"resultado": True})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "incerto"
+    assert bil["status"] == "INCERTO" and bil["estado_execucao"] == "INCERTO"
+
+
+def test_r22_conservadora_sem_prova_imediata_a_ps_espera_o_definitivo(cfg):
+    """Sem prova imediata da 1aWin: a PS só dispara se a 1aWin for ACEITA; recusada -> a PS nem dispara."""
+    op, casas, est, cfg2 = _op22(cfg, {"evidencia": None, "resultado": False}, {})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "falhou"
+    assert "disparar" not in casas[P.CASA_PS].chamadas
+    assert "NÃO confirmada" in bil["detalhe"]["PS3838"]
+
+
+def test_r22_modo_rapido_dispara_junto_e_registra_a_diferenca(cfg):
+    op, casas, est, cfg2 = _op22(cfg)
+    op.cfg["confirmacao"] = "rapida"
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado"
+    assert bil["disparos"]["modo"] == "rapida" and bil["disparos"]["diferenca_ms"] < 300
+
+
+def test_r22_modo_teste_nao_dispara(cfg):
+    op, casas, est, cfg2 = _op22(cfg, modo_teste=True)
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "testado"
+    assert all("disparar" not in c.chamadas for c in casas.values())
+
+
+def test_r22_assinatura_e_cooldown_sem_repeticao_infinita(cfg):
+    t = P.ControleTentativas(dict(cfg, cooldown_par_s=60, max_tentativas_por_minuto=3))
+    a = {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 231.5}
+    b = {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": 233.5}
+    ass = P.assinatura_par(TIMES, a, b)
+    assert ass == P.assinatura_par(TIMES, dict(a, odd=1.9, casa="x"), dict(b, odd=2.0))   # odd/casa não entram
+    assert ass != P.assinatura_par(TIMES, a, dict(b, linha=234.5))                          # outra oportunidade
+    t.falhou(ass, agora=1000)
+    assert t.cooldown(ass, agora=1010) == 50 and t.cooldown(ass, agora=1061) == 0
+    assert t.cooldown(P.assinatura_par(TIMES, a, dict(b, linha=234.5)), agora=1010) == 0
+    for k in range(3):
+        t.registrar("jogo", agora=1000 + k)
+    assert t.excedeu("jogo", agora=1010) and not t.excedeu("jogo", agora=1065)
+
+
+def test_r22_reconciliacao_classifica(cfg):
+    assert P.classificar_reconciliacao(True, True) == "AMBAS_CONFIRMADAS"
+    assert P.classificar_reconciliacao(False, False) == "AMBAS_RECUSADAS"
+    assert P.classificar_reconciliacao(True, False) == "UMA_CONFIRMADA"
+    assert P.classificar_reconciliacao(False, True) == "UMA_CONFIRMADA"
+    assert P.classificar_reconciliacao(None, True) == "INCERTO"
+    assert P.classificar_reconciliacao(False, None) == "INCERTO"
+
+
+def test_r22_nenhuma_regra_financeira_afrouxada(cfg):
+    d = P.DEFAULTS
+    assert d["odd_min"] == 1.78 and d["custo_max"] == 5.0 and d["perda_max_por_jogo_brl"] == 100.0
+    assert d["custo_por_janela"] == [[1, 2, 3.0], [2, 3, 4.8], [3, 7, 4.99], [7, 11, 8.0]]
+    c = dict(cfg, odd_min=1.78)
+    bil = _bucks(c)
+    assert P.validar_par_vivo(bil, 1.85, 1.99, c)[0]                        # o par do log passa
+    assert not P.validar_par_vivo(bil, 1.77, 1.99, c)[0]                    # odd abaixo de 1,78
+    ok, mot, custo, _ = P.validar_par_vivo(bil, 1.85, 1.80, c)              # custo vivo acima da tabela (janela 2: 4,8%)
+    assert not ok and "custo vivo" in mot and "limite 4,80%" in mot
+    b1 = _bucks(c, l2=232.5)                                                # janela 1: limite 3%
+    ok, mot, _, _ = P.validar_par_vivo(b1, 1.85, 1.99, c)
+    assert not ok and "limite 3,00%" in mot
+    # com carteira: perda máxima e regras de reentrada valem com as odds vivas
+    cart = [dict(p, par=1) for p in P.pernas_aceitas(dict(_bucks(c), id=1))]
+    ok, mot, _, _ = P.validar_par_vivo(bil, 1.85, 1.99, c, cart)
+    assert not ok and "idêntico" in mot
+    ok, mot, _, _ = P.validar_par_vivo(_bucks(c, l1=232.5, l2=234.5), 1.85, 1.99, dict(c, perda_max_por_jogo_brl=1.0), cart)
+    assert not ok and "pior caso" in mot
+
+
+def test_r22_ancora_e_escadinha_continuam_sem_prioridade_fixa():
+    """A troca durante a preparação usa o mesmo achar_par/nota_reentrada: a nota não tem o TIPO como critério."""
+    av_anc = {"novos": [235], "janela_nova": (232, 235), "pior_depois": -10.0, "tipo": "âncora"}
+    av_esc = {"novos": [235, 236], "janela_nova": (232, 236), "pior_depois": -10.0, "tipo": "escadinha"}
+    assert P.nota_reentrada(av_esc, 4.0, 1.85) > P.nota_reentrada(av_anc, 4.0, 1.85)
+    av_anc2 = dict(av_anc, novos=[235, 236], janela_nova=(232, 236))
+    assert P.nota_reentrada(av_anc2, 3.0, 1.85) > P.nota_reentrada(av_esc, 4.0, 1.85)   # âncora vence por custo
+    assert P.nota_reentrada(dict(av_esc, tipo="âncora"), 4.0, 1.85) == P.nota_reentrada(av_esc, 4.0, 1.85)

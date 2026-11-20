@@ -116,6 +116,10 @@ if (p.match(/\/betting\/live\/basketball-23\/?$/)) {
         b.onclick = () => { sel = {jogo: j.t1 + ' - ' + j.t2, mk: 'Totais (inc OT)', rot: 'Abaixo De 216.5', odd: '2.10'}; renderCupom(); };
         b.parentElement.appendChild(novo); break; } } }, ESTADO.troca_linha);
   }
+  if (ESTADO.redesenha_odds) {  // 22/11: a 1aWin redesenha o mercado inteiro (nós NOVOS, sem o carimbo data-mid)
+    setTimeout(() => { for (const b of document.querySelectorAll('#mks ._btn_q1')) { const nb = b.cloneNode(true);
+      nb.removeAttribute('data-mid'); nb.onclick = b.onclick; b.replaceWith(nb); } }, ESTADO.redesenha_odds);
+  }
   if (ESTADO.cartao_estranho) {  // seleção presa num cartão que a heurística não reconhece (sem odd visível)
     const sl = document.getElementById('slip'); sl.innerHTML = '<div class="_q7"><span>Totais (inc OT), Acima De 148.5</span></div>';
   }
