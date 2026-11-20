@@ -22,8 +22,10 @@ CENARIOS = [
      {"sequencial_processando": ("confirmado", 1, 1), "rapida": ("confirmado", 1, 1)}),
     ("1ª casa aceita atrasada", {"aceita_atrasada": 2500},
      {"sequencial_processando": ("confirmado", 1, 1), "rapida": ("confirmado", 1, 1)}),
+    # a 1aWin recusa SEMPRE: a 1ª recusa é comprovada (texto novo) -> tenta UMA vez a perna que faltou; a 2ª recusa
+    # repete o MESMO texto que já estava na tela -> não dá para provar que é nova -> INCERTO (congela, não repete mais)
     ("apenas a PS aceita", {"processa_e_recusa": "sempre"},
-     {"sequencial_processando": ("exposto", 0, 1), "rapida": ("exposto", 0, 1)}),
+     {"sequencial_processando": ("incerto", 0, 1), "rapida": ("incerto", 0, 1)}),
     ("ambas aceitam", {},
      {"sequencial_processando": ("confirmado", 1, 1), "rapida": ("confirmado", 1, 1)}),
     ("cupom some sem confirmação", {"limpa_sem_apostar": True},
