@@ -4505,11 +4505,48 @@ class Operador:
             "resolver (confira o histórico das casas e use os botões do painel)" % (estado_pos, bil.get("jogo"), confirmada, falhou))
         self._publicar_protecao()
 
+    def retomar_perna(self, bid, casa):
+        """Operador 20/11 08:26: 'só UMA perna entrou' (conferido no histórico). A perna aceita volta para a carteira, o jogo
+        volta a ser monitorado e, a cada rodada, o programa tenta COBRIR essa perna com a outra casa (mesmas regras:
+        odd mínima, tabela de custo, perda máxima; nunca repete a perna aceita). Coberta -> par completo -> segue com
+        escadinha/âncora normalmente."""
+        if self.cfg.get("modo_teste", True):
+            log("retomar perna: só faz sentido no modo REAL (no teste nada foi apostado)")
+            return False
+        bil = next((b for b in self.estado.bilhetes if str(b.get("id")) == str(bid)), None)
+        if not bil or casa not in (CASA_1W, CASA_PS) or len(bil.get("pernas") or []) != 2:
+            return False
+        falta = CASA_PS if casa == CASA_1W else CASA_1W
+        with _TRAVA:
+            bil["status"] = "exposto"
+            bil.setdefault("detalhe", {})
+            bil["detalhe"][NOME_CASA[casa]] = "confirmada (conferida pelo operador)"
+            bil["detalhe"][NOME_CASA[falta]] = "NÃO entrou (conferido pelo operador) — cobrindo"
+            bil["_orfa"] = {"aceita": casa, "falta": falta}
+            bil.setdefault("avisos", []).append("operador: só a %s entrou — retomo o jogo para cobrir a perna" % NOME_CASA[casa])
+        self.estado.salvar()
+        if self.bloqueio:
+            self.bloqueio = None
+            self._publicar_protecao()
+        sinal = {"id": "perna-%s" % bil.get("id"), "jogo": bil.get("jogo", ""), "times": bil.get("times") or [],
+                 "liga": bil.get("liga", ""), "mercado": "cobrir perna solta da %s" % NOME_CASA[casa]}
+        self._solta_pendente = (bil, falta)
+        # enquanto a perna está solta o jogo fica PROTEGIDO: sinal novo vai para a fila (não abandona a perna)
+        self._prot = {"jogo": bil.get("jogo", ""), "pares": 0,
+                      "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
+                      "ultima": time.time(), "sinal": sinal, "bilhetes": [], "linha_ultima": None}
+        log("🧩 operador: só a %s entrou em %s (%s) — volto ao jogo para cobrir com a %s" % (
+            NOME_CASA[casa], bil.get("jogo"), bil["pernas"][0 if casa == CASA_1W else 1]["selecao"], NOME_CASA[falta]))
+        return self.novo_sinal(sinal, origem="perna_solta")
+
     def resolver(self, acao):
-        """Saída do BLOQUEIO: 'concluido' (as duas aceitas), 'nao_apostado' (nenhuma aceita) ou 'liberar' (manual)."""
+        """Saída do BLOQUEIO: 'concluido' (as duas aceitas), 'nao_apostado' (nenhuma aceita), 'liberar' (manual),
+        'so_1awin' / 'so_ps' (só uma entrou: cobre a perna e segue no jogo)."""
         b = self.bloqueio
         if not b:
             return False
+        if acao in ("so_1awin", "so_ps"):
+            return self.retomar_perna(b.get("bilhete"), CASA_1W if acao == "so_1awin" else CASA_PS)
         for bil in self.estado.bilhetes:
             if bil.get("id") == b.get("bilhete"):
                 with _TRAVA:
@@ -4659,6 +4696,9 @@ class Operador:
             return nota_reentrada(avaliar_reentrada(cart, novas, self.cfg), c["custo"], min(a["odd"], b["odd"]))
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
+        orfa_ret = None
+        if origem == "perna_solta" and getattr(self, "_solta_pendente", None):
+            orfa_ret, self._solta_pendente = self._solta_pendente, None
         if origem == "retomada" and self._retomar:
             r = self._retomar
             for bid in r.get("bilhetes") or []:
@@ -4737,6 +4777,47 @@ class Operador:
                                                 "reentradas neste jogo" % sinal["jogo"])
                         log("■ %s: perna solta coberta — monitoramento encerrado (posição incompleta não reentra)" % sinal["jogo"])
                         return
+                    cancel.wait(self.cfg["monitor_intervalo_s"])
+                    continue
+                if orfa_ret is not None:
+                    bo, falta = orfa_ret
+                    if not lt.get(falta, {}).get("ofertas"):
+                        cancel.wait(self.cfg["monitor_intervalo_s"])
+                        continue
+                    with _TRAVA_CLIQUES:
+                        rec, mot = self._recuperar_orfa(bo, falta, [])
+                    if rec == "confirmada":
+                        with _TRAVA:
+                            bo.pop("_orfa", None)
+                        self.estado.atualizar(bo, status="confirmado", detalhe={"1aWin": "confirmada", "PS3838": "confirmada"})
+                        novas = pernas_aceitas(bo)
+                        carteira_local.extend(novas)
+                        entradas.append(bo.get("id"))
+                        self._prot = {"jogo": sinal["jogo"], "pares": len(entradas),
+                                      "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
+                                      "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas), "linha_ultima": None}
+                        ultima[0] = time.time()
+                        ultima[1] = linha_principal(lt[CASA_PS]["ofertas"], "jogo") if lt.get(CASA_PS) else None
+                        self._prot["linha_ultima"] = ultima[1]
+                        janela_padrao.setdefault(bo["periodo"], bo["janela"])
+                        self._publicar_protecao()
+                        orfa_ret = None
+                        log("✔ %s: perna solta COBERTA — par completo (%s + %s); sigo no jogo com escadinha/âncora" % (
+                            sinal["jogo"], bo["pernas"][0]["selecao"], bo["pernas"][1]["selecao"]))
+                        self.estado.set_monitor("%s: perna coberta — procurando reentrada" % sinal["jogo"])
+                        cancel.wait(self.cfg["monitor_intervalo_s"])
+                        continue
+                    if rec == "incerto":
+                        p1x, p2x = bo["pernas"]
+                        self.bloquear("INCERTO", bo, "%s: %s" % (NOME_CASA[CASA_PS if falta == CASA_1W else CASA_1W],
+                                                                (p2x if falta == CASA_1W else p1x)["selecao"]),
+                                      "%s (incerta, cobertura): %s" % (NOME_CASA[falta], mot[:80]))
+                        log("■ %s: cobertura da perna solta INCERTA — bloqueado" % sinal["jogo"])
+                        return
+                    if rodada % 3 == 1:
+                        log("%s: perna solta ainda sem cobertura segura (%s) — tento de novo na próxima rodada" % (
+                            sinal["jogo"], (mot or "")[:120]))
+                    self.estado.set_monitor("%s: PERNA SOLTA — procurando cobertura na %s" % (sinal["jogo"], NOME_CASA[falta]))
                     cancel.wait(self.cfg["monitor_intervalo_s"])
                     continue
                 if self._prot and self._prot.get("jogo") == sinal["jogo"]:
@@ -6225,13 +6306,15 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
     '<div style="margin:4px 0">Nenhuma aposta nova em jogo nenhum até resolver. Confira o histórico das duas casas e escolha:</div>'+
     '<button onclick="if(confirm(\'As DUAS pernas aparecem aceitas no histórico?\'))post(\'/api/resolver/concluido\')">As duas foram aceitas (CONCLUÍDO)</button> '+
     '<button onclick="if(confirm(\'NENHUMA perna foi aceita?\'))post(\'/api/resolver/nao_apostado\')">Nenhuma foi aceita (NÃO APOSTADO)</button> '+
+    '<button onclick="if(confirm(\'SÓ a 1aWin aparece aceita no histórico (a PS não)?\'))post(\'/api/resolver/so_1awin\')">Só a 1aWin entrou (cobrir e seguir)</button> '+
+    '<button onclick="if(confirm(\'SÓ a PS aparece aceita no histórico (a 1aWin não)?\'))post(\'/api/resolver/so_ps\')">Só a PS entrou (cobrir e seguir)</button> '+
     '<button onclick="if(confirm(\'Liberar manualmente? Só faça isso se já resolveu a posição nas casas.\'))post(\'/api/resolver/liberar\')">Liberação manual</button></div>'+ph;
     if(!window._bip||Date.now()-window._bip>8000){window._bip=Date.now();try{const a=new AudioContext(),o=a.createOscillator();o.frequency.value=880;o.connect(a.destination);o.start();setTimeout(()=>o.stop(),600);}catch(e){}}}
   document.getElementById('mon').innerHTML='<b>Monitor:</b> '+esc(d.monitor||'parado — aguardando sinal')+ph;}
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
- const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>b.status!='falhou');
- document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(({confirmado:'CONCLUÍDO',falhou:'NÃO APOSTADO',exposto:'INCOMPLETO',INCERTO:'INCERTO',testado:'testado (simulado)'})[b.status]||b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.avisos&&b.avisos.length?'<br><b class="no">'+b.avisos.map(esc).join('<br>')+'</b>':'')+(b.carteira?'<br><span class="mut">carteira: lucro em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+'</td></tr>').join('')+'</table>';
+ const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _umaEntrou=b=>Object.values(b.detalhe||{}).some(v=>/^confirmada/.test(v)); const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>b.status!='falhou'||_umaEntrou(b));
+ document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(({confirmado:'CONCLUÍDO',falhou:'NÃO APOSTADO',exposto:'INCOMPLETO',INCERTO:'INCERTO',testado:'testado (simulado)'})[b.status]||b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.avisos&&b.avisos.length?'<br><b class="no">'+b.avisos.map(esc).join('<br>')+'</b>':'')+(b.carteira?'<br><span class="mut">carteira: lucro em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+(d.modo==='REAL'&&b.status!=='confirmado'&&b.status!=='testado'&&(['INCERTO','exposto'].includes(b.status)||Object.values(b.detalhe||{}).some(v=>/^confirmada/.test(v))||(b.avisos||[]).some(a=>/resolvido pelo operador/.test(a)))?'<br><span class="mut">Uma perna entrou de verdade? </span><button onclick="if(confirm(\'Confirmou no histórico que SÓ a 1aWin entrou?\'))post(\'/api/perna/'+b.id+'/1awin\')">Só a 1aWin entrou</button> <button onclick="if(confirm(\'Confirmou no histórico que SÓ a PS entrou?\'))post(\'/api/perna/'+b.id+'/ps3838\')">Só a PS entrou</button>':'')+'</td></tr>').join('')+'</table>';
  {const on=pa.pos_monitorar, md=on?pa.pos_modo:'off';
   const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];
   const bt=(m,t)=>'<button style="margin-left:6px;'+(md==m?'background:#1e8e3e':'background:#555')+'" onclick="post(\'/api/pos_modo/'+m+'\')">'+t+'</button>';
@@ -6329,7 +6412,11 @@ def criar_painel(estado, operador, porta):
                 log("📌 cobertura pós-entrada: %s (pelo painel — fica assim também quando o programa reabrir)" % {
                     "auto": "AUTOMÁTICA", "manual": "MANUAL", "off": "DESLIGADA"}[modo])
                 return self._env(200, '{"ok":true}')
-            m4 = re.match(r"^/api/resolver/(concluido|nao_apostado|liberar)$", p)
+            m5 = re.match(r"^/api/perna/(\w+)/(1awin|ps3838)$", p)
+            if m5 and operador:
+                ok = operador.retomar_perna(m5.group(1), m5.group(2))
+                return self._env(200, '{"ok":%s}' % ("true" if ok else "false"))
+            m4 = re.match(r"^/api/resolver/(concluido|nao_apostado|liberar|so_1awin|so_ps)$", p)
             if m4 and operador:
                 ok = operador.resolver(m4.group(1))
                 return self._env(200, '{"ok":%s}' % ("true" if ok else "false"))

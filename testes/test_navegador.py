@@ -1311,3 +1311,38 @@ def test_ps_odd_mudou_no_clique_e_recusa_comprovada_e_recupera(casas, cfgc, modo
         for c in casas.values():
             recarregar(c)
         limpar_cupons(casas)
+
+
+def test_operador_diz_que_so_a_1awin_entrou_e_o_programa_cobre_e_segue(casas, cfgc):
+    """20/11 08:26: a 1aWin entrou e a PS não; o operador só tinha 'nenhuma entrou' e o jogo morreu. Agora 'Só a 1aWin
+    entrou': o jogo volta a ser monitorado, a perna é coberta na PS (regras normais) e o par vira a 1ª entrada do jogo
+    (escadinha/âncora seguem dali). A 1aWin NUNCA é apostada de novo."""
+    cfgc["modo_teste"] = False
+    cfgc["monitor_intervalo_s"] = 0.5
+    cfgc["reentrar_mesmo_jogo"] = True
+    servidor.ESTADO.clear()
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    bil.update(jogo=SINAL["jogo"], times=TIMES)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    est.atualizar(bil, status="falhou", detalhe={"1aWin": "confirmada", "PS3838": "INCERTO — Odds have changed"})
+    op = P.Operador(cfgc, est, casas)
+    try:
+        assert op.retomar_perna(bil["id"], P.CASA_1W)
+        assert esperar(lambda: bil["status"] == "confirmado", 120), "\n".join(P._LOG_MEM[-30:])
+        assert esperar(lambda: op._prot and op._prot.get("pares") == 1, 10)
+        a = [c.executar(lambda c=c: c.page.evaluate("() => window.__aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
+        assert a[0] == 0 and a[1] == 1, a      # a 1aWin NÃO foi apostada de novo; só a cobertura na PS
+        assert any("perna solta COBERTA" in l for l in P._LOG_MEM[-40:])
+    finally:
+        if op._atual:
+            op._atual[1].set()
+        time.sleep(1.5)
+        servidor.ESTADO.clear()
+        for c in casas.values():
+            recarregar(c)
+        limpar_cupons(casas)
