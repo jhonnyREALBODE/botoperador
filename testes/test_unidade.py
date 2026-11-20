@@ -1630,6 +1630,9 @@ class _Pagina:
     url = "http://falsa/jogo"
 
 
+ORDEM = []
+
+
 class CasaFalsa:
     def __init__(self, nome, cfg, **r):
         self.nome, self.cfg, self.r = nome, cfg, r
@@ -1714,8 +1717,8 @@ class CasaFalsa:
         odds = self.r.get("odds_lidas") or [perna["odd"]]
         odd = odds[min(self.leituras - 1, len(odds) - 1)]
         st = round(perna["stake"] / self.cfg["cambio_brl_eur"], 2) if self.nome == P.CASA_PS else round(perna["stake"], 2)
-        falha = self.r.get("barreira_falha")
-        if falha and self.leituras == 1:
+        falha = self.r.get("barreira_falha") if self.leituras == 1 else (self.r.get("falha_na_leitura") or {}).get(self.leituras)
+        if falha:
             return {"ok": False, "motivo": falha, "odd": None, "stake": st, "t": time.time()}
         return {"ok": True, "motivo": "", "odd": odd, "stake": self.r.get("stake_lida", st), "t": time.time()}
 
@@ -1728,6 +1731,7 @@ class CasaFalsa:
     # --- DISPARAR / RECONCILIAR
     def disparar(self, perna, odd_ref=None, sincronia=None):
         self.chamadas.append("disparar")
+        ORDEM.append((self.nome, "disparar"))
         if sincronia is not None:
             sincronia.wait(2)
         self.t_disparo = time.time()
@@ -1740,6 +1744,7 @@ class CasaFalsa:
 
     def apurar(self, perna=None):
         self.chamadas.append("apurar")
+        ORDEM.append((self.nome, "apurar"))
         ok = self.r.get("resultado", True)
         comp = self.r.get("recusa_comprovada", True)
         return {"ok": ok, "foto": "", "comprovada": ok is False and comp,
@@ -2132,3 +2137,98 @@ def test_r22_ancora_e_escadinha_continuam_sem_prioridade_fixa():
     av_anc2 = dict(av_anc, novos=[235, 236], janela_nova=(232, 236))
     assert P.nota_reentrada(av_anc2, 3.0, 1.85) > P.nota_reentrada(av_esc, 4.0, 1.85)   # âncora vence por custo
     assert P.nota_reentrada(dict(av_esc, tipo="âncora"), 4.0, 1.85) == P.nota_reentrada(av_esc, 4.0, 1.85)
+
+
+# ------------------------------------------------------------------ 22/11: modo sequencial_aceita (o que o operador vai usar)
+def _op_aceita(cfg, r1=None, r2=None):
+    op, casas, est, cfg2 = _op22(cfg, r1, r2)
+    op.cfg["confirmacao"] = "sequencial_aceita"
+    del ORDEM[:]
+    return op, casas, est, cfg2
+
+
+def _sem_repetir_1awin(casas):
+    c1 = casas[P.CASA_1W].chamadas
+    assert c1.count("disparar") == 1 and not any(x.startswith(("confirmar", "recolocar", "montar")) for x in c1)
+
+
+def test_r22a_ps_so_dispara_depois_da_1awin_aceita_e_validada(cfg):
+    op, casas, est, cfg2 = _op_aceita(cfg, {"evidencia": "aceita"}, {})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado"
+    assert ORDEM.index((P.CASA_1W, "apurar")) < ORDEM.index((P.CASA_PS, "disparar"))   # aceita ANTES do disparo da PS
+    assert casas[P.CASA_PS].leituras == 2                                               # barreira + validação final da PS
+    assert any("VALIDAÇÃO FINAL DA PS OK" in l for l in P._LOG_MEM[-20:])
+
+
+def test_r22a_1_linha_da_ps_some_depois_da_1awin_aceita_usa_cobertura_alternativa(cfg):
+    esc = [_of("abaixo", 234.0, 2.02, P.CASA_PS)]
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"falha_na_leitura": {2: "cupom com 0 seleções (esperado 1)"},
+                                                "escada": esc, "recuperacao": True, "odds_lidas": [1.99, 1.99, 2.02]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado", bil.get("detalhe")
+    assert "disparar" not in casas[P.CASA_PS].chamadas              # a PS original NÃO foi disparada
+    assert bil["pernas"][1]["linha"] == 234.0 and "montar:234.0" in casas[P.CASA_PS].chamadas
+    _sem_repetir_1awin(casas)
+
+
+def test_r22a_2_odd_da_ps_cai_abaixo_de_1_78_sem_cobertura_vira_perna_orfa(cfg):
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"odds_lidas": [1.99, 1.70], "escada": [_of("abaixo", 233.5, 1.70, P.CASA_PS)]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "exposto"                         # NÃO finge que o par fechou
+    assert "disparar" not in casas[P.CASA_PS].chamadas and not any(x.startswith("confirmar") for x in casas[P.CASA_PS].chamadas)
+    assert "abaixo do mínimo 1,78" in bil["detalhe"]["PS3838"] and bil["detalhe"]["1aWin"] == "confirmada"
+    _sem_repetir_1awin(casas)
+
+
+def test_r22a_3_custo_atualizado_passa_da_tabela_sem_cobertura_vira_perna_orfa(cfg):
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"odds_lidas": [1.99, 1.82], "escada": [_of("abaixo", 233.5, 1.82, P.CASA_PS)]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "exposto"
+    assert "disparar" not in casas[P.CASA_PS].chamadas
+    assert "custo vivo" in bil["detalhe"]["PS3838"]
+    _sem_repetir_1awin(casas)
+
+
+def test_r22a_3b_custo_usa_a_odd_real_aceita_na_1awin(cfg):
+    """A 1aWin aceitou a 1,80 (calculado a 1,85): a PS a 1,99 já não cabe na tabela -> não dispara."""
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"escada": []})
+    casas[P.CASA_1W].apurar = lambda perna=None: {"ok": True, "odd_aceita": 1.80, "foto": "", "motivo": ""}
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "exposto"
+    assert "disparar" not in casas[P.CASA_PS].chamadas and "custo vivo" in bil["detalhe"]["PS3838"]
+
+
+def test_r22a_4_ps_recusa_explicitamente_e_recupera_dentro_das_regras(cfg):
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"resultado": False, "recuperacao": True,
+                                                "escada": [_of("abaixo", 233.5, 1.99, P.CASA_PS)]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado"
+    _sem_repetir_1awin(casas)
+
+
+def test_r22a_5_ps_processando_incerta_congela(cfg):
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"resultado": None, "escada": [_of("abaixo", 233.5, 1.99, P.CASA_PS)]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "incerto"
+    assert not any(x.startswith(("confirmar", "recolocar", "montar")) for x in casas[P.CASA_PS].chamadas)
+    _sem_repetir_1awin(casas)
+
+
+def test_r22a_6_1awin_aceita_atrasada_e_ps_valida(cfg):
+    op, casas, est, cfg2 = _op_aceita(cfg, {"evidencia": "processando"}, {})
+    orig = casas[P.CASA_1W].apurar
+
+    def atrasada(perna=None):
+        time.sleep(1.0)
+        return orig(perna)
+    casas[P.CASA_1W].apurar = atrasada
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado"
+    assert any("VALIDAÇÃO FINAL DA PS OK" in l for l in P._LOG_MEM[-20:])
+
+
+def test_r22a_7_ambas_aceitam(cfg):
+    op, casas, est, cfg2 = _op_aceita(cfg)
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado" and bil["estado_execucao"] == "AMBAS_CONFIRMADAS"

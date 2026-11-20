@@ -43,7 +43,7 @@ const mostraSlip = (sim) => { document.getElementById('slip-box').style.display 
 document.getElementById('tab-slip').onclick = () => mostraSlip(true);
 document.getElementById('tab-all').onclick = () => mostraSlip(false);
 document.getElementById('apostar').onclick = () => {
-  if (!sel || ESTADO.confirma_mudo) return;
+  if (!sel || ESTADO.confirma_mudo || ESTADO.ps_mudo) return;  // ps_mudo: a PS não responde nada (INCERTO)
   if (ESTADO.rejeita_ps > 0) {  // PS real 15/11: 'Your bet has been rejected.' + 'Reutilizar seleção'
     ESTADO.rejeita_ps -= 1; const guard = sel;
     document.getElementById('msg').innerHTML = 'Your bet has been rejected. <a id="reuse">Reutilizar seleção</a>';

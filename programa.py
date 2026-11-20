@@ -5246,7 +5246,8 @@ class Operador:
             except Exception as e:
                 d1 = {"clicou": False, "talvez": True, "t": None, "motivo": "erro no disparo: %s" % str(e)[:80]}
             disp[CASA_1W] = d1
-            provas = ("aceita", "processando") if modo == "sequencial_processando" else ("aceita",)
+            # sequencial_aceita: a PS SÓ dispara com a aceitação DEFINITIVA da 1aWin (apurar) + validação final da PS
+            provas = ("aceita", "processando") if modo == "sequencial_processando" else ()
             if (d1["clicou"] or d1["talvez"]) and d1.get("evidencia") in provas:
                 log("%s: 1aWin %s em %d ms — disparo a PS JÁ" % (modo,
                     "aceitou" if d1["evidencia"] == "aceita" else "recebeu o clique (processando)",
@@ -5262,7 +5263,12 @@ class Operador:
                     final[CASA_1W] = c1.executar(c1.apurar, p1, timeout=120)
                 except Exception as e:
                     final[CASA_1W] = {"ok": None, "motivo": "INCERTO — erro ao apurar: %s" % str(e)[:80], "foto": ""}
-                disp[CASA_PS] = cps.executar(cps.disparar, p2, b["o2"], timeout=30) if final[CASA_1W]["ok"] is True else None
+                if final[CASA_1W]["ok"] is True:
+                    disp[CASA_PS], f_ps = self._ps_depois_da_1awin_aceita(bil, carteira, final[CASA_1W])
+                    if f_ps:
+                        final[CASA_PS] = f_ps
+                else:
+                    disp[CASA_PS] = None
         t1, t2 = (disp.get(CASA_1W) or {}).get("t"), (disp.get(CASA_PS) or {}).get("t")
         if t1 and t2:
             log("DISPAROS: 1aWin %s | PS %s | diferença %d ms" % (_hms_ms(t1), _hms_ms(t2), abs(t2 - t1) * 1000))
@@ -5351,6 +5357,8 @@ class Operador:
         def det(n, r):
             if r["ok"] is True:
                 return "confirmada"
+            if r.get("nao_disparada") and (r.get("motivo") or "").startswith("validação final"):
+                return "NÃO confirmada (não disparada; cupom limpo) — %s" % r["motivo"]
             if r.get("nao_disparada"):
                 return "NÃO confirmada (montada, parada esperando você)" + (" — %s" % r["motivo"] if r.get("motivo") and
                                                                           r["motivo"] != "NÃO disparada" else "")
@@ -5424,6 +5432,53 @@ class Operador:
         nova["_mesma"] = mesma
         nova["_janela"] = jan
         return nova, ""
+
+    def _ps_depois_da_1awin_aceita(self, bil, carteira, r1):
+        """A 1aWin JÁ ESTÁ ACEITA: a barreira de antes não basta. Validação final EXCLUSIVA da PS, imediatamente antes do
+        disparo dela: seleção, linha, odd e stake no cupom; custo e perda recalculados com a aposta REAL da 1aWin (linha,
+        odd do recibo, stake). Reprovou -> a PS não dispara: a reconciliação vira PERNA_ORFA, que procura cobertura
+        alternativa dentro das regras (ou para e pede você). A 1aWin nunca é repetida. -> (disparo | None, final | None)"""
+        cps = self.casas[CASA_PS]
+        p1, p2 = bil["pernas"]
+        oa = r1.get("odd_aceita")
+        if oa:
+            p1["odd_aceita"] = oa
+        o1 = p1.get("odd_aceita") or p1.get("odd_viva") or p1["odd"]
+        try:
+            L = cps.executar(cps.ler_cupom, p2, timeout=20)
+        except Exception as e:
+            L = {"ok": False, "motivo": "leitura falhou: %s" % str(e)[:80], "odd": None, "stake": None}
+        motivo = ""
+        if not L["ok"]:
+            motivo = L["motivo"] or "seleção da PS mudou"
+        else:
+            esperado = round(p2["stake"] / self.cfg["cambio_brl_eur"], 2)
+            if L.get("stake") is None or abs(L["stake"] - esperado) > 0.011:
+                motivo = "stake alterada (digitada %s, o cupom mostra %s)" % (_fmt(esperado), L.get("stake"))
+            else:
+                ok, mot, custo, pior = validar_par_vivo(bil, o1, L["odd"], self.cfg, carteira)
+                if not ok:
+                    motivo = mot
+                else:
+                    log("VALIDAÇÃO FINAL DA PS OK (1aWin aceita @%s): %s @%s stake %s € | custo vivo %s%% | pior caso R$ %s" % (
+                        _br(o1, 3).rstrip("0").rstrip(","), _nome_perna(p2).replace(".", ",") if p2["tipo"] == "total"
+                        else p2["selecao"], _br(L["odd"], 3).rstrip("0").rstrip(","), _br(L["stake"]), _br(custo),
+                        _br(pior) if pior is not None else "—"))
+                    with _TRAVA:
+                        p2["odd_viva"] = L["odd"]
+                        bil["custo_vivo"] = round(custo, 2)
+                    try:
+                        return cps.executar(cps.disparar, p2, L["odd"], timeout=30), None
+                    except Exception as e:
+                        return {"clicou": False, "talvez": True, "t": None, "motivo": "erro no disparo: %s" % str(e)[:80]}, None
+        log("‼ VALIDAÇÃO FINAL DA PS REPROVOU com a 1aWin JÁ ACEITA @%s: %s — a PS NÃO dispara; procuro cobertura "
+            "alternativa dentro das regras (a 1aWin nunca é repetida)" % (_br(o1, 3).rstrip("0").rstrip(","), motivo))
+        try:
+            cps.executar(cps.limpar_cupom, p2, timeout=40)
+        except Exception:
+            pass
+        return None, {"ok": False, "nao_disparada": True, "comprovada": True, "foto": "",
+                      "motivo": "validação final da PS reprovou: " + motivo}
 
     def _recuperar_orfa(self, bil, falta, carteira):
         """PERNA_ORFA (só depois de recusa COMPROVADA da perna que faltou): protege a perna aceita com a MESMA linha ou
