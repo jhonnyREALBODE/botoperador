@@ -4501,6 +4501,17 @@ class Operador:
         """INCOMPLETO / INCERTO: congela TODA aposta nova (todos os jogos), não puxa a fila, alerta no painel."""
         self.bloqueio = {"estado": estado_pos, "jogo": bil.get("jogo"), "bilhete": bil.get("id"), "desde": agora(),
                          "confirmada": confirmada, "falhou": falhou}
+        # 23/11 (operador): 'deu INCERTO e ele esqueceu a escadinha/âncora'. Guarda a CARTEIRA do jogo (pares já
+        # confirmados, última entrada) junto do bloqueio; ao resolver, o programa VOLTA para este jogo com ela.
+        if self._prot and _mesmo_jogo(self._prot.get("sinal", {}).get("times") or bil.get("times") or ["", ""],
+                                      bil.get("times") or ["", ""]):
+            cart = {k: v for k, v in self._prot.items() if k in ("jogo", "max", "sinal", "bilhetes", "ultima", "linha_ultima")}
+        else:
+            cart = {"jogo": bil.get("jogo"), "bilhetes": [], "ultima": time.time(), "linha_ultima": None,
+                    "sinal": {"id": "retomada-%s" % bil.get("id"), "jogo": bil.get("jogo", ""), "times": bil.get("times") or [],
+                              "liga": bil.get("liga", ""), "mercado": "retomada após bloqueio"}}
+        cart["bilhetes"] = list(cart.get("bilhetes") or [])
+        self.bloqueio["carteira"] = cart
         log("‼‼ BLOQUEADO — %s em %s | confirmada: %s | falhou/incerta: %s — NADA de aposta nova em jogo nenhum até "
             "resolver (confira o histórico das casas e use os botões do painel)" % (estado_pos, bil.get("jogo"), confirmada, falhou))
         self._publicar_protecao()
@@ -4545,7 +4556,10 @@ class Operador:
         b = self.bloqueio
         if not b:
             return False
+        cart = b.get("carteira")
         if acao in ("so_1awin", "so_ps"):
+            if cart:
+                self._retomar = dict(cart, ultima=time.time())
             return self.retomar_perna(b.get("bilhete"), CASA_1W if acao == "so_1awin" else CASA_PS)
         for bil in self.estado.bilhetes:
             if bil.get("id") == b.get("bilhete"):
@@ -4557,8 +4571,19 @@ class Operador:
         self.estado.salvar()
         self.bloqueio = None
         self._motivo_lib = "%s (%s) resolvido: %s" % (b["jogo"], b["estado"], acao)
-        log("🔓 bloqueio resolvido (%s) — a fila volta a andar" % acao)
         self._publicar_protecao()
+        r = dict(cart or {}, ultima=time.time())
+        r["bilhetes"] = list(r.get("bilhetes") or [])
+        if acao == "concluido" and b.get("bilhete") not in r["bilhetes"]:
+            r["bilhetes"].append(b.get("bilhete"))
+        if cart and acao in ("concluido", "nao_apostado") and r["bilhetes"] and cart.get("sinal", {}).get("times"):
+            # o jogo já tinha par(es) confirmado(s): volta para ELE com a carteira (escadinha/âncora continuam)
+            self._retomar = r
+            log("🔓 bloqueio resolvido (%s) — volto para %s com a carteira (%d par(es)) para seguir escadinha/âncora" % (
+                acao, r.get("jogo"), len(r["bilhetes"])))
+            self.novo_sinal(r["sinal"], origem="retomada")
+            return True
+        log("🔓 bloqueio resolvido (%s) — a fila volta a andar" % acao)
         if not (self._atual and self._atual[0].is_alive() and not self._atual[1].is_set()):
             self._puxar_fila()
         return True
@@ -4699,7 +4724,7 @@ class Operador:
         orfa_ret = None
         if origem == "perna_solta" and getattr(self, "_solta_pendente", None):
             orfa_ret, self._solta_pendente = self._solta_pendente, None
-        if origem == "retomada" and self._retomar:
+        if origem in ("retomada", "perna_solta") and self._retomar:
             r = self._retomar
             for bid in r.get("bilhetes") or []:
                 b = next((x for x in self.estado.bilhetes if x.get("id") == bid), None)

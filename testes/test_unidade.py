@@ -2265,3 +2265,39 @@ def test_sinal_novo_descarta_cacas_velhas_da_fila(cfg):
         if descartada:
             assert isinstance(caixa["e"], P.CacaInterrompida)
     assert c.fila.qsize() == 1 and c.fila.get_nowait()[0] is outra
+
+
+@pytest.mark.parametrize("acao,esperado", [("nao_apostado", [5]), ("concluido", [5, "BIL"]), ("so_1awin", [5])])
+def test_bloqueio_resolvido_volta_ao_jogo_com_a_carteira(cfg, acao, esperado):
+    """23/11 (operador): 'deu INCERTO, esperou outro sinal e esqueceu a escadinha/âncora'. Agora a carteira do jogo vai
+    junto do bloqueio e, ao resolver, o programa VOLTA para o mesmo jogo com os pares já confirmados."""
+    cfg = dict(cfg, modo_teste=False)
+    est = P.Estado(cfg)
+    op = P.Operador(cfg, est, {})
+    chamadas = []
+    op.novo_sinal = lambda sinal, origem="sinal": chamadas.append((sinal["jogo"], origem)) or True
+    sinal = dict(SINAL)
+    op._prot = {"jogo": sinal["jogo"], "pares": 1, "max": 4, "ultima": time.time() - 30, "sinal": sinal,
+                "bilhetes": [5], "linha_ultima": 146.5}
+    bil = {"id": 9, "jogo": sinal["jogo"], "times": TIMES, "pernas": [
+        {"casa": P.CASA_1W, "selecao": "Acima de 147.5", "lado": "acima", "linha": 147.5, "odd": 1.85, "stake": 30, "tipo": "total", "periodo": "jogo"},
+        {"casa": P.CASA_PS, "selecao": "Abaixo de 148.5", "lado": "abaixo", "linha": 148.5, "odd": 1.9, "stake": 31, "tipo": "total", "periodo": "jogo"}]}
+    est.registrar_bilhete(bil, "sinal")
+    op.bloquear("INCERTO", bil, "nenhuma comprovada", "1aWin (incerta)")
+    op._prot = None   # o monitor do jogo terminou (como no programa)
+    assert op.bloqueio["carteira"]["bilhetes"] == [5]
+    assert op.resolver(acao)
+    assert op.bloqueio is None
+    assert chamadas and chamadas[-1][0] == SINAL["jogo"] and chamadas[-1][1] in ("retomada", "perna_solta")
+    assert op._retomar["bilhetes"] == [bil["id"] if x == "BIL" else x for x in esperado]
+
+
+def test_bloqueio_liberacao_manual_nao_volta_ao_jogo(cfg):
+    est = P.Estado(cfg)
+    op = P.Operador(dict(cfg, modo_teste=False), est, {})
+    chamadas = []
+    op.novo_sinal = lambda sinal, origem="sinal": chamadas.append(origem) or True
+    op._prot = {"jogo": SINAL["jogo"], "pares": 1, "max": 4, "ultima": time.time(), "sinal": dict(SINAL), "bilhetes": [5]}
+    op.bloquear("INCERTO", {"id": 9, "jogo": SINAL["jogo"], "times": TIMES}, "x", "y")
+    op._prot = None
+    assert op.resolver("liberar") and chamadas == []
