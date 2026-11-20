@@ -129,10 +129,10 @@ DEFAULTS = {
     "fila_validade_min": 20,
     "erros_leitura_alerta": 10,        # 20/11: 10 leituras seguidas com erro -> pausa e alerta (não libera o jogo)
     "cobrir_perna_solta": False,       # 20/11: com posição INCOMPLETA tudo congela (nada de aposta automática)           # sinal na fila vale até 20 min (depois descarta)      # ...e com pelo menos 60 s de intervalo
-    "reentrada_custo_max": 16.0,       # reentrada: teto de custo (20/11: +1, era 15%)
-    "reentrada_custo_bom": 5.0,        # até aqui entra sempre e tem preferência (20/11: +1, era 4%)
+    "reentrada_custo_max": 16.0,       # (sem uso desde 21/11: reentrada segue a tabela por janela)
+    "reentrada_custo_bom": 5.0,        # (sem uso desde 21/11: o custo entra no desempate, sem faixa preferida)
     "reentrada_janela_vale": 3.0,      # acima de 4%: só duplo duplo ou janela ≥ 3 pontos           # 17/11: reentrada SÓ pela lógica do parceiro (duplo duplo / sequência / nunca repetido)    # reentrada só com janela ≥ a da 1ª entrada do jogo (operador 16/11)
-    "retentar_selecao_sumida": True,   # 20/11: seleção sumiu da 1aWin num lance -> espera e tenta 1x de novo
+    "retentar_selecao_sumida": False,  # 21/11: não insiste na mesma seleção — vai direto para a substituta   # 20/11: seleção sumiu da 1aWin num lance -> espera e tenta 1x de novo
     "retentar_espera_s": 1.5,
 
     "odd_min": 1.78,                   # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
@@ -718,16 +718,20 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
     permitidos = set(cfg.get("totais_periodos") or PERIODOS_TODOS) - {"q4"}
     so_totais = cfg.get("so_totais")
     candidatos = []
+    recusados = []  # (janela, cálculo, perna 1aWin, perna PS, motivo) — para dizer POR QUE não entrou
     suspeitos = 0
     melhor_janela = None
     menor_custo_ok = None
 
     odd_min = cfg.get("odd_min")
 
+    abaixo_piso = [0]
+
     def filtra(esc):
         out = []
         for o in esc or []:
             if odd_min and o.get("odd", 0) < float(odd_min) - 1e-9:
+                abaixo_piso[0] += 1
                 continue  # perna com odd baixa demais (ex.: 1aWin a 1.43 em 17/11 15:48)
             if o.get("periodo") == "q4":
                 continue
@@ -790,18 +794,32 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
                 if jan > TETO_JANELA_HANDICAP:
                     suspeitos += 1
                     continue
-            if excluir and excluir(a, b, jan):
-                continue  # reentrada: par que não aumenta a faixa de dupla das entradas anteriores
             c = _calcular(a, b, cfg)
             if c["custo"] < CUSTO_MIN_SUSPEITO:
                 suspeitos += 1
+                recusados.append((jan, c, a, b, "linha suspeita (custo negativo demais — tela velha?)"))
                 continue
             melhor_janela = jan if melhor_janela is None else max(melhor_janela, jan)
             if jan >= cfg["janela_min"]:
                 menor_custo_ok = c["custo"] if menor_custo_ok is None else min(menor_custo_ok, c["custo"])
             ps_ok = c["ps_eur"] + FOLGA_PS_EUR >= (cfg["perna_ps_eur"] or 5.0)
-            valido = jan >= cfg["janela_min"] and c["custo"] <= custo_max_para(jan, cfg) and ps_ok
-            candidatos.append((valido, jan, c, a, b, preferir(a, b, c) if (preferir and valido) else 0))
+            lim = custo_max_para(jan, cfg)
+            if jan < cfg["janela_min"] - 1e-9:
+                recusados.append((jan, c, a, b, "janela abaixo do mínimo (%s)" % _br(cfg["janela_min"], 1)))
+                continue
+            if c["custo"] > lim + 1e-9:
+                recusados.append((jan, c, a, b, "custo %s%% acima do limite de %s%% para janela %s" % (
+                    _br(c["custo"]), _br(lim), _br(jan, 1))))
+                continue
+            if not ps_ok:
+                recusados.append((jan, c, a, b, "stake incompatível (perna da PS abaixo do mínimo)"))
+                continue
+            # regras obrigatórias da reentrada / geladeira: o filtro devolve o MOTIVO (texto) quando recusa
+            mot_ex = excluir(a, b, jan) if excluir else None
+            if mot_ex:
+                recusados.append((jan, c, a, b, mot_ex if isinstance(mot_ex, str) else "recusado pelas regras da reentrada"))
+                continue
+            candidatos.append((True, jan, c, a, b, preferir(a, b, c) if preferir else 0))
 
     # reentrada (parceiro 17/11): 'duplo duplo' primeiro (mais totais com 4+ greens), depois a maior janela, depois o custo
     validos = [x for x in candidatos if x[0]]
@@ -822,22 +840,45 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
                           "suspeitos": suspeitos})
         return bil, None
 
-    motivo = "sem par: %d combinações; melhor janela %s; menor custo com janela ok %s; %d suspeito(s) descartado(s)%s%s" % (
-        len(candidatos),
-        _br(melhor_janela, 1) if melhor_janela is not None else "—",
-        (_br(menor_custo_ok, 2) + "%") if menor_custo_ok is not None else "—",
-        suspeitos, (" ; %d odd(s) fantasma da 1aWin ignorada(s)" % fantasmas) if fantasmas else "", restricao)
+    # 21/11: o motivo mostra UM par concreto (o melhor recusado) e o motivo real — antes 'melhor janela' e
+    # 'menor custo' podiam ser de combinações diferentes
+    if recusados:
+        recusados.sort(key=lambda x: (x[0] < cfg["janela_min"] - 1e-9, -x[0], x[1]["custo"]))
+        jr, cr, ar, br_, mr = recusados[0]
+        motivo = "sem par: RECUSADO: %s | janela %s | custo %s%% | motivo: %s (%d combinação(ões) recusada(s)%s%s%s)%s" % (
+            descricao_par(ar, br_), _br(jr, 1), _br(cr["custo"]), mr, len(recusados),
+            ("; %d odd(s) abaixo do piso %s" % (abaixo_piso[0], odd_min)) if abaixo_piso[0] else "",
+            ("; %d odd(s) fantasma da 1aWin" % fantasmas) if fantasmas else "",
+            ("; %d suspeito(s) descartado(s)" % suspeitos) if suspeitos else "", restricao)
+    else:
+        motivo = "sem par: nenhuma combinação Over × Under entre as casas%s%s%s%s" % (
+            ("; %d odd(s) abaixo do piso %s" % (abaixo_piso[0], odd_min)) if abaixo_piso[0] else "",
+            ("; %d odd(s) fantasma da 1aWin" % fantasmas) if fantasmas else "",
+            ("; %d suspeito(s) descartado(s)" % suspeitos) if suspeitos else "", restricao)
     if not e1 or not e2:
-        motivo = "sem par: escada vazia em %s%s%s" % (
+        motivo = "sem par: escada vazia em %s%s%s%s" % (
             " e ".join(n for n, e in ((NOME_CASA[CASA_1W], e1), (NOME_CASA[CASA_PS], e2)) if not e),
-            (" (%d odd(s) fantasma da 1aWin ignorada(s))" % fantasmas) if fantasmas else "", restricao)
+            (" (%d odd(s) fantasma da 1aWin ignorada(s))" % fantasmas) if fantasmas else "",
+            (" (%d odd(s) abaixo do piso %s)" % (abaixo_piso[0], odd_min)) if abaixo_piso[0] else "", restricao)
     if raiox is not None:
-        quase = [x for x in candidatos if x[1] >= cfg["janela_min"]]
-        quase.sort(key=lambda x: (x[2]["custo"], -x[1]))
+        # o 'quase' da calculadora = o MESMO par que o motivo mostra (o melhor recusado)
+        quase = recusados[0] if recusados else None
         raiox.update({"valido": False, "motivo": motivo, "melhor_janela": melhor_janela,
                       "menor_custo": menor_custo_ok, "suspeitos": suspeitos,
-                      "par": _montar_bilhete(sinal, quase[0][3], quase[0][4], quase[0][1], quase[0][2]) if quase else None})
+                      "motivo_recusa": quase[4] if quase else "",
+                      "par": _montar_bilhete(sinal, quase[2], quase[3], quase[0], quase[1]) if quase else None})
     return None, motivo
+
+
+def descricao_par(a, b):
+    """'1aWin Over 169,5 @1,85 + PS Under 172 @1,97' (a = perna da 1aWin, b = perna da PS)."""
+    def um(o, casa):
+        if o.get("tipo") == "total":
+            lado = "Over" if o["lado"] == "acima" else "Under"
+        else:
+            lado = o.get("time") or "Handicap"
+        return "%s %s %s @%s" % (casa, lado, _br(o["linha"], 1).replace(",0", ""), _br(o["odd"], 3).rstrip("0").rstrip(","))
+    return "%s + %s" % (um(a, "1aWin"), um(b, "PS"))
 
 
 def _limpa_oferta(o, casa, stake):
@@ -1178,17 +1219,17 @@ def avaliar_reentrada(carteira, novas, cfg):
     return r
 
 
-def nota_reentrada(av):
-    """Só para candidatos que JÁ PASSARAM nas regras obrigatórias (avaliar_reentrada ok). Ordem de escolha
-    (operador 19/11), maior = melhor: 1) mais totais novos contíguos; 2) menor pior perda;
-    3) menor capital adicional; 4) maior lucro mínimo na janela; 5) menor concentração numa linha.
-    Valores PARECIDOS (R$ 2 / R$ 5) empatam de propósito, para cair no desempate: a escadinha completa."""
+def nota_reentrada(av, custo=0.0, odd_min_par=0.0):
+    """Só para candidatos APROVADOS. Maior = melhor (operador 21/11), SEM preferência por âncora ou escadinha:
+    1) mais totais finais novos com lucro; 2) maior ampliação da janela contínua; 3) menor pior prejuízo da
+    carteira; 4) menor custo; 5) (estabilidade: todos já passaram pelas 2 leituras); 6) maior odd mínima do par."""
+    jn = av.get("janela_nova")
+    largura = (jn[1] - jn[0] + 1) if jn else 0
     return (len(av.get("novos") or []),
-            round((av.get("pior_depois") or 0) / 2.0),
-            -round((av.get("capital") or 0) / 5.0),
-            round((av.get("lucro_min_janela") or 0) / 2.0),
-            -(av.get("concentracao_max") or 0),
-            1 if av.get("tipo") == "escadinha" else 0)
+            largura,
+            round(av.get("pior_depois") or -1e9, 2),
+            -round(custo or 0.0, 3),
+            round(odd_min_par or 0.0, 3))
 
 
 def pernas_aceitas(bil):
@@ -2017,7 +2058,7 @@ def _sem_toast_desfazer(tx):
 
 
 # motivos de montagem em que a CASA mexeu na linha (vale tentar a âncora na montagem)
-_RX_LINHA_MUDOU = re.compile(r"não está mais na página|cupom sem a linha|não recebeu a seleção|sumiu do cupom|"
+_RX_LINHA_MUDOU = re.compile(r"não está mais na página|cupom sem a linha|não recebeu a seleção|sumiu do cupom|desapareceu|"
                              r"odd mudou|odd do cupom caiu|travou o mercado|leitura não achou a seleção", re.I)
 _RX_EXCLUIDO = re.compile(r"evento exclu[ií]do|event (excluded|removed)|mercado (fechado|encerrado)|market closed", re.I)
 _RX_REMOVER_TUDO = re.compile(r"^\s*(remover tudo|remove all|limpar tudo|clear all|apagar tudo)\s*$", re.I)
@@ -2893,6 +2934,25 @@ class Casa:
             return True
         except Exception:
             return False
+
+    def selecao_viva(self, perna):
+        """Releitura RÁPIDA antes de montar (sem reenumerar a página): se o botão carimbado ainda existe e já
+        mostra OUTRA linha, a seleção sumiu -> False. Sem carimbo ou botão redesenhado: não sei -> True (a
+        montagem relê pela identidade). Odd diferente não reprova aqui (a conferência do cupom decide)."""
+        mid = perna.get("_mid")
+        if not mid:
+            return True
+        try:
+            loc = self.page.locator('[data-mid="%s"]' % mid)
+            if not loc.count():
+                return True
+            if perna.get("_aid"):
+                aid = loc.first.evaluate("e => (e.closest('a[id]') || e.querySelector('a[id]') || {id: ''}).id")
+                a, b = (aid or "").split("|"), perna["_aid"].split("|")
+                return not (len(a) >= 6 and (a[:4] != b[:4] or abs(float(a[5]) - float(b[5])) > 1e-6))
+            return _coexiste(perna["linha"], _sem_acento(loc.first.inner_text()), usar_abs=True)
+        except Exception:
+            return True
 
     def _carimbo_vivo(self, el, perna):
         """O botão carimbado ainda é a MESMA seleção? (a 1aWin redesenha ao vivo e o nó
@@ -4138,54 +4198,38 @@ class Operador:
         indisp_ps = [0]  # quantas vezes a PS disse 'mínima maior que a máxima' neste jogo
 
         def excluir(a, b, jan):
+            """Regras obrigatórias (além da odd mínima e da tabela de custo, que o achar_par já aplica).
+            Devolve o MOTIVO (texto) quando recusa, ou None."""
             agora_s = time.time()
             if geladeira.get((CASA_PS, "*"), 0) > agora_s or geladeira.get((CASA_PS, "per", b.get("periodo")), 0) > agora_s:
-                return True
+                return "PS em pausa neste jogo (acabou de recusar com 'mínima maior que a máxima')"
             for casa_n, o in ((CASA_1W, a), (CASA_PS, b)):
                 if geladeira.get((casa_n, _chave_oferta(o)), 0) > agora_s:
-                    return True
+                    return "linha da %s falhou há pouco (geladeira)" % NOME_CASA[casa_n]
             if not entradas:
-                return False
+                return None
             if a["tipo"] != "total":
-                return True  # reentrada é só em totais (carteira por total final)
+                return "reentrada só em totais"
             cart = carteira(a["periodo"])
             if not cart:
-                return False  # primeira entrada neste período: vale a regra normal do par
+                return None
             c = _calcular(a, b, self.cfg)
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
-            if self.cfg.get("reentrada_livre", True):
-                # ORDEM DO OPERADOR 17/11: nas reentradas SÓ a lógica do parceiro — duplo duplo ou em sequência,
-                # nunca o mesmo par. A linha pode andar pros dois lados; nada de adivinhar direção.
-                # 19/11 (especificação do operador): escadinha REAL — a carteira inteira + o par simulados juntos
-                av = avaliar_reentrada(cart, novas, self.cfg)
-                tipo = av["tipo"]
-                if av["ok"]:
-                    # custo: até 4% entra; acima disso só se VALER A PENA (duplo duplo ou janela ≥ 3 pontos)
-                    bom = float(self.cfg.get("reentrada_custo_bom", 5.0))
-                    if c["custo"] > bom + 1e-9 and not (len(av["novos"]) >= 2 or
-                                                         jan >= float(self.cfg.get("reentrada_janela_vale", 3.0)) - 1e-9):
-                        av = dict(av, ok=False, motivo="custo %s%% acima de %s%% sem valer a pena" % (_br(c["custo"]), _br(bom)))
-                avals.append({"pernas": [{"casa": x["casa"], "lado": x["lado"], "linha": x["linha"], "odd": x["odd"],
-                                          "stake": x["stake"]} for x in novas], "custo": c["custo"], **av})
-                return not av["ok"]
-            # regra do operador 16/11: a janela da 1ª entrada vira o padrão do jogo — as próximas têm que ter
-            # a MESMA janela (ou maior); o custo de cada par continua pela tabela (depende da odd)
-            jan0 = janela_padrao.get(a["periodo"])
-            if self.cfg.get("reentrada_mesma_janela", True) and jan0 is not None and jan < jan0 - 1e-9:
-                return True
-            c = _calcular(a, b, self.cfg)
-            novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
-            return not avaliar_nova_entrada(cart, novas, self.cfg)["ok"]
+            # 21/11: âncora e escadinha passam pelas MESMAS regras; o rótulo só explica (nenhum tipo tem prioridade)
+            av = avaliar_reentrada(cart, novas, self.cfg)
+            avals.append({"pernas": [{"casa": x["casa"], "lado": x["lado"], "linha": x["linha"], "odd": x["odd"],
+                                      "stake": x["stake"]} for x in novas], "custo": c["custo"], **av})
+            return None if av["ok"] else av["motivo"]
 
         def preferir(a, b, c):
-            """Escolha entre candidatos válidos pela simulação da carteira inteira (ordem do operador 19/11)."""
+            """Escolha entre candidatos JÁ APROVADOS pela qualidade da carteira (ordem do operador 21/11)."""
             if a["tipo"] != "total":
                 return ()
             cart = carteira(a["periodo"])
             if not cart:
                 return ()
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
-            return nota_reentrada(avaliar_reentrada(cart, novas, self.cfg))
+            return nota_reentrada(avaliar_reentrada(cart, novas, self.cfg), c["custo"], min(a["odd"], b["odd"]))
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
         if origem == "retomada" and self._retomar:
@@ -4301,11 +4345,7 @@ class Operador:
                     cfg_par = self.cfg
                     # 17/11 15:48: sem a tabela entraram pares de CUSTO 22% (1aWin a 1.43). A tabela de custo voltou
                     # nas reentradas; só sai com "reentrada_sem_tabela_custo": true no config.json
-                    if entradas and self.cfg.get("reentrada_livre", True):
-                        # operador 17/11: na reentrada o custo pode ir até 10% SE VALER A PENA; preferência ≤ 4%
-                        teto = 100.0 if self.cfg.get("reentrada_sem_tabela_custo", False) else \
-                            float(self.cfg.get("reentrada_custo_max", 16.0))
-                        cfg_par = dict(self.cfg, custo_por_janela=None, custo_max=teto)
+                    # 21/11: a reentrada usa a MESMA tabela de custo por tamanho de janela da 1ª entrada
                     del avals[:]
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, cfg_par, raiox,
                                             excluir=excluir, preferir=preferir if entradas else None)
@@ -4323,18 +4363,21 @@ class Operador:
                                                  "janela": janela_continua(carteira(bil["periodo"] if bil else "jogo")),
                                                  "candidatos": sorted(avals, key=lambda v: (not v["ok"], -len(v["novos"])))[:6],
                                                  "escolhido": escolhido}
+                        if bil:
+                            par_txt = "RECUSADO: %s | janela %s | custo %s%%" % (
+                                descricao_par(bil["pernas"][0], bil["pernas"][1]), _br(bil["janela"], 1), _br(bil["custo"]))
                         if bil and not livre:
-                            log("%s: candidata registrada %s × %s — reavalio quando %s" % (
-                                sinal["jogo"], bil["pernas"][0]["selecao"], bil["pernas"][1]["selecao"], por_que))
+                            log("%s: %s | motivo: %s (candidata registrada, reavalio depois)" % (sinal["jogo"], par_txt, por_que))
                             cand_ant[0] = chave
                             bil = None
                             motivo = por_que
                         elif bil and cand_ant[0] != chave:
-                            cand_ant[0] = chave  # 1ª leitura: confirma na próxima
-                            log("%s: candidata %s × %s vista — confirmo na próxima leitura" % (
-                                sinal["jogo"], bil["pernas"][0]["selecao"], bil["pernas"][1]["selecao"]))
+                            mot2 = "aguardando segunda leitura" if cand_ant[0] is None else \
+                                "par mudou entre as leituras (não repetiu a mesma combinação na segunda leitura)"
+                            cand_ant[0] = chave  # 1ª leitura (ou mudou): confirma na próxima
+                            log("%s: %s | motivo: %s" % (sinal["jogo"], par_txt, mot2))
                             bil = None
-                            motivo = "candidato precisa aparecer em duas leituras seguidas"
+                            motivo = mot2
                         elif not bil:
                             cand_ant[0] = None
                             if not livre:
@@ -4476,6 +4519,10 @@ class Operador:
                                 self.estado.set_monitor("%s: %d entrada(s) — a PS não aceita mais apostas suas neste "
                                                         "jogo (limite da PS)" % (sinal["jogo"], len(entradas)))
                         log("montagem falhou — o monitoramento reassume %s" % sinal["jogo"])
+                        if any(_RX_LINHA_MUDOU.search(str(v)) or "desapareceu" in str(v)
+                               for v in (bil.get("detalhe") or {}).values()):
+                            ultimo_motivo = None
+                            continue  # a linha mudou: relê e procura outro par JÁ, sem esperar o intervalo
                         ultimo_motivo = None
                     elif motivo != ultimo_motivo or rodada % 3 == 0:
                         log("%s rodada %d: %s" % (sinal["jogo"], rodada, motivo))
@@ -4587,18 +4634,38 @@ class Operador:
         p1, p2 = bil["pernas"]
         times = bil["times"]
         with _TRAVA_CLIQUES:
-            w1 = c1.em_paralelo(c1.montar, p1, times, timeout=ESPERA_FASE1_S)
-            w2 = cps.em_paralelo(cps.montar, p2, times, timeout=ESPERA_FASE1_S)
             res = {}
-            for nome, w in ((CASA_1W, w1), (CASA_PS, w2)):
+            # 21/11: releitura RÁPIDA das duas seleções antes de montar (a linha ainda está lá, na mesma odd?)
+            v1, v2 = c1.em_paralelo(c1.selecao_viva, p1, timeout=10), cps.em_paralelo(cps.selecao_viva, p2, timeout=10)
+            try:
+                vivas = {CASA_1W: v1(), CASA_PS: v2()}
+            except Exception:
+                vivas = {CASA_1W: True, CASA_PS: True}
+            if not all(vivas.values()):
+                for nome in (CASA_1W, CASA_PS):
+                    res[nome] = {"ok": False, "foto": "", "motivo": "linha desapareceu antes da montagem" if not vivas[nome]
+                                 else "não montada (a outra linha já tinha mudado)"}
+            else:
+                # 21/11: a 1aWin é a mais instável — monta e VALIDA primeiro; a PS só depois
                 try:
-                    res[nome] = w()
+                    res[CASA_1W] = c1.executar(c1.montar, p1, times, timeout=ESPERA_FASE1_S)
                 except Exception as e:
-                    res[nome] = {"ok": False, "motivo": "erro: %s" % e, "foto": ""}
-            falhas = [n for n, r in res.items() if not r["ok"]]
-            if substituir and len(falhas) == 1 and _RX_LINHA_MUDOU.search(res[falhas[0]]["motivo"] or ""):
-                self._ancora_na_montagem(bil, res, falhas[0], substituir)
-                p1, p2 = bil["pernas"]
+                    res[CASA_1W] = {"ok": False, "motivo": "erro: %s" % e, "foto": ""}
+                if not res[CASA_1W]["ok"] and substituir and _RX_LINHA_MUDOU.search(res[CASA_1W]["motivo"] or ""):
+                    res[CASA_PS] = {"ok": True, "motivo": "", "foto": "", "_nao_montada": True}
+                    self._ancora_na_montagem(bil, res, CASA_1W, substituir)
+                    res.pop(CASA_PS, None)
+                    p1, p2 = bil["pernas"]
+                if res[CASA_1W]["ok"]:
+                    try:
+                        res[CASA_PS] = cps.executar(cps.montar, p2, times, timeout=ESPERA_FASE1_S)
+                    except Exception as e:
+                        res[CASA_PS] = {"ok": False, "motivo": "erro: %s" % e, "foto": ""}
+                    if not res[CASA_PS]["ok"] and substituir and _RX_LINHA_MUDOU.search(res[CASA_PS]["motivo"] or ""):
+                        self._ancora_na_montagem(bil, res, CASA_PS, substituir)
+                        p1, p2 = bil["pernas"]
+                else:
+                    res[CASA_PS] = {"ok": False, "motivo": "não montada (a 1aWin falhou primeiro)", "foto": ""}
             if all(r["ok"] for r in res.values()):
                 # CONFERÊNCIA FINAL, no instante em que o modo real confirmaria: as duas pernas
                 # ainda são as mesmas, na mesma odd? (caso Ratiopharm 15:21: PS 2.000 -> 1.675
@@ -4612,7 +4679,8 @@ class Operador:
                 if (o1, o2) != (p1x["odd"], p2x["odd"]):
                     tot = p1x["stake"] + p2x["stake"]
                     custo_vivo = (tot - min(p1x["stake"] * o1, p2x["stake"] * o2)) / tot * 100 if tot else 999
-                    teto = float(self.cfg.get("custo_max_odd_viva", self.cfg.get("reentrada_custo_max", 16.0)))
+                    # 21/11: o par recalculado com a odd viva respeita a MESMA tabela por tamanho de janela
+                    teto = custo_max_para(bil["janela"], self.cfg)
                     log("par recalculado com as odds vivas %s × %s: custo %s%% (antes %s%%)" % (
                         o1, o2, _br(custo_vivo), _br(bil["custo"])))
                     if custo_vivo > teto + 1e-9:

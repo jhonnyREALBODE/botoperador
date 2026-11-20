@@ -1378,7 +1378,8 @@ def test_anc_8_escolha_entre_ancora_e_escadinha(cfg):
     ps = [oferta("ps3838", "total", "jogo", "abaixo", 235.5, 2.01)]
     bil, _ = P.achar_par(w1, ps, SINAL, c, excluir=excluir, preferir=preferir)
     av = P.avaliar_reentrada(cart, bil["pernas"], c)
-    assert av["ok"] and av["novos"] == [235] and av["tipo"] == "escadinha"   # empate prático -> escadinha
+    # 21/11: SEM preferência por tipo — empatados em tudo, qualquer um dos dois serve (o rótulo só explica)
+    assert av["ok"] and av["novos"] == [235] and av["tipo"] in ("âncora", "escadinha")
 
 
 def test_mesma_perna_e_lado_linha_mercado_e_ancora_parada(cfg):
@@ -1541,3 +1542,83 @@ def test_seg_reinicio_preserva_protecao_fila_contador_e_bloqueio(cfg):
     op2.bloquear("INCERTO", _bil(op2.estado), "1aWin: a", "PS3838: b")
     op3 = P.Operador(cfg, P.Estado(cfg), {})
     assert op3.bloqueio and op3.bloqueio["estado"] == "INCERTO"
+
+
+# ------------------------------------------------------------------ 21/11: sem prioridade por tipo; motivo real
+def _cenario_reentrada(cfg):
+    c = dict(cfg)
+    cart = _parx(231.5, 1.85, 234.0, 2.01, cfg, 1)
+
+    def preferir(a, b, cc):
+        novas = [dict(a, casa="1awin", stake=cc["stake_1w"]), dict(b, casa="ps3838", stake=cc["stake_ps"])]
+        return P.nota_reentrada(P.avaliar_reentrada(cart, novas, c), cc["custo"], min(a["odd"], b["odd"]))
+
+    def excluir(a, b, jan):
+        cc = P._calcular(a, b, c)
+        av = P.avaliar_reentrada(cart, [dict(a, casa="1awin", stake=cc["stake_1w"]),
+                                        dict(b, casa="ps3838", stake=cc["stake_ps"])], c)
+        return None if av["ok"] else av["motivo"]
+    return c, cart, preferir, excluir
+
+
+def test_r21_ancora_valida_entra_mesmo_com_escadinha_disponivel(cfg):
+    c, cart, preferir, excluir = _cenario_reentrada(cfg)
+    # âncora Over 231.5 × Under 236.5 (+235–236) contra escadinha Over 232.5 × Under 235.5 (+235): vence a âncora
+    w1 = [oferta("1awin", "total", "jogo", "acima", 231.5, 1.85), oferta("1awin", "total", "jogo", "acima", 232.5, 1.85)]
+    ps = [oferta("ps3838", "total", "jogo", "abaixo", 236.5, 2.01), oferta("ps3838", "total", "jogo", "abaixo", 235.5, 2.01)]
+    bil, _ = P.achar_par(w1, ps, SINAL, c, excluir=excluir, preferir=preferir)
+    av = P.avaliar_reentrada(cart, bil["pernas"], c)
+    assert av["tipo"] == "âncora" and av["novos"] == [235, 236]
+
+
+def test_r21_escadinha_valida_entra_mesmo_com_ancora_disponivel(cfg):
+    c, cart, preferir, excluir = _cenario_reentrada(cfg)
+    # escadinha 1aWin Under 236.5 × PS Over 233.5 (+235–236) contra âncora 1aWin Over 231.5 × PS Under 235.5 (+235)
+    w1 = [oferta("1awin", "total", "jogo", "acima", 231.5, 1.85), oferta("1awin", "total", "jogo", "abaixo", 236.5, 1.85)]
+    ps = [oferta("ps3838", "total", "jogo", "abaixo", 235.5, 2.01), oferta("ps3838", "total", "jogo", "acima", 233.5, 2.01)]
+    bil, _ = P.achar_par(w1, ps, SINAL, c, excluir=excluir, preferir=preferir)
+    av = P.avaliar_reentrada(cart, bil["pernas"], c)
+    assert av["tipo"] == "escadinha" and av["novos"] == [235, 236]
+
+
+def test_r21_vence_quem_melhora_mais_a_carteira():
+    base = {"novos": [235], "janela_nova": (232, 235), "pior_depois": -5.0}
+    melhor = {"novos": [235, 236], "janela_nova": (232, 236), "pior_depois": -8.0}
+    assert P.nota_reentrada(melhor, 3.6, 1.85) > P.nota_reentrada(base, 2.0, 1.95)            # 1º: mais totais novos
+    menos_risco = dict(base, pior_depois=-3.0)
+    assert P.nota_reentrada(menos_risco, 3.6, 1.80) > P.nota_reentrada(base, 2.0, 1.95)       # 3º: menor prejuízo
+    mais_barato = dict(base)
+    assert P.nota_reentrada(mais_barato, 2.0, 1.80) > P.nota_reentrada(base, 3.0, 1.95)       # 4º: menor custo
+    assert P.nota_reentrada(base, 2.0, 1.95) > P.nota_reentrada(base, 2.0, 1.80)              # 6º: maior odd mínima
+    # nenhum item da nota olha o rótulo âncora/escadinha
+    assert P.nota_reentrada(dict(base, tipo="âncora"), 2, 1.9) == P.nota_reentrada(dict(base, tipo="escadinha"), 2, 1.9)
+
+
+def test_r21_invalido_continua_recusado_com_motivo_real(cfg):
+    c, cart, preferir, excluir = _cenario_reentrada(cfg)
+    # dentro da janela: recusado e o log mostra ESTE par e o motivo real
+    w1 = [oferta("1awin", "total", "jogo", "acima", 231.5, 1.95)]
+    ps = [oferta("ps3838", "total", "jogo", "abaixo", 233.0, 2.05)]   # custo baixo: o motivo é a regra da carteira
+    bil, mot = P.achar_par(w1, ps, SINAL, c, excluir=excluir, preferir=preferir)
+    assert bil is None
+    assert "RECUSADO: 1aWin Over 231,5 @1,95 + PS Under 233 @2,05" in mot
+    assert "motivo: não acrescenta total lucrativo novo" in mot
+    # custo acima do limite da janela: motivo de custo, com os números
+    w1 = [oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.80)]
+    ps = [oferta("ps3838", "total", "jogo", "acima", 213.5, 2.05)]
+    bil, mot = P.achar_par(w1, ps, SINAL, cfg)
+    assert bil is None and "custo" in mot and "acima do limite de 3,00% para janela 1,0" in mot
+    # odd abaixo do piso: aparece no motivo
+    bil, mot = P.achar_par([oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.70)], ps, SINAL, dict(cfg, odd_min=1.78))
+    assert bil is None and "abaixo do piso" in mot
+
+
+def test_r21_nenhuma_regra_financeira_afrouxada():
+    d = P.DEFAULTS
+    assert d["custo_por_janela"] == [[1, 2, 3.0], [2, 3, 4.8], [3, 7, 4.99], [7, 11, 8.0]]
+    assert d["odd_min"] == 1.78 and d["perda_max_por_jogo_brl"] == 100.0 and d["janela_min"] == 1.0
+    assert d["max_entradas_por_jogo"] == 4
+    # reentrada usa a MESMA tabela por janela (não há mais teto fixo de 16% aplicado)
+    import inspect
+    src = inspect.getsource(P.Operador._monitorar)
+    assert "custo_max=teto" not in src and "custo_por_janela=None" not in src

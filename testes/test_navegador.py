@@ -1154,3 +1154,51 @@ def test_clique_com_erro_depois_de_clicar_nao_vira_nao_apostou(casas, cfgc, monk
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
+
+
+def test_r21_1awin_montada_e_validada_antes_da_ps(casas, cfgc, monkeypatch):
+    """21/11: a 1aWin (mais instável) monta e valida PRIMEIRO; a PS só depois."""
+    ordem = []
+    original = P.Casa.montar
+
+    def montar_registrando(self, perna, times):
+        ordem.append(("inicio", self.nome))
+        r = original(self, perna, times)
+        ordem.append(("fim", self.nome))
+        return r
+    monkeypatch.setattr(P.Casa, "montar", montar_registrando)
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "testado"
+    assert ordem[:4] == [("inicio", P.CASA_1W), ("fim", P.CASA_1W), ("inicio", P.CASA_PS), ("fim", P.CASA_PS)], ordem
+    limpar_cupons(casas)
+
+
+def test_r21_linha_some_na_montagem_nao_deixa_aposta_isolada(casas, cfgc):
+    """21/11: a 1aWin tira a linha durante a montagem e não há substituta -> a PS NEM é montada, cupons limpos,
+    nada confirmado (modo real)."""
+    cfgc["modo_teste"] = False
+    cfgc["retentar_selecao_sumida"] = False
+    servidor.ESTADO["linha_sai_uma"] = 150
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    st = P.Operador(cfgc, est, casas).executar_bilhete(bil, substituir=lambda nome_f, b0: None)
+    assert st == "falhou", bil.get("detalhe")
+    assert "não montada" in bil["detalhe"]["PS3838"]
+    for c in casas.values():
+        assert c.executar(c.itens_cupom) == []
+        assert "Aposta aceita" not in c.executar(c.texto)
+    servidor.ESTADO.clear()
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
