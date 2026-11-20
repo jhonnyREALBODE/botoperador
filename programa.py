@@ -3666,8 +3666,15 @@ class Casa:
                 # de tempo; 'waiting for locator' aparece em TODO erro dele, então não prova nada. Só é 'não cliquei'
                 # se o registro do Playwright NÃO mostra a ação de clique. Mostrou ('performing click action'/'click
                 # action done') ou não dá para saber -> trato como CLICADO e decido pelas provas da casa.
-                if re.search(r"performing click|click action|clicking|dispatch", erro, re.I) or \
-                        not re.search(r"waiting for locator|not attached|detached|resolved to 0 elements", erro, re.I):
+                # 20/11 16:33/16:43/16:47: 'attempting click action' aparece em TODA tentativa (o Playwright ainda checa se
+                # o botão está habilitado/estável); só 'performing click action'/'click action done' provam o clique.
+                # Botão DESABILITADO / coberto / instável sem esse registro = o clique NÃO saiu (não é INCERTO).
+                clicou_real = re.search(r"performing click action|click action done|dispatching", erro, re.I)
+                nao_saiu = re.search(r"not enabled|intercepts pointer events|not stable|not visible|outside of the viewport|"
+                                     r"waiting for locator|not attached|detached|resolved to 0 elements", erro, re.I)
+                log("%s: o clique em apostar deu erro — registro do navegador: %s" % (
+                    self.rotulo, " | ".join(l.strip(" -") for l in erro.splitlines()[1:8] if l.strip())[:300] or erro[:120]))
+                if clicou_real or not nao_saiu:
                     talvez = True
                     break
                 b = self._marcar_botao_apostar()
@@ -3829,7 +3836,7 @@ class Casa:
                 # 15/11 20:46 conferido pelo operador: caiu e VOLTOU = nada entrou — mesmo com a seleção ainda no cupom
                 # (log 20/11 07:47: a 1aWin manteve a seleção e o programa travou tudo como INCERTO à toa)
                 if s1 is None or abs(s1 - saldo0) < 0.01:
-                    return {"ok": False, "foto": self.foto("confirmar"),
+                    return {"ok": False, "foto": self.foto("confirmar"), "comprovada": True,
                             "motivo": "o saldo caiu durante o processamento e voltou para %s — nada foi apostado" % _br(saldo0)}
                 desconto_visto = None
         if desconto_visto:
@@ -3841,7 +3848,7 @@ class Casa:
                 and abs(saldo0 - s1) < 0.01 and not any(re.search(r"BRL|R\$|EUR|€", l) for l in novas):
             # 20/11 16:42 e 16:47 (#244/#247): nenhuma mensagem, saldo IGUAL, a seleção CONTINUA no cupom e nada entrou em
             # processamento em 25 s = a casa não reagiu ao clique; nada foi apostado (era INCERTO e travava tudo)
-            return {"ok": False, "foto": self.foto("confirmar"),
+            return {"ok": False, "foto": self.foto("confirmar"), "comprovada": True,
                     "motivo": "a casa não reagiu ao clique (sem mensagem, saldo continua %s, seleção ainda no cupom) — "
                               "nada foi apostado" % _br(s1)}
         if vazio and saldo0 is not None and s1 is not None and abs(saldo0 - s1) < 0.01 and not talvez:

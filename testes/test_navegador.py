@@ -892,12 +892,13 @@ def test_1awin_processa_e_nao_entra(casas, cfgc):
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
     try:
-        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "incerto", bil["detalhe"]
+        # 23/11: 'o saldo caiu e VOLTOU' é prova de que NÃO entrou (conferido pelo operador 15/11) -> recusa comprovada ->
+        # tenta colocar a 1aWin de novo dentro das regras (até 2x); no site falso ela nunca entra -> PERNA ÓRFÃ (exposto)
+        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "exposto", bil["detalhe"]
         assert bil["_orfa"] == {"aceita": P.CASA_PS, "falta": P.CASA_1W}
-        # 22/11 (item 3): o cupom sumiu SEM recusa comprovada -> INCERTO, congela e a 1aWin NÃO é repetida
-        assert bil["detalhe"]["PS3838"] == "confirmada" and "sem recusa comprovada" in bil["detalhe"]["1aWin"]
-        c1 = casas[P.CASA_1W]
-        assert not any("PERNA_ORFA: tentativa" in l for l in P._LOG_MEM[-40:])
+        assert bil["detalhe"]["PS3838"] == "confirmada"
+        a = [c.executar(lambda c=c: c.page.evaluate("() => window.__aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
+        assert a == [0, 1], a   # a PS aceita NUNCA é repetida; a 1aWin nunca entrou
     finally:
         servidor.ESTADO.clear()
         for c in casas.values():
@@ -1380,3 +1381,38 @@ def test_sinal_novo_do_mesmo_jogo_carrega_os_pares_ja_confirmados(casas, cfgc):
             op._atual[1].set()
         time.sleep(1.5)
         limpar_cupons(casas)
+
+
+def test_botao_desabilitado_clique_nao_saiu_nao_e_incerto(casas, cfgc, monkeypatch):
+    """20/11 16:33/16:43/16:47: 'Locator.click: Timeout 1500ms exceeded' com o botão da 1aWin desabilitado. O registro
+    tem 'attempting click action' (toda tentativa tem), mas NÃO 'performing click action': o clique não saiu. Era INCERTO
+    e travava tudo; agora é 'não clicou' -> nada apostado, a PS não dispara."""
+    from playwright.sync_api import Locator
+    original = Locator.click
+
+    def click_desabilitado(self, *a, **k):
+        if "data-alvo-apostar" in str(self):
+            raise Exception("Locator.click: Timeout 1500ms exceeded.\nCall log:\n  - waiting for locator('[data-alvo-apostar=\"1\"]').first"
+                            "\n  - locator resolved to <button>Fazer uma aposta</button>\n  - attempting click action"
+                            "\n  - waiting for element to be visible, enabled and stable\n  - element is not enabled")
+        return original(self, *a, **k)
+    cfgc["modo_teste"] = False
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    monkeypatch.setattr(Locator, "click", click_desabilitado)
+    try:
+        st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+    finally:
+        monkeypatch.setattr(Locator, "click", original)
+    assert st == "falhou", bil.get("detalhe")
+    assert "não aconteceu" in bil["detalhe"]["1aWin"]
+    for c in casas.values():
+        assert "Aposta aceita" not in c.executar(c.texto)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
