@@ -2242,3 +2242,23 @@ def test_ncaa_sigla_com_u_de_university():
     assert P._nome_bate("VCU Rams", "Virginia Commonwealth", leniente=True)
     assert not P._nome_bate("VCU", "Virginia Tech")
     assert not P._nome_bate("Virginia Commonwealth", "Virginia Tech")
+
+
+def test_sinal_novo_descarta_cacas_velhas_da_fila(cfg):
+    """Log 20/11 07:12–07:15: 6 sinais em 90 s e a PS seguiu caçando jogos já cancelados; a caça do jogo novo estourou o
+    prazo na fila. Agora as caças/leituras velhas saem da fila (com erro 'descartada') e as outras tarefas ficam."""
+    c = P.Casa(P.CASA_PS, cfg, base_url="http://x")   # sem iniciar a thread: só a fila
+    def cacar():
+        pass
+    def ler_escada():
+        pass
+    def outra():
+        pass
+    jobs = [c.enfileirar(f) for f in (cacar, ler_escada, outra, cacar)]
+    c.interromper_caca()
+    assert c.parar_caca.is_set()
+    for (ev, caixa), descartada in zip(jobs, (True, True, False, True)):
+        assert ev.is_set() == descartada
+        if descartada:
+            assert isinstance(caixa["e"], P.CacaInterrompida)
+    assert c.fila.qsize() == 1 and c.fila.get_nowait()[0] is outra

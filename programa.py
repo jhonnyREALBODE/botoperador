@@ -2278,6 +2278,10 @@ def _e_liga_virtual(txt):
     return bool(_RX_VIRTUAL.search(_sem_acento(txt or "")))
 
 
+class CacaInterrompida(Exception):
+    """Sinal novo assumiu: a caça do jogo velho para na hora (log 20/11 07:12–07:15)."""
+
+
 class FalhaCasa(Exception):
     pass
 
@@ -2304,6 +2308,7 @@ class Casa:
         self.sel_item = ('[class*="BetItemComponent"], [class*="slip-sel" i]' if nome == CASA_PS
                          else '[data-scope="CouponCard"]')
         self.thread = threading.Thread(target=self._laco, name="casa-" + nome, daemon=True)
+        self.parar_caca = threading.Event()  # sinal novo assumiu: a caça/leitura do jogo velho para e sai da fila
 
     @property
     def rotulo(self):
@@ -3916,14 +3921,48 @@ class Casa:
         return lim
 
     # -------------------------------------------------- caças
+    def interromper_caca(self):
+        """Log 20/11 07:12–07:15: 6 sinais em 90 s; a PS continuou caçando 'clara', 'stanford', 'milwaukee' (jogos já
+        cancelados) e a caça do jogo NOVO estourou o prazo na fila. Agora: a caça em andamento para no próximo ponto de
+        checagem e as caças/leituras velhas que ainda esperavam na fila são descartadas."""
+        self.parar_caca.set()
+        guardar, descartadas = [], 0
+        while True:
+            try:
+                job = self.fila.get_nowait()
+            except queue.Empty:
+                break
+            if job is not None and getattr(job[0], "__name__", "") in ("cacar", "ler_escada"):
+                job[3]["e"] = CacaInterrompida("descartada: sinal novo assumiu")
+                job[2].set()
+                descartadas += 1
+            else:
+                guardar.append(job)
+        for job in guardar:
+            self.fila.put(job)
+        if descartadas:
+            log("%s: %d caça(s)/leitura(s) do jogo velho descartada(s) da fila" % (self.rotulo, descartadas))
+
+    def _checar_caca(self):
+        if getattr(self, "_em_caca", False) and self.parar_caca.is_set():
+            raise CacaInterrompida("caça interrompida: sinal novo assumiu")
+
     def cacar(self, times, liga_dica=""):
-        if self.nome == CASA_PS:
-            return self._cacar_ps(times)
-        return self._cacar_1w(times, liga_dica)
+        self.parar_caca.clear()  # esta é a caça do sinal ATUAL (as velhas já pararam ou saíram da fila)
+        self._em_caca = True     # só a CAÇA é interrompida (leitura de posição/calibração não)
+        try:
+            if self.nome == CASA_PS:
+                return self._cacar_ps(times)
+            return self._cacar_1w(times, liga_dica)
+        except CacaInterrompida as e:
+            return {"ok": False, "interrompida": True, "motivo": str(e)}
+        finally:
+            self._em_caca = False
 
     def _sondar(self, teste, segundos):
         fim = time.time() + segundos
         while True:
+            self._checar_caca()
             r = teste()
             if r or time.time() >= fim:
                 return r
@@ -3957,6 +3996,7 @@ class Casa:
         rolagem = 0
         buscou = False
         while time.time() < prazo:
+            self._checar_caca()
             if rolagem >= 6 and not buscou:  # plano B: a busca da própria PS
                 buscou = self._ps_buscar(times)
             if self.esta_limitada():
@@ -4132,6 +4172,7 @@ class Casa:
         for lg in ordem:
             if time.time() >= prazo:
                 break
+            self._checar_caca()
             try:
                 self.ir(lg["url"])
             except Exception:
@@ -4413,6 +4454,9 @@ class Operador:
             if self._atual:
                 self._atual[1].set()
                 log("sinal novo assume — monitoramento de %s cancelado" % self._atual[2]["jogo"])
+                for c in self.casas.values():
+                    if hasattr(c, "interromper_caca"):
+                        c.interromper_caca()
             ev = threading.Event()
             th = threading.Thread(target=self._rodar_monitor, args=(sinal, ev, origem), name="monitor", daemon=True)
             self._atual = (th, ev, sinal)

@@ -1246,3 +1246,17 @@ def test_r21_linha_some_na_montagem_nao_deixa_aposta_isolada(casas, cfgc):
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
+
+
+def test_sinal_novo_interrompe_a_caca_em_andamento(casas):
+    """Log 20/11 07:12–07:15: a PS seguiu 50 s caçando um jogo já cancelado. Agora a caça para em poucos segundos."""
+    cps = casas[P.CASA_PS]
+    w = cps.em_paralelo(cps.cacar, ["Time Inexistente Azul", "Time Inexistente Verde"], timeout=90)
+    time.sleep(3)
+    t0 = time.time()
+    cps.interromper_caca()
+    r = w()
+    assert r.get("interrompida") and not r["ok"], r
+    assert time.time() - t0 < 12
+    # a caça seguinte (do sinal NOVO) funciona normalmente
+    assert cps.executar(cps.cacar, TIMES)["ok"]
