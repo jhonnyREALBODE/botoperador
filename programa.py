@@ -7177,7 +7177,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
    '</div><div class="mut" style="margin-bottom:6px">Regras: aposta avulsa só se abrir totais NOVOS com lucro na carteira, sem tirar o lucro de nenhum · sem distância mínima: compara com a janela atual da carteira · até '+R(pa.pos_max_por_cobertura_brl)+' por aposta · '+R(pa.pos_max_total_coberturas_brl)+' no total · pior caso da carteira até −'+R(pa.pos_perda_max_total_brl)+' · máx. '+pa.pos_max_coberturas+' avulsas</div>';}
  const _pa=(d.posicoes||[]).filter(p=>p.aberta), _pe=(d.posicoes||[]).filter(p=>!p.aberta);
  const _posHtml=p=>{const r=p.resumo||{};
-  let h='<div style="border-bottom:1px solid var(--ln);padding:6px 0"><b>#'+p.id+' '+esc(p.jogo)+'</b> <span class="mut">('+esc(p.periodo)+')'+(p.simulada?' SIMULADA':'')+' — '+esc(p.status)+(p.atualizada?' · '+p.atualizada:'')+'</span>';
+  let h='<div style="border-bottom:1px solid var(--ln);padding:6px 0"><b>#'+p.id+' '+esc(p.jogo)+'</b> <span class="mut">('+esc(p.periodo)+')'+(p.simulada?' SIMULADA':'')+' — '+esc(p.status)+(p.atualizada?' · '+p.atualizada:'')+'</span>'+(p.aberta!==false?' <button style="font-size:11px" onclick="post(\'/api/posicao/'+p.id+'/encerrar\')">✖ tirar do painel</button>':'');
   h+='<div>'+p.pernas.map((l,i)=>'<b>A'+(i+1)+'</b> '+(l.origem=='entrada'?'entrada':l.origem=='reentrada'?'reentrada':'<b>cobertura</b>')+': '+(l.casa=='1awin'?'1aWin':'PS')+' '+(l.lado=='acima'?'Acima':'Abaixo')+' de '+l.linha+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</div>';
   if(p.tabela&&p.tabela.length){const tb=p.tabela,gr=[];for(const t of tb){const u=gr[gr.length-1];if(u&&Math.abs(u.liquido-t.liquido)<0.005)u.ate=t.total;else gr.push({de:t.total,ate:t.total,liquido:t.liquido,cobre:t.cobre});}
    h+='<table style="font-size:13px;max-width:520px;margin:4px 0"><tr><th>Total final de pontos</th><th style="text-align:right">Resultado da carteira</th></tr>'+gr.map((g,i)=>'<tr style="'+(g.cobre?'background:rgba(30,142,62,.18)':'')+'"><td>'+(i==0?g.ate+' ou menos':i==gr.length-1?g.de+' ou mais':g.de==g.ate?'Exatamente '+g.de:g.de+' a '+g.ate)+'</td><td style="text-align:right" class="'+(g.liquido>=0?'ok':'no')+'"><b>'+(g.liquido>=0?'+':'−')+R(Math.abs(g.liquido))+'</b></td></tr>').join('')+'</table><details><summary class="mut">detalhe por aposta</summary>';
@@ -7302,11 +7302,27 @@ def criar_painel(estado, operador, porta):
                 n = 0
                 if operador and getattr(operador, "gerente", None):
                     n = operador.gerente.encerrar_velhas(horas=3)
+                    # 25/11: também tudo que NÃO é do jogo sendo acompanhado agora (jogo acabou / outro jogo)
+                    atual = operador._atual[2] if (operador._atual and operador._atual[0].is_alive()
+                                                   and not operador._atual[1].is_set()) else None
+                    for pz in list(estado.posicoes):
+                        if pz.get("aberta") and not (atual and _mesmo_jogo(pz.get("times") or ["", ""], atual["times"])):
+                            try:
+                                operador.gerente.fechar(pz, "limpeza do painel")
+                                n += 1
+                            except Exception:
+                                pass
                 with _TRAVA:
                     estado.backlog = []
                     estado.reentrada = None
                 estado.salvar()
                 log("🧹 painel limpo: %d posição(ões) antiga(s) encerrada(s), backlog e escadinha zerados" % n)
+                return self._env(200, '{"ok":true}')
+            m7 = re.match(r"^/api/posicao/(\d+)/encerrar$", p)
+            if m7 and operador and getattr(operador, "gerente", None):
+                pz = next((x for x in estado.posicoes if str(x.get("id")) == m7.group(1)), None)
+                if pz and pz.get("aberta"):
+                    operador.gerente.fechar(pz, "tirada do painel pelo operador")
                 return self._env(200, '{"ok":true}')
             if p == "/api/calibrar" and operador:
                 operador.calibrar()

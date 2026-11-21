@@ -2706,3 +2706,32 @@ def test_painel_botoes_pausar_ligar_desligar(cfg):
             srv.shutdown()
         except Exception:
             pass
+
+
+def test_painel_limpar_e_tirar_posicao(cfg):
+    """25/11 (operador: 'como limpa isso?'): 🧹 Limpar painel encerra as posições que NÃO são do jogo acompanhado agora;
+    cada posição tem '✖ tirar do painel'. Só a tela — nada nas casas."""
+    est = P.Estado(cfg)
+    op = P.Operador(dict(cfg), est, {})
+
+    class G:
+        def fechar(self, pos, motivo):
+            pos["aberta"] = False
+            pos["status"] = "encerrada: " + motivo
+        def encerrar_velhas(self, horas=None):
+            return 0
+    op.gerente = G()
+    est.posicoes = [{"id": 1, "aberta": True, "times": TIMES, "periodo": "q3", "pernas": []},
+                    {"id": 2, "aberta": True, "times": ["Outro", "Jogo"], "periodo": "jogo", "pernas": []}]
+    srv = P.criar_painel(est, op, 0)
+    porta = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/posicao/2/encerrar" % porta, method="POST"))
+        assert est.posicoes[1]["aberta"] is False and est.posicoes[0]["aberta"] is True
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/limpar" % porta, method="POST"))
+        assert est.posicoes[0]["aberta"] is False          # nenhum jogo sendo acompanhado: limpa tudo
+        html = urllib.request.urlopen("http://127.0.0.1:%d/" % porta).read().decode()
+        assert "tirar do painel" in html
+    finally:
+        srv.shutdown()
