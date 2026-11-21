@@ -127,8 +127,8 @@ def test_sequencial_aceita_ps_depois_da_1awin(casas, rodada, caso):
         if mudanca:
             original = c1.apurar
 
-            def apurar_e_mudar(perna=None):
-                r = original(perna)
+            def apurar_e_mudar(perna=None, foto_ok=True):
+                r = original(perna, foto_ok)
                 if r["ok"] is True:   # a 1aWin ACEITOU: agora a PS muda, ANTES do disparo dela
                     cps.executar(mudanca, cps, bil)
                 return r

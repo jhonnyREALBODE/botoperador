@@ -2544,6 +2544,7 @@ class Casa:
     def ir(self, url):
         """Navega tolerando o redirecionamento da casa (a 1aWin manda do domínio de
         referência para o espelho atual no meio do carregamento)."""
+        self._odd_melhor_ok = False  # página nova: confere de novo a opção 'Aceitar melhores probabilidades'
         if self.nome == CASA_1W:
             url = trocar_origem(url, self.base)
         try:
@@ -3249,7 +3250,7 @@ class Casa:
         """Recibo real da 1aWin (print 16/11): '1.61' no topo (a odd ACEITA) e '2.1' embaixo, em 'Evento' (a da seleção).
         Pega todas as odds soltas do recibo; se alguma está abaixo da calculada, é ela a aceita."""
         try:
-            self.page.wait_for_timeout(400)
+            self.page.wait_for_timeout(150)
             tx = self.texto_cupom() or ""
             vals = [v for l in tx.splitlines() if re.fullmatch(r"\s*\d{1,2}[.,]\d{1,3}\s*", l)
                     for v in [_num(l.strip())] if v and 1.01 <= v <= 30]
@@ -3423,8 +3424,7 @@ class Casa:
             else:
                 r["motivo"] = "a leitura não achou a seleção na página (%s)" % descricao_oferta(perna)
             if not (cancel is not None and cancel.is_set()):
-                r["foto"] = self.foto("falha")
-                self.dump("falha")
+                r["foto"] = self._foto_falha("falha")
             return r
         clicado[0] = True
         r["t_clique_sel"] = round(time.time() - self._t_montar, 2)
@@ -3470,8 +3470,7 @@ class Casa:
         if not ok:
             r["motivo"] = mot
             if not (cancel is not None and cancel.is_set()):
-                r["foto"] = self.foto("falha")
-                self.dump("falha")
+                r["foto"] = self._foto_falha("falha")
             if not self.limpar_cupom(perna):
                 r["motivo"] += " — e o cupom NÃO esvaziou: limpe à mão"
                 log("‼ %s: cupom NÃO esvaziou depois da falha — limpe à mão" % self.rotulo)
@@ -3496,8 +3495,7 @@ class Casa:
         if not ok:
             r["motivo"] = mot
             if not (cancel is not None and cancel.is_set()):
-                r["foto"] = self.foto("falha")
-                self.dump("falha")
+                r["foto"] = self._foto_falha("falha")
             if not self.limpar_cupom(perna):
                 r["motivo"] += " — e o cupom NÃO esvaziou: limpe à mão"
                 log("‼ %s: cupom NÃO esvaziou depois da falha — limpe à mão" % self.rotulo)
@@ -3541,6 +3539,29 @@ class Casa:
             return el.element_handle()
         return None
 
+    def aceitar_odd_melhor(self):
+        """PS: marca 'Aceitar melhores probabilidades' no boletim (24/11, operador: 'a odd só alterando pra cima e demora pra
+        aceitar'). Só odd MELHOR é aceita pela casa; odd que cai continua recusada. Nunca desmarca nada."""
+        if self.nome != CASA_PS or getattr(self, "_odd_melhor_ok", False):
+            return
+        try:
+            r = self._eval(r"""() => { const RX = /aceitar melhores (probabilidades|odds|cota)|accept (better|higher) odds/i;
+                for (const e of document.querySelectorAll('label, span, div')) {
+                    if (!RX.test((e.innerText || '').trim()) || (e.innerText || '').length > 60) continue;
+                    const box = e.querySelector('input[type=checkbox]') || (e.closest('label') || e.parentElement || e).querySelector('input[type=checkbox]');
+                    if (box) { if (!box.checked) { box.click(); return 'marquei'; } return 'ja'; }
+                    const fake = (e.closest('label') || e.parentElement || e).querySelector('[role=checkbox], [class*="checkbox" i]');
+                    if (fake) { const on = fake.getAttribute('aria-checked') === 'true' || /checked|active|selected/i.test(fake.className + '');
+                        if (!on) { fake.click(); return 'marquei'; } return 'ja'; }
+                }
+                return ''; }""")
+            if r:
+                self._odd_melhor_ok = True
+                if r == "marquei":
+                    log("PS3838: marquei 'Aceitar melhores probabilidades' (a casa aceita sozinha quando a odd SOBE)")
+        except Exception:
+            pass
+
     def ler_cupom(self, perna):
         """BARREIRA FINAL (22/11): lê o cupom AGORA — a seleção é a mesma (evento, mercado/período, lado, linha)?
         Qual a odd mostrada e a stake no campo? Não clica em nada."""
@@ -3560,9 +3581,21 @@ class Casa:
             ok, mot, odd, stake = False, "leitura do cupom falhou: %s" % str(e).split("\n")[0][:80], None, None
         return {"ok": ok, "motivo": mot, "odd": odd, "stake": stake, "t0": t0, "t": time.time()}
 
+    def _foto_falha(self, tag):
+        """24/11 (operador): 'se não foi apostado não precisa de foto'. Cada foto/HTML custava 0,5–1 s no meio das tentativas.
+        No modo REAL tentativa que não virou aposta não tira foto nem grava HTML (config 'fotos_de_falha': true religa).
+        No modo TESTE a foto é o produto (continua)."""
+        if self.cfg.get("modo_teste", True):
+            return self.foto(tag)
+        if self.cfg.get("fotos_de_falha"):
+            if tag == "falha":
+                self.dump("falha")
+            return self.foto(tag)
+        return ""
+
     def desfazer(self, perna=None):
         ok = self.limpar_cupom(perna)
-        return {"ok": ok, "foto": self.foto("desfeito"), "motivo": "" if ok else "cupom não esvaziou"}
+        return {"ok": ok, "foto": self._foto_falha("desfeito"), "motivo": "" if ok else "cupom não esvaziou"}
 
     def _pendentes(self):
         """Contador de apostas pendentes (PS: 'APOSTAS PENDENTES' com o número ao lado)."""
@@ -3632,6 +3665,8 @@ class Casa:
 
     def ler_e_armar(self, perna, armar=True):
         """BARREIRA: leitura do cupom (com o instante) e, se pedido, o botão já marcado para o disparo."""
+        if armar:
+            self.aceitar_odd_melhor()
         r = self.ler_cupom(perna)
         if r["ok"] and armar:
             a = self.armar_disparo(perna)
@@ -3767,7 +3802,7 @@ class Casa:
             d["evidencia"] = self.evidencia_imediata(limite_s)
         return d
 
-    def apurar(self, perna=None):
+    def apurar(self, perna=None, foto_ok=True):
         """RECONCILIAR: depois do clique, decide por PROVAS: ok=True (aceita), False (recusada — nada apostado) ou
         None (INCERTO). Nunca 'aceita' só porque o cupom sumiu."""
         d = getattr(self, "_disp", None) or {}
@@ -3779,14 +3814,16 @@ class Casa:
         fim = t_clique + 25  # ao vivo tem atraso de aceitação
         self._disp = None
         while time.time() < fim:
-            self.page.wait_for_timeout(400)
+            # 24/11 (operador: 'o importante é estar entrando'): lê a resposta a cada 0,2 s (era 0,4 s)
+            self.page.wait_for_timeout(200)
             tx = self.texto()
             # registra TODO texto novo que aparecer (avisos/toasts somem rápido) — diagnóstico
             for l in tx.splitlines():
                 l = l.strip()
                 if l and l not in linhas0 and l not in novas and len(l) < 160 and not re.fullmatch(r"[\d.,:\s'`´-]+", l):
                     novas.append(l)
-            if fotos_rapidas < 2 and time.time() - t_clique > (1.0 if fotos_rapidas == 0 else 3.0):
+            # fotos de diagnóstico só se a casa demorar (cada foto custa ~0,7 s e atrasava a leitura da resposta)
+            if fotos_rapidas < 2 and time.time() - t_clique > (6.0 if fotos_rapidas == 0 else 12.0):
                 self.foto("apos_clique_%d" % (fotos_rapidas + 1))
                 fotos_rapidas += 1
             # PS real (15/11 15:21): janela 'Confirmar Apostas — Tem certeza de que deseja arriscar
@@ -3802,7 +3839,8 @@ class Casa:
             if _RX_SUCESSO.search(tx):
                 # log 16/11 09:10: conferido a 2.1, a 1aWin ACEITOU a 1.61 (aceita mudança de odd sozinha). Lê a odd do
                 # recibo e avisa — a aposta já existe, não dá para desfazer; quem decide o cash out é o operador.
-                return {"ok": True, "motivo": "", "foto": self.foto("confirmado"), "odd_aceita": self._odd_do_recibo(perna)}
+                oa = self._odd_do_recibo(perna)
+                return {"ok": True, "motivo": "", "foto": self.foto("confirmado") if foto_ok else "", "odd_aceita": oa}
             # PS ao vivo: 'Aguarde… sendo processada… Aguardando -> Pendente' — o saldo JÁ desconta e
             # a aposta ainda pode ser rejeitada depois (15/11 15:57). Espera o resultado final.
             if re.search(r"sendo processada|aguardando|being processed|pending acceptance", tx, re.I):
@@ -3839,7 +3877,7 @@ class Casa:
                     depois_p = self._pendentes()
                     sem_pendente = antes is None or depois_p is None or depois_p <= antes
                     comp = bool(explicita) or bool(mudou_odd and self.itens_cupom() and sem_pendente)
-                    return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self.foto("confirmar"),
+                    return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self._foto_falha("confirmar"),
                             "comprovada": comp}
         if novas:
             log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:20])))
@@ -3876,7 +3914,7 @@ class Casa:
                 # 15/11 20:46 conferido pelo operador: caiu e VOLTOU = nada entrou — mesmo com a seleção ainda no cupom
                 # (log 20/11 07:47: a 1aWin manteve a seleção e o programa travou tudo como INCERTO à toa)
                 if s1 is None or abs(s1 - saldo0) < 0.01:
-                    return {"ok": False, "foto": self.foto("confirmar"), "comprovada": True,
+                    return {"ok": False, "foto": self._foto_falha("confirmar"), "comprovada": True,
                             "motivo": "o saldo caiu durante o processamento e voltou para %s — nada foi apostado" % _br(saldo0)}
                 desconto_visto = None
         if desconto_visto:
@@ -3888,12 +3926,12 @@ class Casa:
                 and abs(saldo0 - s1) < 0.01 and not any(re.search(r"BRL|R\$|EUR|€", l) for l in novas):
             # 20/11 16:42 e 16:47 (#244/#247): nenhuma mensagem, saldo IGUAL, a seleção CONTINUA no cupom e nada entrou em
             # processamento em 25 s = a casa não reagiu ao clique; nada foi apostado (era INCERTO e travava tudo)
-            return {"ok": False, "foto": self.foto("confirmar"), "comprovada": True,
+            return {"ok": False, "foto": self._foto_falha("confirmar"), "comprovada": True,
                     "motivo": "a casa não reagiu ao clique (sem mensagem, saldo continua %s, seleção ainda no cupom) — "
                               "nada foi apostado" % _br(s1)}
         if vazio and saldo0 is not None and s1 is not None and abs(saldo0 - s1) < 0.01 and not talvez:
             # 1aWin 14/11 23:58: limpou o cupom SEM apostar (histórico vazio, saldo igual)
-            return {"ok": False, "foto": self.foto("confirmar"),
+            return {"ok": False, "foto": self._foto_falha("confirmar"),
                     "motivo": "a casa limpou o cupom sem aceitar (saldo continua %s) — nada foi apostado" % _br(s1)}
         self.dump("incerto")
         return {"ok": None, "foto": self.foto("incerto"),
@@ -3906,13 +3944,13 @@ class Casa:
         if perna is not None:
             ok, mot = self.conferir_cupom(perna)
             if not ok:
-                return {"ok": False, "motivo": "não confirmei — " + mot, "foto": self.foto("confirmar"), "comprovada": True}  # não clicou
+                return {"ok": False, "motivo": "não confirmei — " + mot, "foto": self._foto_falha("confirmar"), "comprovada": True}  # não clicou
         a = self.armar_disparo(perna)
         if not a["ok"]:
-            return {"ok": False, "motivo": a["motivo"], "foto": self.foto("confirmar"), "comprovada": True}  # não clicou
+            return {"ok": False, "motivo": a["motivo"], "foto": self._foto_falha("confirmar"), "comprovada": True}  # não clicou
         d = self.disparar(perna)
         if not d["clicou"]:
-            return {"ok": False, "motivo": d["motivo"], "foto": self.foto("confirmar"), "comprovada": True}  # não clicou
+            return {"ok": False, "motivo": d["motivo"], "foto": self._foto_falha("confirmar"), "comprovada": True}  # não clicou
         return self.apurar(perna)
 
     def recolocar(self, perna, times):
@@ -3927,7 +3965,7 @@ class Casa:
             ok, mot = self.preencher_stake(round(perna["stake"] / self.cfg["cambio_brl_eur"], 2) if self.nome == CASA_PS
                                           else perna["stake"])
             if not ok:
-                return {"ok": False, "motivo": mot, "foto": self.foto("confirmar")}
+                return {"ok": False, "motivo": mot, "foto": self._foto_falha("confirmar")}
         return {"ok": True, "motivo": "", "foto": ""}
 
     def reapostar(self, perna, times):
@@ -5663,13 +5701,17 @@ class Operador:
                 log("%s: sem a prova imediata exigida da 1aWin em %d ms (%s) — a PS espera o resultado definitivo" % (
                     modo, lim * 1000, d1.get("evidencia") or "nenhum sinal"))
                 try:
-                    final[CASA_1W] = c1.executar(c1.apurar, p1, timeout=120)
+                    final[CASA_1W] = c1.executar(c1.apurar, p1, False, timeout=120)   # sem foto: a PS não espera a foto
                 except Exception as e:
                     final[CASA_1W] = {"ok": None, "motivo": "INCERTO — erro ao apurar: %s" % str(e)[:80], "foto": ""}
                 if final[CASA_1W]["ok"] is True:
                     disp[CASA_PS], f_ps = self._ps_depois_da_1awin_aceita(bil, carteira, final[CASA_1W])
                     if f_ps:
                         final[CASA_PS] = f_ps
+                    try:
+                        c1.em_paralelo(c1.foto, "confirmado", timeout=30)   # a foto do recibo vem DEPOIS (não espera)
+                    except Exception:
+                        pass
                 else:
                     disp[CASA_PS] = None
         t1, t2 = (disp.get(CASA_1W) or {}).get("t"), (disp.get(CASA_PS) or {}).get("t")
@@ -6585,7 +6627,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
   document.getElementById('mon').innerHTML='<b>Monitor:</b> '+esc(d.monitor||'parado — aguardando sinal')+ph;}
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
- const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _umaEntrou=b=>Object.values(b.detalhe||{}).some(v=>/^confirmada/.test(v)); const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>b.status!='falhou'||_umaEntrou(b));
+ const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _umaEntrou=b=>Object.values(b.detalhe||{}).some(v=>/^confirmada/.test(v)); const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>!['falhou','executando','registrado'].includes(b.status)||_umaEntrou(b));
  document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(({confirmado:'CONCLUÍDO',falhou:'NÃO APOSTADO',exposto:'INCOMPLETO',INCERTO:'INCERTO',testado:'testado (simulado)'})[b.status]||b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.avisos&&b.avisos.length?'<br><b class="no">'+b.avisos.map(esc).join('<br>')+'</b>':'')+(b.carteira?'<br><span class="mut">carteira: lucro em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+(d.modo==='REAL'&&b.status!=='confirmado'&&b.status!=='testado'&&(['INCERTO','exposto'].includes(b.status)||Object.values(b.detalhe||{}).some(v=>/^confirmada/.test(v))||(b.avisos||[]).some(a=>/resolvido pelo operador/.test(a)))?'<br><span class="mut">Uma perna entrou de verdade? </span><button onclick="if(confirm(\'Confirmou no histórico que SÓ a 1aWin entrou?\'))post(\'/api/perna/'+b.id+'/1awin\')">Só a 1aWin entrou</button> <button onclick="if(confirm(\'Confirmou no histórico que SÓ a PS entrou?\'))post(\'/api/perna/'+b.id+'/ps3838\')">Só a PS entrou</button> <button onclick="if(confirm(\'Confirmou nas DUAS casas que as duas pernas entraram?\'))post(\'/api/concluir/'+b.id+'\')">As duas entraram</button>':'')+'</td></tr>').join('')+'</table>';
  {const on=pa.pos_monitorar, md=on?pa.pos_modo:'off';
   const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];

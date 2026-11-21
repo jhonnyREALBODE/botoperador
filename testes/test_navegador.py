@@ -1462,3 +1462,21 @@ def test_so_uma_casa_entrou_cobre_sozinho_sem_bloquear(casas, cfgc):
         for c in casas.values():
             recarregar(c)
         limpar_cupons(casas)
+
+
+def test_ps_marca_aceitar_melhores_probabilidades(casas, cfgc):
+    """24/11 (operador): 'na PS a odd só alterando pra cima e demora pra aceitar'. O programa marca 'Aceitar melhores
+    probabilidades' antes do disparo (a casa aceita sozinha odd MELHOR; odd que cai continua recusada)."""
+    _, cps = ir_jogo(casas)
+    recarregar(cps)
+    limpar_cupons(casas)
+    _, lp = ler(casas)
+    o = [x for x in lp["ofertas"] if x["tipo"] == "total" and x["linha"] == 211.5 and x["lado"] == "acima"][0]
+    p = dict(o, stake=31.0)
+    assert cps.executar(cps.montar, p, TIMES)["ok"]
+    assert cps.executar(lambda: cps.page.evaluate("() => document.getElementById('melhores').checked")) is False
+    r = cps.executar(cps.ler_e_armar, p, True)
+    assert r["ok"], r
+    assert cps.executar(lambda: cps.page.evaluate("() => document.getElementById('melhores').checked")) is True
+    assert any("Aceitar melhores probabilidades" in l for l in P._LOG_MEM[-10:])
+    limpar_cupons(casas)

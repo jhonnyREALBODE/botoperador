@@ -1749,7 +1749,7 @@ class CasaFalsa:
         d["evidencia"] = self.r.get("evidencia", "processando")
         return d
 
-    def apurar(self, perna=None):
+    def apurar(self, perna=None, foto_ok=True):
         self.chamadas.append("apurar")
         ORDEM.append((self.nome, "apurar"))
         ok = self.r.get("resultado", True)
@@ -2203,7 +2203,7 @@ def test_r22a_3_custo_atualizado_passa_da_tabela_sem_cobertura_vira_perna_orfa(c
 def test_r22a_3b_custo_usa_a_odd_real_aceita_na_1awin(cfg):
     """A 1aWin aceitou a 1,80 (calculado a 1,85): a PS a 1,99 já não cabe na tabela -> não dispara."""
     op, casas, est, cfg2 = _op_aceita(cfg, {}, {"escada": []})
-    casas[P.CASA_1W].apurar = lambda perna=None: {"ok": True, "odd_aceita": 1.80, "foto": "", "motivo": ""}
+    casas[P.CASA_1W].apurar = lambda perna=None, foto_ok=True: {"ok": True, "odd_aceita": 1.80, "foto": "", "motivo": ""}
     bil = _bucks(cfg2)
     assert _rodar(op, est, bil) == "exposto"
     assert "disparar" not in casas[P.CASA_PS].chamadas and "custo vivo" in bil["detalhe"]["PS3838"]
@@ -2229,9 +2229,9 @@ def test_r22a_6_1awin_aceita_atrasada_e_ps_valida(cfg):
     op, casas, est, cfg2 = _op_aceita(cfg, {"evidencia": "processando"}, {})
     orig = casas[P.CASA_1W].apurar
 
-    def atrasada(perna=None):
+    def atrasada(perna=None, foto_ok=True):
         time.sleep(1.0)
-        return orig(perna)
+        return orig(perna, foto_ok)
     casas[P.CASA_1W].apurar = atrasada
     bil = _bucks(cfg2)
     assert _rodar(op, est, bil) == "confirmado"
