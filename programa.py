@@ -112,10 +112,10 @@ def log(msg):
 # ---------------------------------------------------------------- config
 DEFAULTS = {
     "janela_min": 1.0,
-    "custo_max": 11.0,           # 24/11: tabela C (fora das faixas da tabela vale este teto)
+    "custo_max": 12.0,           # 24/11: tabela D de volta (fora das faixas da tabela vale este teto)
     # tabela do operador: [janela de, janela até (exclusiva), perda máxima %]
-    # 24/11 (operador): TABELA C — 8 / 9 / 10 / 11 (antes: D 9/10/11/12; original 3/4,8/4,99/8)
-    "custo_por_janela": [[1, 2, 8.0], [2, 3, 9.0], [3, 7, 10.0], [7, 11, 11.0]],
+    # 24/11 (operador, 2ª vez): TABELA D — 9 / 10 / 11 / 12 ('muito poucos pares' com a C)
+    "custo_por_janela": [[1, 2, 9.0], [2, 3, 10.0], [3, 7, 11.0], [7, 11, 12.0]],
     # ---- monitoramento pós-entrada e cobertura dinâmica (ordem do operador 15/11)
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,
@@ -144,13 +144,14 @@ DEFAULTS = {
     #     RISCO: se a 1aWin processar e não aceitar, a PS fica ÓRFÃ (caso 15/11 17:02).
     # "sequencial_aceita": a PS só dispara depois que a 1aWin ACEITA (mais lento, sem esse risco).
     # "rapida": os dois cliques juntos (100–300 ms); qualquer uma pode ficar órfã.
-    "confirmacao": "sequencial_processando",
+    "confirmacao": "sequencial_aceita",  # 24/11: padrão (o 'processando' deixou a PS órfã em 20/11 17:07 e 23:35)
     "disparo_intervalo_max_ms": 1500,  # modos sequenciais: espera no máximo isto pela prova imediata da 1aWin
     "cooldown_par_s": 60,              # o MESMO par (assinatura) que falhou fica de fora este tempo
     "max_substituicoes_tentativa": 1,  # trocas de perna (âncora/escadinha) dentro de UMA tentativa
     "max_tentativas_por_minuto": 6,    # tentativas de montagem no MESMO jogo por minuto
     "orfa_tentativas": 2,              # PERNA_ORFA: quantas vezes tenta colocar a perna que faltou (mesmas regras)
-    "cobrir_orfa_automatico": True,    # 24/11: sem cobertura nas tentativas -> segue no jogo tentando a cada rodada (não bloqueia)
+    "cobrir_orfa_automatico": True,
+    "orfa_odd_min": 1.50,              # 24/11: PROTEÇÃO de perna solta: odd mínima própria (a entrada nova segue 1,78)    # 24/11: sem cobertura nas tentativas -> segue no jogo tentando a cada rodada (não bloqueia)
 
     "odd_min": 1.78,                  # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
@@ -1318,6 +1319,29 @@ def validar_par_vivo(bil, odd1, odd2, cfg, carteira=None):
     if bil.get("janela", 0) >= 1 and not janela_continua(novas, ks):
         return False, "sem janela lucrativa contínua com as odds vivas", custo, pior
     return True, "", custo, pior
+
+
+def validar_protecao(acc, nova, carteira, cfg):
+    """24/11 (Chicago 23:36): PROTEÇÃO de perna solta não é entrada nova — o objetivo é REDUZIR o prejuízo. Aceita a
+    cobertura se: odd ≥ orfa_odd_min (1,50); janela ≥ janela_min; o pior caso da carteira COM a cobertura é MELHOR que
+    sem ela; e não passa da perda máxima (R$ 100). Devolve (ok, motivo, pior_com)."""
+    om = float(cfg.get("orfa_odd_min", 1.50))
+    if nova["odd"] < om - 1e-9:
+        return False, "proteção: odd %s abaixo de %s" % (_br(nova["odd"]), _br(om)), None
+    ov, un = (acc, nova) if acc["lado"] == "acima" else (nova, acc)
+    if _janela_total(ov, un) < float(cfg.get("janela_min", 1.0)) - 1e-9:
+        return False, "proteção: sem janela", None
+    base = list(carteira or []) + [acc]
+    todas = base + [nova]
+    ks = faixa_carteira(todas)
+    pior_sem = min(liquido_por_placar(base, ks).values())
+    pior_com = min(liquido_por_placar(todas, ks).values())
+    lim = float(cfg.get("perda_max_por_jogo_brl", 100.0))
+    if pior_com <= pior_sem + 0.005:
+        return False, "proteção: não reduz o pior caso (%s → %s)" % (_br(pior_sem), _br(pior_com)), pior_com
+    if pior_com < -lim - 1e-9:
+        return False, "proteção: pior caso passa de −R$ %s (%s)" % (_br(lim), _br(pior_com)), pior_com
+    return True, "", round(pior_com, 2)
 
 
 def assinatura_par(times_ou_jogo, a, b):
@@ -3783,7 +3807,8 @@ class Casa:
             # a aposta ainda pode ser rejeitada depois (15/11 15:57). Espera o resultado final.
             if re.search(r"sendo processada|aguardando|being processed|pending acceptance", tx, re.I):
                 viu_processando = True
-                fim = min(max(fim, time.time() + 10), t_clique + 60)
+                # 20/11 23:35 (Chicago): a PS ficou 'Aguarde… sendo processada' mais de 60 s e ACEITOU — espera até 120 s
+                fim = min(max(fim, time.time() + 10), t_clique + (120 if self.nome == CASA_PS else 60))
                 continue
             # 1aWin processando (botão com spinner / aria-busy) — o saldo já cai e a aposta ainda pode
             # não entrar (15/11 17:02: saldo 102,53 -> 66,73 e NADA no histórico). Só a mensagem prova.
@@ -3818,6 +3843,12 @@ class Casa:
                             "comprovada": comp}
         if novas:
             log("%s: textos novos depois do clique: %s" % (self.rotulo, " | ".join(novas[:20])))
+        depois_p = self._pendentes()
+        if antes is not None and depois_p is not None and depois_p > antes:
+            # a aposta está na lista de 'Apostas pendentes' da casa: ela EXISTE (a tela ainda podia mostrar 'processando')
+            log("%s: apostas pendentes %d -> %d — a aposta está registrada na casa" % (self.rotulo, antes, depois_p))
+            return {"ok": True, "motivo": "apostas pendentes %d -> %d (a casa ainda mostrava 'processando')" % (antes, depois_p),
+                    "foto": self.foto("confirmado")}
         vazio = not self.itens_cupom()
         s1 = self._saldo()
         # log 15/11 20:46 (1aWin): depois do clique apareceu 'BRL 136,15' = 159,64 − 23,49 (a stake), mas
@@ -5594,7 +5625,7 @@ class Operador:
             return st
         # ---------------------------------------------------------------- DISPARAR
         p1, p2 = bil["pernas"]
-        modo = (self.cfg.get("confirmacao") or "sequencial_processando").lower()
+        modo = (self.cfg.get("confirmacao") or "sequencial_aceita").lower()
         if modo == "conservadora":  # nome antigo (22/11): era exatamente este comportamento
             modo = "sequencial_processando"
         if modo not in ("sequencial_processando", "sequencial_aceita", "rapida"):
@@ -5773,6 +5804,7 @@ class Operador:
         ofs = (lf or {}).get("ofertas") or []
         lado_quero = "abaixo" if acc.get("lado") == "acima" else "acima"
         melhor, motivo = None, "nenhuma linha da %s protege a perna aceita dentro das regras" % NOME_CASA[falta]
+        melhor_p = None
         for o in ofs:
             if o.get("tipo") != acc.get("tipo") or o.get("periodo") != acc.get("periodo") or o.get("lado") != lado_quero:
                 continue
@@ -5791,18 +5823,33 @@ class Operador:
                 continue
             b2 = dict(bil, pernas=[p1, p2], janela=jan)
             ok, mot, custo, pior = validar_par_vivo(b2, p1["odd"], p2["odd"], self.cfg, carteira)
+            mesma = abs(o["linha"] - orig["linha"]) < 1e-9 and o["lado"] == orig["lado"]
             if not ok:
                 motivo = mot
+                okp, motp, pior_p = validar_protecao(acc, nova, carteira, self.cfg)
+                if okp:
+                    nota = (0, pior_p, jan)   # proteção: só se nenhuma passar nas regras normais; menor perda, maior janela
+                    if melhor_p is None or nota > melhor_p[0]:
+                        melhor_p = (nota, nova, mesma, jan)
+                else:
+                    motivo = "%s; %s" % (mot, motp)
                 continue
-            mesma = abs(o["linha"] - orig["linha"]) < 1e-9 and o["lado"] == orig["lado"]
             nota = (1 if mesma else 0, -custo)
             if melhor is None or nota > melhor[0]:
                 melhor = (nota, nova, mesma, jan)
+        protecao = False
+        if not melhor and melhor_p:
+            melhor, protecao = melhor_p, True
         if not melhor:
             return None, motivo
         _, nova, mesma, jan = melhor
         nova["_mesma"] = mesma
         nova["_janela"] = jan
+        nova["_protecao"] = protecao
+        if protecao:
+            log("🛡 PERNA_ORFA: nenhuma linha cabe nas regras de entrada; uso a regra de PROTEÇÃO (reduz o pior caso para "
+                "R$ %s, odd ≥ %s): %s @%s" % (_br(melhor[0][1]), _br(float(self.cfg.get("orfa_odd_min", 1.5))),
+                                              nova["selecao"], nova["odd"]))
         return nova, ""
 
     def _ps_depois_da_1awin_aceita(self, bil, carteira, r1):
@@ -5895,6 +5942,12 @@ class Operador:
             ok, mot, custo, pior = (False, L["motivo"], None, None) if not L["ok"] else validar_par_vivo(
                 b2, L["odd"] if falta == CASA_1W else acc["odd"], acc["odd"] if falta == CASA_1W else L["odd"],
                 self.cfg, carteira)
+            if not ok and L["ok"] and nova.get("_protecao"):
+                okp, motp, pior_p = validar_protecao(acc, dict(nova, odd=L["odd"]), carteira, self.cfg)
+                if okp:
+                    ok, mot, custo = True, "", (custo if custo is not None else 0.0)
+                else:
+                    mot = motp
             if not ok:
                 motivo = mot
                 log("PERNA_ORFA: recuperação RECUSADA pelas regras — %s" % mot)

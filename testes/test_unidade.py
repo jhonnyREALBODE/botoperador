@@ -52,7 +52,7 @@ def test_config_modo_real_so_com_false(tmp_path):
 
 def test_config_imprime_parametros_efetivos(tmp_path):
     P.carregar_config(str(tmp_path / "x.json"))
-    assert any("PARÂMETROS EFETIVOS" in l and "custo_max=11.0" in l for l in P._LOG_MEM)   # tabela C (24/11)
+    assert any("PARÂMETROS EFETIVOS" in l and "custo_max=12.0" in l for l in P._LOG_MEM)   # tabela D (24/11)
 
 
 # ------------------------------------------------------------------ texto e números
@@ -1622,7 +1622,7 @@ def test_r21_invalido_continua_recusado_com_motivo_real(cfg):
 
 def test_r21_nenhuma_regra_financeira_afrouxada():
     d = P.DEFAULTS
-    assert d["custo_por_janela"] == [[1, 2, 8.0], [2, 3, 9.0], [3, 7, 10.0], [7, 11, 11.0]]   # tabela C: ordem do operador 24/11
+    assert d["custo_por_janela"] == [[1, 2, 9.0], [2, 3, 10.0], [3, 7, 11.0], [7, 11, 12.0]]   # tabela D: ordem do operador 24/11
     assert d["odd_min"] == 1.78 and d["perda_max_por_jogo_brl"] == 100.0 and d["janela_min"] == 1.0
     assert d["max_entradas_por_jogo"] == 4
     # reentrada usa a MESMA tabela por janela (não há mais teto fixo de 16% aplicado)
@@ -1927,6 +1927,7 @@ def test_r22_so_a_1awin_confirmada_vira_perna_orfa_e_nunca_repete_a_aceita(cfg):
 def test_r22_so_a_ps_confirmada_vira_perna_orfa(cfg):
     esc = [_of("acima", 231.5, 1.85, P.CASA_1W)]
     op, casas, est, cfg2 = _op22(cfg, {"resultado": False, "recuperacao": False, "escada": esc}, {"resultado": True})
+    op.cfg["confirmacao"] = "sequencial_processando"   # (no sequencial_aceita a PS nem dispara com a 1aWin recusada)
     bil = _bucks(cfg2)
     assert _rodar(op, est, bil) == "exposto"
     assert bil["_orfa"] == {"aceita": P.CASA_PS, "falta": P.CASA_1W}
@@ -2002,7 +2003,7 @@ def test_r22_cronometro_conta_so_a_preparacao(cfg):
 
 
 def test_r22_modos_de_confirmacao_tem_nome_que_mostra_o_risco(cfg):
-    assert P.DEFAULTS["confirmacao"] == "sequencial_processando"
+    assert P.DEFAULTS["confirmacao"] == "sequencial_aceita"   # 24/11: padrão (o 'processando' deixou a PS órfã)
     # sequencial_aceita: 'processando' NÃO basta — a PS espera a 1aWin ACEITAR
     op, casas, est, cfg2 = _op22(cfg, {"evidencia": "processando", "resultado": False}, {})
     op.cfg["confirmacao"] = "sequencial_aceita"
@@ -2011,6 +2012,7 @@ def test_r22_modos_de_confirmacao_tem_nome_que_mostra_o_risco(cfg):
     assert "disparar" not in casas[P.CASA_PS].chamadas
     # sequencial_processando: 'processando' basta (risco: PS órfã se a 1aWin não aceitar) -> aqui vira INCERTO? não:
     op, casas, est, cfg2 = _op22(cfg, {"evidencia": "processando", "resultado": False, "recusa_comprovada": False}, {})
+    op.cfg["confirmacao"] = "sequencial_processando"
     bil = _bucks(cfg2)
     assert _rodar(op, est, bil) == "incerto"        # PS aceita, 1aWin sumiu sem prova: congela, não repete
     assert "disparar" in casas[P.CASA_PS].chamadas
@@ -2117,8 +2119,8 @@ def test_r22_reconciliacao_classifica(cfg):
 
 def test_r22_nenhuma_regra_financeira_afrouxada(cfg):
     d = P.DEFAULTS
-    assert d["odd_min"] == 1.78 and d["custo_max"] == 11.0 and d["perda_max_por_jogo_brl"] == 100.0
-    assert d["custo_por_janela"] == [[1, 2, 8.0], [2, 3, 9.0], [3, 7, 10.0], [7, 11, 11.0]]   # tabela C (operador 24/11)
+    assert d["odd_min"] == 1.78 and d["custo_max"] == 12.0 and d["perda_max_por_jogo_brl"] == 100.0
+    assert d["custo_por_janela"] == [[1, 2, 9.0], [2, 3, 10.0], [3, 7, 11.0], [7, 11, 12.0]]   # tabela D (operador 24/11, 2ª vez)
     c = dict(cfg, odd_min=1.78)
     bil = _bucks(c)
     assert P.validar_par_vivo(bil, 1.85, 1.99, c)[0]                        # o par do log passa
@@ -2180,7 +2182,8 @@ def test_r22a_1_linha_da_ps_some_depois_da_1awin_aceita_usa_cobertura_alternativ
 
 
 def test_r22a_2_odd_da_ps_cai_abaixo_de_1_78_sem_cobertura_vira_perna_orfa(cfg):
-    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"odds_lidas": [1.99, 1.70], "escada": [_of("abaixo", 233.5, 1.70, P.CASA_PS)]})
+    # (1,40: abaixo até da odd mínima de PROTEÇÃO 1,50 — sem cobertura possível)
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"odds_lidas": [1.99, 1.40], "escada": [_of("abaixo", 233.5, 1.40, P.CASA_PS)]})
     bil = _bucks(cfg2)
     assert _rodar(op, est, bil) == "exposto"                         # NÃO finge que o par fechou
     assert "disparar" not in casas[P.CASA_PS].chamadas and not any(x.startswith("confirmar") for x in casas[P.CASA_PS].chamadas)
@@ -2356,3 +2359,31 @@ def test_as_duas_entraram_conta_o_par_na_protecao(cfg):
                 "perna_solta": True}
     assert op.concluir_bilhete(bil["id"])
     assert op._prot["pares"] == 1 and "perna_solta" not in op._prot and est.protecao["pares"] == 1
+
+
+
+def test_protecao_de_perna_solta_reduz_o_prejuizo(cfg):
+    """24/11 (Chicago 23:36): a perna solta não tinha cobertura dentro das regras de ENTRADA. A regra de PROTEÇÃO aceita
+    odd ≥ 1,50 e custo acima da tabela, desde que REDUZA o pior caso e não passe de R$ 100."""
+    c = dict(cfg, orfa_odd_min=1.50, perda_max_por_jogo_brl=100.0, janela_min=1.0)
+    acc = {"casa": P.CASA_PS, "tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 211.5, "odd": 1.854, "stake": 31.0}
+    def nova(linha, odd):
+        return {"casa": P.CASA_1W, "tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": linha, "odd": odd,
+                "stake": round(31.0 * 1.854 / odd, 2)}
+    ok, mot, pior = P.validar_protecao(acc, nova(216.5, 1.55), [], c)
+    assert ok and pior > -31.0, mot                      # perna solta perde R$ 31; protegida perde menos
+    assert not P.validar_protecao(acc, nova(216.5, 1.36), [], c)[0]        # odd abaixo de 1,50
+    assert not P.validar_protecao(acc, nova(211.0, 1.90), [], c)[0]        # sem janela (Under abaixo do Over)
+    assert not P.validar_protecao(acc, nova(216.5, 1.55), [], dict(c, perda_max_por_jogo_brl=5.0))[0]
+
+
+
+def test_r22a_2b_odd_entre_1_50_e_1_78_protege_pela_regra_de_protecao(cfg):
+    """A PS caiu para 1,70 (abaixo de 1,78) com a 1aWin já aceita: a ENTRADA não aceita, mas a PROTEÇÃO sim (reduz o pior
+    caso) — a perna não fica solta."""
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"odds_lidas": [1.99, 1.70, 1.70], "recuperacao": True,
+                                                "escada": [_of("abaixo", 233.5, 1.70, P.CASA_PS)]})
+    bil = _bucks(cfg2)
+    assert _rodar(op, est, bil) == "confirmado", bil.get("detalhe")
+    assert any("regra de PROTEÇÃO" in l for l in P._LOG_MEM[-20:])
+    _sem_repetir_1awin(casas)
