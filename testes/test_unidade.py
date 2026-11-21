@@ -2629,3 +2629,38 @@ def test_hcp_desligado_nao_muda_nada_nos_totais(cfg):
          oferta("ps3838", "handicap", "jogo", None, 1.5, 2.5, "Charlotte Hornets", 1))
     bil, _ = P.achar_par([t1[0], t2[0], h[0]], [t1[1], t2[1], h[1]], SINAL, c)
     assert bil["tipo"] == "total" and bil["janela"] == 2.0     # regra antiga: maior janela primeiro
+
+
+def test_posicao_de_quarto_encerrado_sai_do_painel(cfg):
+    """25/11 (operador: 'não tá limpando'): no 3º quarto, a posição do 2º quarto (já acabou) vai para 'encerradas'; a do
+    jogo e a do 3º quarto continuam."""
+    class C:
+        def __init__(self, nome):
+            self.nome, self.limitada = nome, False
+        def em_paralelo(self, fn, *a, timeout=0):
+            r = fn(*a)
+            return lambda: r
+        def executar(self, fn, *a, timeout=0):
+            return fn(*a)
+        def cacar(self, times, liga=""):
+            return {"ok": True, "liga": ""}
+        def ler_escada(self, times):
+            return {"ok": True, "ofertas": [], "quarto": 3}
+    est = P.Estado(cfg)
+    op = P.Operador(dict(cfg, monitor_intervalo_s=0.05), est, {P.CASA_1W: C(P.CASA_1W), P.CASA_PS: C(P.CASA_PS)})
+    fechadas = []
+
+    class G:
+        def fechar(self, pos, motivo):
+            pos["aberta"] = False
+            fechadas.append((pos["id"], motivo))
+    op.gerente = G()
+    est.posicoes = [{"id": 1, "aberta": True, "times": TIMES, "periodo": "q2"},
+                    {"id": 2, "aberta": True, "times": TIMES, "periodo": "q3"},
+                    {"id": 3, "aberta": True, "times": TIMES, "periodo": "jogo"}]
+    cancel = threading.Event()
+    threading.Timer(0.6, cancel.set).start()
+    op._monitorar(dict(SINAL), cancel, "sinal")
+    time.sleep(0.3)
+    assert [f[0] for f in fechadas] == [1] and "2º Quarto encerrado" in fechadas[0][1]
+    assert est.posicoes[1]["aberta"] and est.posicoes[2]["aberta"]

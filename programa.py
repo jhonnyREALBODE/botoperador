@@ -5172,6 +5172,18 @@ class Operador:
                 pos_l += [p for p in carteira(per) if p not in carteira_local]
             return list(carteira_local) + pos_l
 
+        def fechar_posicoes(lista, motivo):
+            """Só o PAINEL: tira das abertas (vão para 'encerradas'); nada é feito nas casas. Em segundo plano."""
+            for pz in lista:
+                pz["aberta"] = False   # já sai da tela na próxima atualização
+            def _f(ps=list(lista)):
+                for pz in ps:
+                    try:
+                        self.gerente.fechar(pz, motivo)
+                    except Exception:
+                        pass
+            threading.Thread(target=_f, daemon=True).start()
+
         def hcp_ligado():
             return bool(self.cfg.get("handicap_ativo", True) or not self.cfg.get("so_totais"))
 
@@ -5362,6 +5374,15 @@ class Operador:
                         achado[nome] = False  # saiu da página do jogo: caça de novo na próxima
                 if c1.limitada or cps.limitada:
                     continue
+                # 25/11 (operador: 'não tá limpando'): posição de um QUARTO/TEMPO que já acabou sai das abertas do painel
+                q_atual = next((l.get("quarto") for l in lt.values() if l and l.get("quarto") is not None), None)
+                if self.gerente and q_atual is not None:
+                    mortos_q = periodos_encerrados(q_atual)
+                    fim_q = [pz for pz in self.estado.posicoes if pz.get("aberta") and pz.get("periodo") in mortos_q
+                             and _mesmo_jogo(pz.get("times") or ["", ""], times)]
+                    if fim_q:
+                        fechar_posicoes(fim_q, "%s encerrado" % ", ".join(sorted({NOME_PERIODO.get(pz["periodo"], pz["periodo"])
+                                                                                  for pz in fim_q})))
                 n1 = len(lt.get(CASA_1W, {}).get("ofertas", []))
                 n2 = len(lt.get(CASA_PS, {}).get("ofertas", []))
                 if n1 and n2:
@@ -5488,6 +5509,9 @@ class Operador:
                         self._motivo_lib = "%d min sem nova entrada confirmada" % int(sem / 60)
                         self.estado.set_monitor("%s: liberado — %s" % (sinal["jogo"], self._motivo_lib))
                         return
+                    if acao == "libera" and self.gerente:
+                        fechar_posicoes([pz for pz in self.estado.posicoes if pz.get("aberta")
+                                         and _mesmo_jogo(pz.get("times") or ["", ""], times)], "mercado do jogo encerrado")
                     if acao == "libera":
                         self._motivo_lib = "mercado encerrado (%d leituras VAZIO_CONFIRMADO nas duas casas)" % self._vazio[0]
                         self.estado.set_monitor("%s: liberado — %s" % (sinal["jogo"], self._motivo_lib))
