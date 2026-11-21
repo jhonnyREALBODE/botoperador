@@ -1518,18 +1518,22 @@ def test_seg_liberacao_manual(cfg, monkeypatch):
     assert any("liberação manual" in a for a in est.bilhetes[-1].get("avisos", []))
 
 
-def test_seg_sinal_expira_na_fila(cfg, monkeypatch):
+def test_seg_sinal_na_fila_nao_vence_por_tempo(cfg, monkeypatch):
+    """24/11 (operador): 'esse negócio de minutos não dá certo, tem os intervalos' — o sinal na fila NÃO vence por tempo
+    (padrão). Continua valendo o MAIS RECENTE. Com fila_validade_min > 0 no config, volta a vencer."""
     est, op, _ = _op(cfg)
     comecou = []
     monkeypatch.setattr(op, "novo_sinal", lambda s, origem="sinal": comecou.append(s["jogo"]))
-    op._fila = [(time.time() - 25 * 60, _sinal("Velho x Jogo"))]     # validade: 20 min
+    op.cfg["fila_validade_min"] = 0
+    op._fila = [(time.time() - 90 * 60, _sinal("Velho x Jogo"))]     # 1h30 na fila (intervalo): ainda vale
     op._puxar_fila()
     time.sleep(0.3)
-    assert comecou == [] and op._fila == []
+    assert comecou == ["Velho x Jogo"]
+    op.cfg["fila_validade_min"] = 20
     op._fila = [(time.time() - 25 * 60, _sinal("Velho x Jogo")), (time.time() - 60, _sinal("Novo x Jogo"))]
     op._puxar_fila()
     time.sleep(0.3)
-    assert comecou == ["Novo x Jogo"]
+    assert comecou == ["Velho x Jogo", "Novo x Jogo"]
 
 
 def test_seg_reinicio_preserva_protecao_fila_contador_e_bloqueio(cfg):

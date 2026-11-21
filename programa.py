@@ -127,7 +127,7 @@ DEFAULTS = {
     "reentrada_espera_min_s": 60,
     "protecao_sem_entrada_min": 0,     # 24/11 (operador): 0 = NUNCA encerra por tempo ("se eu quiser encerrar eu peço outro sinal")
     "protecao_vazias_lib": 20,         # ...ou se o mercado sumir (20 leituras seguidas sem ofertas)
-    "fila_validade_min": 20,
+    "fila_validade_min": 0,            # 24/11 (operador): 0 = o sinal na fila NÃO vence ("tem os intervalos")
     "erros_leitura_alerta": 10,        # 20/11: 10 leituras seguidas com erro -> pausa e alerta (não libera o jogo)
     "cobrir_perna_solta": False,       # 20/11: com posição INCOMPLETA tudo congela (nada de aposta automática)           # sinal na fila vale até 20 min (depois descarta)      # ...e com pelo menos 60 s de intervalo
     "reentrada_custo_max": 16.0,       # (sem uso desde 21/11: reentrada segue a tabela por janela)
@@ -173,7 +173,7 @@ DEFAULTS = {
     "pos_reducao_risco_min": 0.05,    # (só com pos_exigir_ev)
     "pos_cooldown_s": 20,
     "pos_stake_min_1w_brl": 5.0,
-    "pos_duracao_max_min": 150,
+    "pos_duracao_max_min": 240,       # 24/11: jogo com intervalos dura mais (carteira do jogo vale por até 4 h)
     "perna_ps_eur": 5.0,         # 0 = volta ao total fixo
     "total_operacao": 600.0,
     "cambio_brl_eur": 6.20,
@@ -4693,7 +4693,7 @@ class Operador:
         if self.bloqueio:
             return
         with self._trava:
-            validade = float(self.cfg.get("fila_validade_min", 20)) * 60
+            validade = float(self.cfg.get("fila_validade_min", 0)) * 60 or float("inf")
             vivos = [(t, x) for t, x in self._fila if time.time() - t <= validade]
             for t, x in self._fila:
                 if time.time() - t > validade:
