@@ -1,4 +1,5 @@
 """Testes de navegador (Playwright, headless) contra as páginas falsas fiéis das duas casas."""
+import threading
 import time
 
 import pytest
@@ -1071,12 +1072,13 @@ def test_ancora_na_montagem_troca_so_a_perna_que_caiu(casas, cfgc):
     limpar_cupons(casas)
 
 
-def test_jogo_com_par_confirmado_fica_protegido_e_sinal_vai_pra_fila(casas, cfgc):
-    """20/11 (operador): com par confirmado, o sinal novo NÃO cancela o jogo — vai para a fila. O jogo é liberado
-    (aqui: tempo sem nova entrada, encurtado no teste) e aí o sinal MAIS RECENTE da fila começa do zero."""
+def test_sem_encerrar_por_tempo_e_sinal_novo_assume(casas, cfgc):
+    """24/11 (operador): 'não precisa encerrar depois de 15 min; se eu quiser encerrar eu peço outro sinal'.
+    Com par confirmado o jogo segue (sem limite de tempo); o sinal NOVO assume na hora."""
     servidor.ESTADO.clear()
     cfgc["reentrar_mesmo_jogo"] = True
     cfgc["monitor_intervalo_s"] = 0.5
+    assert P.DEFAULTS["protecao_sem_entrada_min"] == 0
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
@@ -1085,18 +1087,27 @@ def test_jogo_com_par_confirmado_fica_protegido_e_sinal_vai_pra_fila(casas, cfgc
     op.novo_sinal(dict(SINAL, id="prot"))
     assert esperar(lambda: est.bilhetes and est.bilhetes[-1]["status"] == "testado", 90)
     assert esperar(lambda: op._prot is not None, 10)
-    assert est.protecao["jogo"] == SINAL["jogo"] and est.protecao["pares"] == 1
-    s2 = dict(SINAL, id="outro", jogo="Flamengo x Franca", times=["Flamengo", "Franca"])
-    s3 = dict(SINAL, id="outro2", jogo="Atlético de Atenas x São Lourenço", times=["Atlético de Atenas", "São Lourenço"])
-    assert op.novo_sinal(s2) is False and op.novo_sinal(s3) is False   # foram para a fila
+    op._prot["ultima"] = time.time() - 3600       # 1 hora sem nova entrada: NÃO encerra
+    time.sleep(3)
     assert op._atual[2]["jogo"] == SINAL["jogo"] and op._atual[0].is_alive()
-    assert [f["jogo"] for f in est.protecao["fila"]] == [s2["jogo"], s3["jogo"]]
-    cfgc["protecao_sem_entrada_min"] = 0.01   # libera já (no programa: 15 min)
-    assert esperar(lambda: op._atual and op._atual[2]["jogo"] == s3["jogo"], 30), est.protecao
-    assert "sem nova entrada confirmada" in est.protecao["liberado"] and est.protecao["fila"] == []
+    s2 = dict(SINAL, id="outro", jogo="Flamengo x Franca", times=["Flamengo", "Franca"])
+    assert op.novo_sinal(s2) is True                # o sinal novo ASSUME (é assim que o operador encerra)
+    assert esperar(lambda: op._atual and op._atual[2]["jogo"] == s2["jogo"], 10)
     op._atual[1].set()
     time.sleep(1.5)
 
+
+def test_perna_solta_segura_o_jogo_e_sinal_novo_vai_pra_fila(cfg):
+    """Com PERNA SOLTA sendo coberta, o sinal novo NÃO abandona a aposta descoberta: vai para a fila."""
+    op = P.Operador(dict(cfg, modo_teste=False), P.Estado(cfg), {})
+    ev = threading.Event()
+    th = threading.Thread(target=ev.wait, daemon=True)
+    th.start()
+    op._atual = (th, threading.Event(), dict(SINAL))
+    op._prot = {"jogo": SINAL["jogo"], "pares": 0, "max": 4, "ultima": time.time(), "perna_solta": True}
+    s2 = dict(SINAL, id="outro", jogo="Flamengo x Franca", times=["Flamengo", "Franca"])
+    assert op.novo_sinal(s2) is False and [x["jogo"] for _, x in op._fila] == ["Flamengo x Franca"]
+    ev.set()
 
 
 def test_incompleto_bloqueia_tudo_e_a_fila_nao_anda(casas, cfgc):
@@ -1437,10 +1448,12 @@ def test_so_uma_casa_entrou_cobre_sozinho_sem_bloquear(casas, cfgc):
     op = P.Operador(cfgc, est, casas)
     try:
         op.novo_sinal(dict(SINAL, id="auto-orfa"))
-        assert esperar(lambda: any("tento COBRIR a perna" in l for l in P._LOG_MEM[-80:]), 120), "\n".join(P._LOG_MEM[-30:])
+        # (olha o ESTADO do programa, não o log — o log pode ter linhas de testes anteriores)
+        assert esperar(lambda: op._prot and op._prot.get("perna_solta"), 120), "\n".join(P._LOG_MEM[-30:])
         assert op.bloqueio is None
-        assert esperar(lambda: any("perna solta COBERTA" in l for l in P._LOG_MEM[-80:]), 90), "\n".join(P._LOG_MEM[-30:])
-        assert op.bloqueio is None and op._prot and op._prot.get("pares") == 1
+        assert esperar(lambda: op._prot and op._prot.get("pares") == 1 and not op._prot.get("perna_solta"), 90), \
+            "\n".join(P._LOG_MEM[-30:])
+        assert op.bloqueio is None
     finally:
         if op._atual:
             op._atual[1].set()

@@ -125,7 +125,7 @@ DEFAULTS = {
     "min_movimento_linha": 0.5,
     "max_repeticoes_mesma_perna": 4,   # 19/11: a mesma perna pode ser âncora de até 4 pares (se cada um ampliar)        # 19/11: a linha principal da PS tem que andar ≥ 0,5 desde a última entrada
     "reentrada_espera_min_s": 60,
-    "protecao_sem_entrada_min": 15,    # 20/11: jogo com par confirmado fica protegido; libera após 15 min sem nova dupla
+    "protecao_sem_entrada_min": 0,     # 24/11 (operador): 0 = NUNCA encerra por tempo ("se eu quiser encerrar eu peço outro sinal")
     "protecao_vazias_lib": 20,         # ...ou se o mercado sumir (20 leituras seguidas sem ofertas)
     "fila_validade_min": 20,
     "erros_leitura_alerta": 10,        # 20/11: 10 leituras seguidas com erro -> pausa e alerta (não libera o jogo)
@@ -4489,8 +4489,10 @@ class Operador:
                 else:
                     log("BLOQUEADO (%s em %s): nada começa até resolver no painel" % (self.bloqueio["estado"], self.bloqueio["jogo"]))
                 return False
-            if origem == "sinal" and self._prot and self._atual and self._atual[0].is_alive() and not self._atual[1].is_set():
-                # 20/11 (operador): com par CONFIRMADO no jogo atual, o sinal novo vai para a FILA — o jogo continua
+            if origem == "sinal" and self._prot and self._prot.get("perna_solta") and self._atual \
+                    and self._atual[0].is_alive() and not self._atual[1].is_set():
+                # 24/11 (operador): sinal novo ASSUME (é assim que ele encerra um jogo). Só fica na FILA enquanto há uma
+                # PERNA SOLTA sendo coberta — não abandona aposta descoberta.
                 self._fila = [(t, x) for t, x in self._fila if not _mesmo_jogo(x["times"], sinal["times"])]
                 self._fila.append((time.time(), sinal))
                 log("📥 sinal novo na FILA (%s) — %s está protegido (%d/%d pares)" % (
@@ -4579,7 +4581,7 @@ class Operador:
         # enquanto a perna está solta o jogo fica PROTEGIDO: sinal novo vai para a fila (não abandona a perna)
         self._prot = {"jogo": bil.get("jogo", ""), "pares": 0,
                       "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
-                      "ultima": time.time(), "sinal": sinal, "bilhetes": [], "linha_ultima": None}
+                      "ultima": time.time(), "sinal": sinal, "bilhetes": [], "linha_ultima": None, "perna_solta": True}
         log("🧩 operador: só a %s entrou em %s (%s) — volto ao jogo para cobrir com a %s" % (
             NOME_CASA[casa], bil.get("jogo"), bil["pernas"][0 if casa == CASA_1W else 1]["selecao"], NOME_CASA[falta]))
         return self.novo_sinal(sinal, origem="perna_solta")
@@ -4629,8 +4631,8 @@ class Operador:
             self._publicar_protecao()
             return
         r = self._retomar
-        if r and r.get("sinal") and time.time() - float(r.get("ultima") or 0) <= \
-                float(self.cfg.get("protecao_sem_entrada_min", 15)) * 60:
+        lim_ret = float(self.cfg.get("protecao_sem_entrada_min", 0)) or float(self.cfg.get("pos_duracao_max_min", 150))
+        if r and r.get("sinal") and time.time() - float(r.get("ultima") or 0) <= lim_ret * 60:
             log("↻ retomo o jogo protegido %s (%d/%d pares, contador de vazio %d)" % (
                 r["jogo"], r.get("pares", 0), r.get("max", 4), self._vazio[0]))
             self.novo_sinal(r["sinal"], origem="retomada")
@@ -4781,6 +4783,8 @@ class Operador:
             self._prot.setdefault("jogo", sinal["jogo"])
             self._prot.setdefault("sinal", sinal)
             self._prot.setdefault("ultima", time.time())
+            if orfa_ret is not None:
+                self._prot["perna_solta"] = True
             self._retomar = None
             log("↻ carteira retomada: %d par(es), contador de vazio %d" % (len(entradas), self._vazio[0]))
             self._publicar_protecao()
@@ -4927,8 +4931,8 @@ class Operador:
                     if self._vazio != antes_v:
                         self._publicar_protecao()
                     sem = time.time() - self._prot["ultima"]
-                    lim = float(self.cfg.get("protecao_sem_entrada_min", 15)) * 60
-                    if sem > lim:
+                    lim = float(self.cfg.get("protecao_sem_entrada_min", 0)) * 60
+                    if lim > 0 and sem > lim:
                         self._motivo_lib = "%d min sem nova entrada confirmada" % int(sem / 60)
                         self.estado.set_monitor("%s: liberado — %s" % (sinal["jogo"], self._motivo_lib))
                         return
@@ -5093,6 +5097,7 @@ class Operador:
                                               "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas),
                                               "linha_ultima": ultima[1]}
                             self._prot["ultima"] = time.time()
+                            self._prot["perna_solta"] = True
                             self._publicar_protecao()
                             log("🧩 %s: só a %s entrou (%s) — sigo no jogo e tento COBRIR a perna na %s a cada rodada, "
                                 "sozinho (sinais novos ficam na fila)" % (sinal["jogo"], NOME_CASA[orfa["aceita"]], pa["selecao"],
@@ -6440,7 +6445,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  const pa=d.params;document.getElementById('params').textContent='janela ≥ '+P(pa.janela_min,1)+' · custo ≤ '+P(pa.custo_max,1)+'% · PS €'+P(pa.perna_ps_eur)+' · câmbio '+P(pa.cambio_brl_eur)+(pa.so_totais?' · só totais '+pa.totais_periodos.join('/'):'');
  {const pr=d.protecao;let ph='';
   if(pr&&pr.jogo){const seg=pr.ultima?Math.max(0,Math.round(Date.now()/1000-pr.ultima)):0;
-   ph='<div style="margin-top:4px">🛡️ <b>Jogo protegido:</b> '+esc(pr.jogo)+' · pares confirmados: <b>'+pr.pares+'/'+pr.max+'</b> · última entrada confirmada há <b>'+Math.floor(seg/60)+'m'+String(seg%60).padStart(2,'0')+'s</b> (libera com 15 min sem nova dupla)</div>';}
+   ph='<div style="margin-top:4px">🛡️ <b>Jogo protegido:</b> '+esc(pr.jogo)+' · pares confirmados: <b>'+pr.pares+'/'+pr.max+'</b> · última entrada confirmada há <b>'+Math.floor(seg/60)+'m'+String(seg%60).padStart(2,'0')+'s</b> (encerra só com outro sinal, 4 pares ou mercado fechado)</div>';}
   if(pr&&pr.fila&&pr.fila.length)ph+='<div>📥 <b>Sinais na fila ('+pr.fila.length+'):</b> '+pr.fila.map(f=>esc(f.jogo)+' <span class="mut">('+f.chegou+')</span>').join(' · ')+'</div>';
   if(pr&&pr.liberado)ph+='<div class="mut">🔓 último: '+esc(pr.liberado)+'</div>';
   if(pr&&pr.alerta)ph+='<div class="no"><b>'+esc(pr.alerta)+'</b></div>';
