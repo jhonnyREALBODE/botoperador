@@ -5490,6 +5490,11 @@ class Operador:
                     # TRAVADO não é período encerrado. Só desiste de quarto/tempo que JÁ ACABOU; o jogo inteiro segue
                     # tentando enquanto o jogo rola (o fim do mercado do jogo encerra o monitor por outro caminho).
                     per_acabou = per_o != "jogo" and q_atual is not None and per_o in periodos_encerrados(q_atual)
+                    # 21/11 (Missouri St x Drake: 'acabou com 2 tempos'): o JOGO acabou = as duas casas sem NENHUMA oferta
+                    # por N leituras seguidas (mercado fechado de vez, não só um cadeado de instantes)
+                    if per_o == "jogo" and vazias >= int(self.cfg.get("protecao_vazias_lib", 20)):
+                        per_acabou = True
+                        sem_per[0] = max(sem_per[0], int(self.cfg.get("orfa_rodadas_sem_periodo", 12)))
                     if per_acabou and sem_per[0] >= int(self.cfg.get("orfa_rodadas_sem_periodo", 12)):
                         # 24/11 (Keila 2º quarto): o PERÍODO da perna solta acabou — não existe mais linha para cobrir. Ficava
                         # 'procurando cobertura' para sempre e segurava a fila. Desiste, registra e libera.
