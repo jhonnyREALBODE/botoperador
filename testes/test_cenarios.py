@@ -97,8 +97,9 @@ CASOS_ACEITA = [
     ("PS: linha some -> cobertura alternativa", {}, _ps_some, {}, ("confirmado", 1, 1), 212.5),
     ("PS: odd cai abaixo de 1,78 -> perna órfã", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.700"), {},
      ("exposto", 1, 0), None),
-    ("PS: custo passa da tabela -> perna órfã", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.790"),
-     {"custo_por_janela": [[1, 11, 3.5]]}, ("exposto", 1, 0), None),
+    # 24/11: a REGRA DE PROTEÇÃO cobre (odd ≥ 1,50, reduz o pior caso, ≤ R$ 100) — a perna não fica solta
+    ("PS: custo passa da tabela -> proteção cobre", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.790"),
+     {"custo_por_janela": [[1, 11, 3.5]]}, ("confirmado", 1, 1), None),
     ("PS recusa explicitamente -> recupera", {"rejeita_ps": 1}, None, {}, ("confirmado", 1, 1), 211.5),
     ("PS processando/INCERTA -> congela", {"ps_mudo": True}, None, {}, ("incerto", 1, 0), None),
     ("1aWin aceita atrasada, PS válida", {"aceita_atrasada": 2500}, None, {}, ("confirmado", 1, 1), 211.5),
