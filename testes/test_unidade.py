@@ -2758,3 +2758,39 @@ def test_jogo_que_acabou_nao_fica_cacando_para_sempre(cfg):
     op._monitorar(dict(SINAL), cancel, "retomada")
     assert time.time() - t0 < 5 and casas[P.CASA_PS].n == 3
     assert "não encontrado" in op._motivo_lib
+
+
+def test_minutos_para_acabar_o_jogo():
+    assert P.minutos_fim_de_jogo("Q4 3'") == 3 and P.minutos_fim_de_jogo("4º Quarto 9`") == 9
+    assert P.minutos_fim_de_jogo("H2 1'") == 1 and P.minutos_fim_de_jogo("2º Tempo 19'") == 19   # NCAA (2 tempos)
+    assert P.minutos_fim_de_jogo("Prorrogação 3'") == 0
+    assert P.minutos_fim_de_jogo("Q2 5'") is None and P.minutos_fim_de_jogo("1º Tempo 5'") is None
+
+
+def test_sem_par_novo_nos_ultimos_5_minutos(cfg, monkeypatch):
+    """25/11 (Missouri St x Drake: entrou com ~1 min para acabar e a perna ficou solta). Nos últimos 5 min nenhum par
+    NOVO é procurado."""
+    oferta_ok = oferta("1awin", "total", "jogo", "abaixo", 150.5, 1.9)
+
+    class C:
+        def __init__(self, nome, fim):
+            self.nome, self.limitada, self.fim = nome, False, fim
+        def executar(self, fn, *a, timeout=0):
+            return fn(*a)
+        def em_paralelo(self, fn, *a, timeout=0):
+            r = fn(*a)
+            return lambda: r
+        def cacar(self, times, liga=""):
+            return {"ok": True, "liga": ""}
+        def ler_escada(self, times):
+            return {"ok": True, "ofertas": [oferta_ok], "quarto": 4, "fim": self.fim}
+    chamadas = []
+    monkeypatch.setattr(P, "achar_par", lambda *a, **k: chamadas.append(1) or (None, "sem par"))
+    for fim, esperado in ((3, 0), (8, 1)):
+        del chamadas[:]
+        op = P.Operador(dict(cfg, monitor_intervalo_s=0.05), P.Estado(cfg),
+                        {P.CASA_1W: C(P.CASA_1W, fim), P.CASA_PS: C(P.CASA_PS, fim)})
+        cancel = threading.Event()
+        threading.Timer(0.4, cancel.set).start()
+        op._monitorar(dict(SINAL), cancel, "sinal")
+        assert (len(chamadas) > 0) == bool(esperado), (fim, len(chamadas))

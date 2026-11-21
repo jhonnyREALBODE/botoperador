@@ -149,6 +149,7 @@ DEFAULTS = {
     "cooldown_par_s": 60,              # o MESMO par (assinatura) que falhou fica de fora este tempo
     "max_substituicoes_tentativa": 1,  # trocas de perna (âncora/escadinha) dentro de UMA tentativa
     "max_tentativas_por_minuto": 6,    # tentativas de montagem no MESMO jogo por minuto
+    "sem_entrada_ultimos_min": 5,      # 25/11: nenhum par NOVO nos últimos 5 min do jogo (4º quarto NBA / 2º tempo NCAA)
     "orfa_tentativas": 2,              # PERNA_ORFA: quantas vezes tenta colocar a perna que faltou (mesmas regras)
     "cobrir_orfa_automatico": True,
     "orfa_odd_min": 1.75,              # 24/11: PROTEÇÃO de perna solta: mesma faixa (1,75–1,85), preferindo a odd mais alta    # 24/11: sem cobertura nas tentativas -> segue no jogo tentando a cada rodada (não bloqueia)
@@ -587,6 +588,24 @@ def quarto_atual(texto_pagina):
         return 1 if m.group(1) == "1" else 3
     if _RX_INTERVALO.search(t):
         return 2.5
+    return None
+
+
+_RX_PRORROGACAO = re.compile(r"\b(prorroga[cç][aã]o|overtime|\bOT\d?\b)\s*\d{0,2}\s*['’`´]", re.I)
+
+
+def minutos_fim_de_jogo(texto_pagina):
+    """Minutos que faltam no ÚLTIMO período regular (4º quarto ou 2º tempo da NCAA). Prorrogação = 0.
+    None = não está no último período (ou não deu para ler). As casas mostram o tempo que FALTA ('4º Quarto 3'', 'H2 1'')."""
+    t = _sem_acento(texto_pagina or "")
+    if _RX_PRORROGACAO.search(t):
+        return 0
+    m = _RX_RELOGIO.search(t) or _RX_RELOGIO2.search(t)
+    if m:
+        return int(m.group(2)) if m.group(1) == "4" else None
+    m = _RX_RELOGIO_TEMPO.search(t) or _RX_RELOGIO_H.search(t)
+    if m:
+        return int(m.group(2)) if m.group(1) == "2" else None
     return None
 
 
@@ -3299,7 +3318,8 @@ class Casa:
                     r["motivo"] = "PS deslogada — odds escondidas para visitante (rode 1-LOGIN.bat)"
                     return r
                 if travados:
-                    r.update(ok=True, ofertas=[], quarto=q, motivo="PS: mercado travado (cadeado em %d odds)" % travados)
+                    r.update(ok=True, ofertas=[], quarto=q, fim=minutos_fim_de_jogo(tx),
+                             motivo="PS: mercado travado (cadeado em %d odds)" % travados)
                     return r
         else:
             if not linha_confronto(tx, times):  # página pode estar carregando (aba recém-aberta)
@@ -3330,7 +3350,7 @@ class Casa:
                     ofs += ofertas_de_enumeracao(self.enumerar(), self.nome, times, q, aba=a)
         if not ofs:
             self.dump_diag("sem_ofertas", itens if self.nome == CASA_PS else None)
-        r.update(ok=True, ofertas=ofs, quarto=q, motivo="" if ofs else "nenhuma oferta de linha legível")
+        r.update(ok=True, ofertas=ofs, quarto=q, fim=minutos_fim_de_jogo(tx), motivo="" if ofs else "nenhuma oferta de linha legível")
         self.limitada = False
         return r
 
@@ -5588,6 +5608,18 @@ class Operador:
                     if getattr(self, "_alerta", "") and self._vazio[1] == 0:
                         self._alerta = ""
                         self._publicar_protecao()
+                # 25/11 (Missouri St x Drake, 18:38 com ~1 min para acabar): nos últimos minutos as casas travam o mercado e a
+                # perna fica sem cobertura. Par NOVO não entra nos últimos N minutos (cobertura de perna solta continua).
+                fim_min = min([l.get("fim") for l in lt.values() if l and l.get("fim") is not None] or [None]) \
+                    if any(l and l.get("fim") is not None for l in lt.values()) else None
+                lim_fim = float(self.cfg.get("sem_entrada_ultimos_min", 5))
+                if tipo == "sadia" and fim_min is not None and lim_fim > 0 and fim_min <= lim_fim:
+                    if rodada % 6 == 1:
+                        log("%s: faltam %s min para acabar o jogo — nenhum par NOVO nos últimos %d min (regra 25/11)" % (
+                            sinal["jogo"], fim_min, int(lim_fim)))
+                    self.estado.set_monitor("%s: fim do jogo (faltam %s min) — sem pares novos" % (sinal["jogo"], fim_min))
+                    cancel.wait(self.cfg["monitor_intervalo_s"])
+                    continue
                 if tipo == "sadia":
                     raiox = {"jogo": sinal["jogo"]}
                     cfg_par = self.cfg
