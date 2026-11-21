@@ -4712,6 +4712,7 @@ class Estado:
         self.calculadora = None    # raio-x da última rodada sadia
         self.monitor = ""          # texto de status do monitoramento
         self.reentrada = None      # última avaliação de reentrada (escadinha) para o painel
+        self.pausado = False       # 25/11: robô pausado pelo painel
         self.handicap = None       # 24/11: painel 'Handicap' (carteiras de handicap + exposição global do jogo)
         self.protecao = None       # jogo protegido (par confirmado), fila de sinais e último motivo de liberação
         self._seq = max([b.get("id", 0) for b in self.bilhetes] + [0])
@@ -4782,6 +4783,7 @@ class Estado:
                     calc["par"] = _sem_privados(calc["par"])
             return {
                 "modo": "TESTE" if self.cfg["modo_teste"] else "REAL",
+                "pausado": bool(getattr(self, "pausado", False)),
                 "params": {k: self.cfg.get(k) for k in ("janela_min", "custo_max", "perna_ps_eur", "cambio_brl_eur",
                                                         "so_totais", "totais_periodos", "monitor_intervalo_s",
                                                         "pos_monitorar", "pos_modo", "avulsas_permitidas",
@@ -4854,6 +4856,11 @@ class Operador:
         self._retomar = None
         self._tent = ControleTentativas(cfg)  # 22/11: cooldown por assinatura do par + tentativas por minuto no jogo
         self._carregar_oper()
+        try:
+            self.pausado = bool((_ler_json(ARQ_PREFS, {}) or {}).get("pausado"))
+        except Exception:
+            self.pausado = False
+        self.estado.pausado = self.pausado
 
     def _posicao_aberta(self, times, periodo):
         for p in self.estado.posicoes:
@@ -4863,8 +4870,32 @@ class Operador:
         return None
 
     # ---------------------------------------------- entrada de sinais
+    def pausar(self, pausar=True):
+        """25/11 (operador): botão no painel para LIGAR/PAUSAR o robô. Pausado = NENHUMA aposta nova; o jogo atual fica
+        parado (com a carteira) e os sinais vão para a fila. Ligar de novo: continua; sem jogo ativo, a fila assume."""
+        self.pausado = bool(pausar)
+        self.estado.pausado = self.pausado
+        try:
+            prefs = _ler_json(ARQ_PREFS, {}) or {}
+            prefs["pausado"] = self.pausado
+            _gravar_json(ARQ_PREFS, prefs)
+        except Exception:
+            pass
+        log("⏸ robô PAUSADO pelo painel — nenhuma aposta nova até ligar de novo" if self.pausado else
+            "▶ robô LIGADO pelo painel")
+        if not self.pausado and not (self._atual and self._atual[0].is_alive() and not self._atual[1].is_set()):
+            self._puxar_fila()
+        return True
+
     def novo_sinal(self, sinal, origem="sinal"):
         """O sinal novo cancela o atual (inclusive estacionamento)."""
+        if getattr(self, "pausado", False) and origem in ("sinal", "fila", "backlog"):
+            with self._trava:
+                self._fila = [(t, x) for t, x in self._fila if not _mesmo_jogo(x["times"], sinal["times"])]
+                self._fila.append((time.time(), sinal))
+            log("⏸ robô pausado: sinal %s guardado na fila (assume quando você ligar)" % sinal["jogo"])
+            self._publicar_protecao()
+            return False
         ag = time.time()
         ult = self._ultimo_por_id.get(sinal["id"])
         if origem == "sinal" and ult and ag - ult < COOLDOWN_SINAL_S:
@@ -5330,6 +5361,10 @@ class Operador:
                 "(escadinha/âncora, sem ilha, sem par repetido)" % (sinal["jogo"], len(entradas)))
         while not cancel.is_set():
             try:
+                if getattr(self, "pausado", False):
+                    self.estado.set_monitor("⏸ PAUSADO — nenhuma aposta (jogo guardado: %s)" % sinal["jogo"])
+                    cancel.wait(1.0)
+                    continue
                 if c1.limitada or cps.limitada:
                     self._estacionar(cancel, sinal)
                     continue
@@ -7080,7 +7115,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0}
 .ver{font-size:18px;font-weight:800;margin:8px 0}a{color:#7fb2ff}
 </style></head><body>
 <header><h1>🤖 Bot Operador de Middles</h1><span id="modo" class="tag teste">TESTE</span>
-<span id="params" class="mut"></span><button onclick="calibrar()">🧪 Calibrar agora</button> <button onclick="post('/api/limpar')">🧹 Limpar painel</button></header>
+<span id="params" class="mut"></span><button onclick="calibrar()">🧪 Calibrar agora</button> <button onclick="post('/api/limpar')">🧹 Limpar painel</button> <button id="btnliga" onclick="ligaDesliga()">⏸ Pausar robô</button> <button onclick="if(confirm('Desligar o programa? (fecha os navegadores do robô e para tudo)'))post('/api/desligar').then(()=>{document.body.innerHTML='<h2 style=&quot;padding:30px&quot;>Programa desligado. Para ligar de novo: 2-INICIAR.bat</h2>'})">⏻ Desligar programa</button></header>
 <main>
 <div class="card full" id="mon"></div>
 <div class="card" id="calc"><h2>🧮 Calculadora do motor</h2><div class="mut">aguardando a primeira rodada sadia…</div></div>
@@ -7097,6 +7132,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0}
 const R=v=>'R$ '+Number(v).toFixed(2).replace('.',',');const P=(v,c=2)=>Number(v).toFixed(c).replace('.',',');
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function post(u){await fetch(u,{method:'POST'});tick()}
+function ligaDesliga(){post(window._pausado?'/api/ligar':'/api/pausar');}
 function calibrar(){post('/api/calibrar')}
 function calc(c){if(!c)return '<h2>🧮 Calculadora do motor</h2><div class="mut">aguardando a primeira rodada sadia…</div>';
  let h='<h2>🧮 Calculadora do motor — '+esc(c.jogo)+'</h2><div class="mut">rodada '+c.rodada+' às '+c.hora+'</div>';
@@ -7110,6 +7146,7 @@ function calc(c){if(!c)return '<h2>🧮 Calculadora do motor</h2><div class="mut
  return h}
 async function tick(){try{const d=await (await fetch('/api/estado')).json();
  const m=document.getElementById('modo');m.textContent=d.modo;m.className='tag '+(d.modo=='REAL'?'real':'teste');
+ {const bl=document.getElementById('btnliga');window._pausado=!!d.pausado;bl.textContent=d.pausado?'▶ Ligar robô':'⏸ Pausar robô';bl.style.background=d.pausado?'#1a7f37':'';}
  const pa=d.params;document.getElementById('params').textContent='janela ≥ '+P(pa.janela_min,1)+' · custo ≤ '+P(pa.custo_max,1)+'% · PS €'+P(pa.perna_ps_eur)+' · câmbio '+P(pa.cambio_brl_eur)+(pa.so_totais?' · só totais '+pa.totais_periodos.join('/'):'');
  {const pr=d.protecao;let ph='';
   if(pr&&pr.jogo){const seg=pr.ultima?Math.max(0,Math.round(Date.now()/1000-pr.ultima)):0;
@@ -7252,6 +7289,14 @@ def criar_painel(estado, operador, porta):
             if m4 and operador:
                 ok = operador.resolver(m4.group(1))
                 return self._env(200, '{"ok":%s}' % ("true" if ok else "false"))
+            if p in ("/api/pausar", "/api/ligar") and operador:
+                operador.pausar(p == "/api/pausar")
+                return self._env(200, '{"ok":true}')
+            if p == "/api/desligar":
+                log("⏻ desligar pedido pelo painel — fechando tudo")
+                self._env(200, '{"ok":true}')
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
             if p == "/api/limpar":
                 # 🧹 só a TELA: posições velhas (> 3 h) encerradas, backlog e escadinha limpos — nada nas casas
                 n = 0
@@ -7414,6 +7459,13 @@ def main(argv):
             estado.salvar_agora()
         except Exception:
             pass
+        for c in casas.values():   # 25/11: 'Desligar programa' fecha os navegadores do robô
+            try:
+                c.parar()
+            except Exception:
+                pass
+        time.sleep(3)
+        log("programa desligado")
 
 
 if __name__ == "__main__":

@@ -2664,3 +2664,45 @@ def test_posicao_de_quarto_encerrado_sai_do_painel(cfg):
     time.sleep(0.3)
     assert [f[0] for f in fechadas] == [1] and "2º Quarto encerrado" in fechadas[0][1]
     assert est.posicoes[1]["aberta"] and est.posicoes[2]["aberta"]
+
+
+def test_pausar_e_ligar_o_robo(cfg):
+    """25/11 (operador: 'coloca alguma coisa pra eu ligar e desligar'). Pausado: nenhum sinal começa (vai para a fila) e
+    o monitor não faz nada; ligado: a fila assume. A escolha fica salva."""
+    est = P.Estado(cfg)
+    op = P.Operador(dict(cfg), est, {})
+    comecou = []
+    op.pausar(True)
+    assert op.pausado and est.pausado
+    assert op.novo_sinal(dict(SINAL)) is False and [x["jogo"] for _, x in op._fila] == [SINAL["jogo"]]
+    original = P.Operador.novo_sinal
+    op.novo_sinal = lambda s, origem="sinal": comecou.append((s["jogo"], origem)) or True
+    op.pausar(False)
+    time.sleep(0.3)
+    assert not op.pausado and comecou == [(SINAL["jogo"], "fila")]
+    op2 = P.Operador(dict(cfg), P.Estado(cfg), {})
+    assert op2.pausado is False                      # salvo em preferencias (o último foi 'ligar')
+
+
+def test_painel_botoes_pausar_ligar_desligar(cfg):
+    est = P.Estado(cfg)
+    op = P.Operador(dict(cfg), est, {})
+    srv = P.criar_painel(est, op, 0)
+    porta = srv.server_address[1]
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        html = urllib.request.urlopen("http://127.0.0.1:%d/" % porta).read().decode()
+        assert "Pausar robô" in html and "Desligar programa" in html
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/pausar" % porta, method="POST"))
+        assert json.load(urllib.request.urlopen("http://127.0.0.1:%d/api/estado" % porta))["pausado"] is True
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/ligar" % porta, method="POST"))
+        assert json.load(urllib.request.urlopen("http://127.0.0.1:%d/api/estado" % porta))["pausado"] is False
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:%d/api/desligar" % porta, method="POST"))
+        th.join(5)
+        assert not th.is_alive()                      # o servidor parou (o programa termina)
+    finally:
+        try:
+            srv.shutdown()
+        except Exception:
+            pass
