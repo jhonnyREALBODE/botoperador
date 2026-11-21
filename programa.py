@@ -3811,6 +3811,7 @@ class Casa:
         None (INCERTO). Nunca 'aceita' só porque o cupom sumiu."""
         d = getattr(self, "_disp", None) or {}
         antes, saldo0, valor, talvez = d.get("antes"), d.get("saldo0"), d.get("valor", 0), d.get("talvez", False)
+        self._pend_antes_ultimo = antes   # a recuperação de perna solta confere se a aposta 'recusada' apareceu nas pendentes
         linhas0 = set(l.strip() for l in (d.get("texto_antes") or "").splitlines())
         novas, fotos_rapidas = [], 0
         viu_processando = False
@@ -3869,12 +3870,18 @@ class Casa:
             # recusa: só texto NOVO depois do clique (o 'Odds have changed 2.080 to 2.100' que já estava
             # no boletim antes do clique fez a PS ser dada como recusada em 2s — caso 15/11 15:21)
             m = _RX_RECUSA.search("\n".join(novas))
+            ok_enviado = getattr(self, "_ok_confirmar", False)
+            if m and ok_enviado and not re.search(r"rejected|declined|not accepted|recusada|rejeitada|n[aã]o aceita|unavailable|indispon",
+                                                  m.group(0), re.I):
+                # 21/11 14:18 (APOSTA DUPLICADA na PS): o OK de 'Confirmar Apostas' JÁ enviou a aposta; o 'Odds have changed'
+                # que apareceu junto NÃO é recusa. Depois do OK só vale recusa EXPLÍCITA, aceite ou apostas pendentes.
+                m = None
             if m:
                 # 21/11 13:24: 'Selection is currently unavailable.' depois do OK = a PS NÃO aceitou (recusa explícita)
                 explicita = re.search(r"rejected|declined|not accepted|recusada|rejeitada|n[aã]o aceita|unavailable|indispon",
                                       m.group(0), re.I)
                 # recusa EXPLÍCITA da casa ('Your bet has been rejected.') = nada apostado, já
-                if explicita or (time.time() - t_clique > 2 and self.itens_cupom()):
+                if explicita or (time.time() - t_clique > 4 and self.itens_cupom()):
                     # 'comprovada' = a casa DISSE que recusou ('rejected', 'recusada'...). Só ela autoriza tentar de novo.
                     # 20/11 08:26 (Hapoel x Ironi, print da PS): 'Odds have changed from 1.813 to 1.800' com a seleção
                     # AINDA no boletim e o botão esperando outro clique = a PS NÃO apostou. Também é recusa comprovada
@@ -3882,7 +3889,7 @@ class Casa:
                     mudou_odd = re.search(r"odds? (have |has )?changed|cota[cç](ao|oes) (mudou|mudaram)", m.group(0), re.I)
                     depois_p = self._pendentes()
                     sem_pendente = antes is None or depois_p is None or depois_p <= antes
-                    comp = bool(explicita) or bool(mudou_odd and self.itens_cupom() and sem_pendente)
+                    comp = bool(explicita) or bool(mudou_odd and self.itens_cupom() and sem_pendente and not ok_enviado)
                     return {"ok": False, "motivo": "a casa recusou: %s" % m.group(0), "foto": self._foto_falha("confirmar"),
                             "comprovada": comp}
         if novas:
@@ -5802,7 +5809,22 @@ class Operador:
             with _TRAVA:
                 bil["_orfa"] = {"aceita": aceita, "falta": falta}
             rf = final[falta]
-            if rf.get("nao_disparada") or rf.get("comprovada"):
+            cf = self.casas[falta]
+            pend0 = getattr(cf, "_pend_antes_ultimo", None) if not rf.get("nao_disparada") else None
+            if pend0 is not None and hasattr(cf, "_pendentes"):
+                # 21/11 14:18 (APOSTA DUPLICADA): antes de recolocar, espera e confere se a aposta 'recusada' entrou mesmo
+                time.sleep(3)
+                try:
+                    pend1 = cf.executar(cf._pendentes, timeout=15)
+                except Exception:
+                    pend1 = None
+                if pend1 is not None and pend1 > pend0:
+                    log("‼ %s: a aposta dada como recusada APARECEU nas apostas pendentes (%d -> %d) — ela ENTROU; NÃO recoloco"
+                        % (NOME_CASA[falta], pend0, pend1))
+                    rf = final[falta] = {"ok": True, "motivo": "apareceu nas apostas pendentes", "foto": ""}
+            if rf.get("ok") is True:
+                rec, mot = "confirmada", ""
+            elif rf.get("nao_disparada") or rf.get("comprovada"):
                 rec, mot = self._recuperar_orfa(bil, falta, carteira)
             else:
                 # processando / sem ID / cupom sumiu / ambíguo: pode ter entrado — repetir seria aposta DUPLICADA
@@ -5982,7 +6004,20 @@ class Operador:
         acc = dict(pa, odd=pa.get("odd_aceita") or pa.get("odd_viva") or pa["odd"])
         tentadas = set()
         motivo = ""
+        try:
+            pend_base = c.executar(c._pendentes, timeout=15) if hasattr(c, "_pendentes") else None
+        except Exception:
+            pend_base = None
         for i in range(1, n_max + 1):
+            if i > 1 and pend_base is not None:
+                # 21/11 14:18: uma tentativa dada como recusada pode ter ENTRADO — se as pendentes subiram, PARA (nunca dobra)
+                try:
+                    pend_i = c.executar(c._pendentes, timeout=15)
+                except Exception:
+                    pend_i = None
+                if pend_i is not None and pend_i > pend_base:
+                    return "incerto", ("as apostas pendentes da %s subiram (%d -> %d) depois de uma tentativa dada como "
+                                       "recusada — pode ter entrado; NÃO tento de novo" % (NOME_CASA[falta], pend_base, pend_i))
             nova, mot = self._candidato_orfa(bil, falta, acc, carteira, tentadas)
             if not nova:
                 mot = "; ".join(x for x in (motivo, mot) if x)

@@ -59,7 +59,17 @@ document.getElementById('apostar').onclick = () => {
     const m = document.createElement('div'); m.className = 'modal';
     m.innerHTML = '<h3>Confirmar Apostas</h3><p>Tem certeza de que deseja arriscar 5.00 EUR para ganhar 5.50 EUR?</p><button id="okc">OK</button> <button id="canc2">CANCELAR</button>';
     document.body.appendChild(m);
-    m.querySelector('#okc').onclick = () => { m.remove(); sessionStorage.aceitas = (+sessionStorage.aceitas || 0) + 1; document.getElementById('msg').textContent = 'Aposta aceita #3846942995'; };
+    if (ESTADO.aviso_no_modal) {  // 21/11 14:18: 'Odds have changed' aparece JUNTO do 'Confirmar Apostas'; o OK ENVIA a aposta
+      const av = document.createElement('div'); av.className = 'odds-changed'; av.textContent = 'Odds have changed from 1.800 to 1.862';
+      document.getElementById('sels').prepend(av);
+    }
+    m.querySelector('#okc').onclick = () => { m.remove();
+      if (ESTADO.aviso_no_modal) {
+        document.getElementById('msg').textContent = 'Aguarde enquanto a sua aposta está sendo processada. O Status da aposta mudará de Aguardando para Pendente assim que for aceita.';
+        setTimeout(() => { sessionStorage.aceitas = (+sessionStorage.aceitas || 0) + 1; document.getElementById('msg').textContent = 'Aposta aceita #3851'; }, 3000);
+        return;
+      }
+      sessionStorage.aceitas = (+sessionStorage.aceitas || 0) + 1; document.getElementById('msg').textContent = 'Aposta aceita #3846942995'; };
     m.querySelector('#canc2').onclick = () => m.remove();
     return;
   }

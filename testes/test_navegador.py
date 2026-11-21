@@ -1481,3 +1481,27 @@ def test_ps_marca_aceitar_melhores_probabilidades(casas, cfgc):
     assert cps.executar(lambda: cps.page.evaluate("() => document.getElementById('melhores').checked")) is True
     assert any("Aceitar melhores probabilidades" in l for l in P._LOG_MEM[-10:])
     limpar_cupons(casas)
+
+
+def test_odds_changed_junto_do_confirmar_nao_duplica_a_aposta(casas, cfgc):
+    """21/11 14:18 (APOSTA DUPLICADA): a PS mostrou 'Odds have changed' junto da janela 'Confirmar Apostas'; o OK ENVIOU a
+    aposta e o programa leu o aviso como recusa -> 'cobriu' de novo (5 na PS, 4 na 1aWin). Agora: 1 aposta em cada casa."""
+    cfgc["modo_teste"] = False
+    cfgc["confirmacao"] = "sequencial_aceita"
+    servidor.ESTADO.update(modal_confirmar=True, aviso_no_modal=True)
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    est = P.Estado(cfgc)
+    est.registrar_bilhete(bil, "sinal")
+    try:
+        st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+        a = [c.executar(lambda c=c: c.page.evaluate("() => +sessionStorage.aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
+        assert st == "confirmado" and a == [1, 1], (st, a, bil["detalhe"], "\n".join(P._LOG_MEM[-20:]))
+    finally:
+        servidor.ESTADO.clear()
+        for c in casas.values():
+            recarregar(c)
+        limpar_cupons(casas)
