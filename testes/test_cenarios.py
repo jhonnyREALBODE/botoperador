@@ -95,7 +95,10 @@ def _ps_some(cps, bil):
 # (nome, flags, mudança na PS logo depois da 1aWin aceita, cfg extra, (status, aceitas 1aWin, aceitas PS), linha final da PS)
 CASOS_ACEITA = [
     ("PS: linha some -> cobertura alternativa", {}, _ps_some, {}, ("confirmado", 1, 1), 212.5),
-    ("PS: odd cai abaixo de 1,78 -> perna órfã", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.700"), {},
+    # 24/11: odd entre 1,50 e 1,78 -> a PROTEÇÃO cobre (e agora monta: piso da proteção, 21/11 13:29)
+    ("PS: odd cai para 1,70 -> proteção cobre", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.700"), {},
+     ("confirmado", 1, 1), None),
+    ("PS: odd cai para 1,40 -> perna órfã", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.400"), {},
      ("exposto", 1, 0), None),
     # 24/11: a REGRA DE PROTEÇÃO cobre (odd ≥ 1,50, reduz o pior caso, ≤ R$ 100) — a perna não fica solta
     ("PS: custo passa da tabela -> proteção cobre", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.790"),

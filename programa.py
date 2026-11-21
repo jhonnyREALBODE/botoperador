@@ -2224,7 +2224,7 @@ _RX_SUCESSO = re.compile(r"aposta (aceita|feita|realizada|registrada|confirmada|
                          r"bet (accepted|placed)|sua aposta foi|successfully placed|aceit[ao] com sucesso", re.I)
 _RX_RECUSA = re.compile(r"aposta (foi )?(recusada|rejeitada|n[aã]o aceita)|bet (has been |was )?(rejected|declined|not accepted)|saldo insuficiente|"
                         r"insufficient (funds|balance)|odds? (have |has )?changed|cota[cç](ao|oes) (mudou|mudaram)|"
-                        r"sele[cç][aã]o indispon|limite excedido|max(imum)? stake", re.I)
+                        r"sele[cç][aã]o indispon|selection (is )?(currently )?unavailable|limite excedido|max(imum)? stake", re.I)
 
 
 def ps_confrontos(texto):
@@ -3230,6 +3230,10 @@ class Casa:
     def _piso_odd(self, perna):
         """Até onde a odd pode CAIR no cupom e ainda valer. Operador 18/11: 'até 1.78 pode pegar' (odd_min).
         Sem odd_min no config: a regra antiga (cai no máximo 0,05)."""
+        if perna.get("_protecao"):
+            # 21/11 13:29 (Keila x Latvijas): a PROTEÇÃO achou Under 36,5 @1,653 e a própria montagem recusava pelo piso de
+            # ENTRADA (1,78). Perna de proteção usa o piso da proteção (orfa_odd_min, 1,50).
+            return float(self.cfg.get("orfa_odd_min", 1.50))
         om = self.cfg.get("odd_min")
         if om:
             return float(om)
@@ -3866,7 +3870,9 @@ class Casa:
             # no boletim antes do clique fez a PS ser dada como recusada em 2s — caso 15/11 15:21)
             m = _RX_RECUSA.search("\n".join(novas))
             if m:
-                explicita = re.search(r"rejected|declined|not accepted|recusada|rejeitada|n[aã]o aceita", m.group(0), re.I)
+                # 21/11 13:24: 'Selection is currently unavailable.' depois do OK = a PS NÃO aceitou (recusa explícita)
+                explicita = re.search(r"rejected|declined|not accepted|recusada|rejeitada|n[aã]o aceita|unavailable|indispon",
+                                      m.group(0), re.I)
                 # recusa EXPLÍCITA da casa ('Your bet has been rejected.') = nada apostado, já
                 if explicita or (time.time() - t_clique > 2 and self.itens_cupom()):
                     # 'comprovada' = a casa DISSE que recusou ('rejected', 'recusada'...). Só ela autoriza tentar de novo.

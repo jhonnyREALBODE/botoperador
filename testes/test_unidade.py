@@ -2387,3 +2387,18 @@ def test_r22a_2b_odd_entre_1_50_e_1_78_protege_pela_regra_de_protecao(cfg):
     assert _rodar(op, est, bil) == "confirmado", bil.get("detalhe")
     assert any("regra de PROTEÇÃO" in l for l in P._LOG_MEM[-20:])
     _sem_repetir_1awin(casas)
+
+
+
+def test_perna_de_protecao_usa_o_piso_da_protecao(cfg):
+    """21/11 13:29 (Keila x Latvijas): a proteção escolheu Under 36,5 @1,653 e a montagem recusava pelo piso 1,78."""
+    c = P.Casa(P.CASA_PS, dict(cfg, odd_min=1.78, orfa_odd_min=1.50), base_url="http://x")
+    perna = {"odd": 1.653, "linha": 36.5}
+    assert c._piso_odd(perna) == 1.78
+    assert c._piso_odd(dict(perna, _protecao=True)) == 1.50
+
+
+
+def test_ps_selection_unavailable_e_recusa():
+    """21/11 13:24 (Keila x Latvijas): 'Atenção | Selection is currently unavailable.' depois do OK virou INCERTO."""
+    assert P._RX_RECUSA.search("Atenção\nSelection is currently unavailable.")
