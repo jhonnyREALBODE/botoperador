@@ -4872,6 +4872,7 @@ class Operador:
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
         orfa_ret = None
+        sem_per = [0]   # rodadas seguidas sem nenhuma linha do período da perna solta (período encerrado)
         if origem == "perna_solta" and getattr(self, "_solta_pendente", None):
             orfa_ret, self._solta_pendente = self._solta_pendente, None
         if origem in ("retomada", "perna_solta") and self._retomar:
@@ -5024,7 +5025,29 @@ class Operador:
                     continue
                 if orfa_ret is not None:
                     bo, falta = orfa_ret
-                    if not lt.get(falta, {}).get("ofertas"):
+                    per_o = bo["pernas"][0].get("periodo", "jogo")
+                    tem_per = any(o.get("periodo") == per_o for o in (lt.get(falta, {}).get("ofertas") or []))
+                    sem_per[0] = 0 if tem_per else sem_per[0] + 1
+                    if sem_per[0] >= int(self.cfg.get("orfa_rodadas_sem_periodo", 12)):
+                        # 24/11 (Keila 2º quarto): o PERÍODO da perna solta acabou — não existe mais linha para cobrir. Ficava
+                        # 'procurando cobertura' para sempre e segurava a fila. Desiste, registra e libera.
+                        msg = "a %s não tem mais linhas do %s (período encerrado) — a perna %s ficou SEM cobertura" % (
+                            NOME_CASA[falta], NOME_PERIODO.get(per_o, per_o), bo["pernas"][0 if falta == CASA_PS else 1]["selecao"])
+                        log("■ %s: %s" % (sinal["jogo"], msg))
+                        with _TRAVA:
+                            bo.setdefault("avisos", []).append("‼ " + msg)
+                        self.estado.salvar()
+                        orfa_ret = None
+                        sem_per[0] = 0
+                        if self._prot:
+                            self._prot.pop("perna_solta", None)
+                            self._publicar_protecao()
+                        if self._fila:
+                            self._motivo_lib = "perna solta sem cobertura possível (período encerrado)"
+                            return   # o sinal que esperava na fila assume (o fim do monitor puxa a fila)
+                        cancel.wait(self.cfg["monitor_intervalo_s"])
+                        continue
+                    if not tem_per:
                         cancel.wait(self.cfg["monitor_intervalo_s"])
                         continue
                     with _TRAVA_CLIQUES:
