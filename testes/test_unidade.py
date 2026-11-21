@@ -2336,3 +2336,23 @@ def test_operador_confirma_as_duas_pernas_fora_do_bloqueio(cfg):
     bil["_orfa"] = {"aceita": P.CASA_1W, "falta": P.CASA_PS}
     assert op.concluir_bilhete(bil["id"])
     assert bil["status"] == "confirmado" and "_orfa" not in bil and op._orfa_concluida == bil["id"]
+
+
+def test_portao_sem_linha_da_ultima_entrada_vale_so_o_tempo(cfg):
+    """24/11 (print 'na última entrada: ?'): sem a linha da última entrada o portão nunca abria."""
+    c = dict(cfg, reentrada_espera_min_s=60, min_movimento_linha=0.5)
+    assert not P.portao_reentrada(1000.0, None, 1030.0, 148.0, c)[0]     # ainda no intervalo mínimo
+    assert P.portao_reentrada(1000.0, None, 1070.0, 148.0, c)[0]         # passou o tempo: libera
+
+
+def test_as_duas_entraram_conta_o_par_na_protecao(cfg):
+    est = P.Estado(cfg)
+    op = P.Operador(dict(cfg, modo_teste=False), est, {})
+    bil = {"jogo": SINAL["jogo"], "times": TIMES, "pernas": [
+        {"casa": P.CASA_1W, "selecao": "a", "lado": "abaixo", "linha": 145.5, "odd": 1.87, "stake": 30, "tipo": "total", "periodo": "jogo"},
+        {"casa": P.CASA_PS, "selecao": "b", "lado": "acima", "linha": 144.0, "odd": 1.854, "stake": 31, "tipo": "total", "periodo": "jogo"}]}
+    est.registrar_bilhete(bil, "sinal")
+    op._prot = {"jogo": SINAL["jogo"], "pares": 0, "max": 4, "ultima": time.time(), "sinal": dict(SINAL), "bilhetes": [],
+                "perna_solta": True}
+    assert op.concluir_bilhete(bil["id"])
+    assert op._prot["pares"] == 1 and "perna_solta" not in op._prot and est.protecao["pares"] == 1

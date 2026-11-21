@@ -1375,7 +1375,11 @@ def portao_reentrada(ultima_t, ultima_ml, agora, ml, cfg):
     if agora - ultima_t < espera - 1e-9:
         return False, "intervalo mínimo ainda não terminou (%.0fs de %.0fs)" % (agora - ultima_t, espera)
     mov = float(cfg.get("min_movimento_linha", cfg.get("reentrada_movimento_min", 0.5)))
-    if ml is None or ultima_ml is None or abs(ml - ultima_ml) < mov - 1e-9:
+    if ultima_ml is None:
+        # 24/11 (print 'na última entrada: ?'): sem a linha da última entrada (par confirmado pelo operador / retomado)
+        # o portão nunca abria. Sem referência, vale só o intervalo mínimo; a próxima entrada já grava a linha.
+        return True, ""
+    if ml is None or abs(ml - ultima_ml) < mov - 1e-9:
         return False, "linha não se movimentou o mínimo configurado (%s → %s; mínimo %s)" % (
             _fmt_linha(ultima_ml) if ultima_ml is not None else "?", _fmt_linha(ml) if ml is not None else "?", _br(mov, 1))
     return True, ""
@@ -4601,6 +4605,14 @@ class Operador:
         self._orfa_concluida = bil.get("id")
         if self.bloqueio and str(self.bloqueio.get("bilhete")) == str(bil.get("id")):
             return self.resolver("concluido")
+        if self._prot and _mesmo_jogo((self._prot.get("sinal") or {}).get("times") or bil.get("times") or ["", ""],
+                                      bil.get("times") or ["", ""]):
+            bl = list(self._prot.get("bilhetes") or [])
+            if bil.get("id") not in bl:
+                bl.append(bil.get("id"))
+            self._prot.update(bilhetes=bl, pares=len(bl), ultima=time.time())
+            self._prot.pop("perna_solta", None)
+            self._publicar_protecao()
         log("✔ operador: as duas pernas do bilhete #%s entraram (%s) — par confirmado na carteira" % (bil.get("id"), bil.get("jogo")))
         return True
 
@@ -4801,6 +4813,20 @@ class Operador:
             self._prot.setdefault("jogo", sinal["jogo"])
             self._prot.setdefault("sinal", sinal)
             self._prot.setdefault("ultima", time.time())
+            if orfa_ret is None and r.get("perna_solta"):
+                # reiniciou no meio de uma perna solta: acha o bilhete exposto deste jogo e volta a cobrir
+                bx = next((b for b in reversed(self.estado.bilhetes) if b.get("status") == "exposto"
+                           and _mesmo_jogo(b.get("times") or ["", ""], times)), None)
+                if bx:
+                    det = bx.get("detalhe") or {}
+                    falta = (bx.get("_orfa") or {}).get("falta") or next(
+                        (n for n in (CASA_1W, CASA_PS) if not str(det.get(NOME_CASA[n], "")).startswith("confirmada")), None)
+                    if falta:
+                        orfa_ret = (bx, falta)
+                        log("↻ %s: retomo a cobertura da perna solta (bilhete #%s, falta a %s)" % (
+                            sinal["jogo"], bx.get("id"), NOME_CASA[falta]))
+                else:
+                    self._prot.pop("perna_solta", None)
             if orfa_ret is not None:
                 self._prot["perna_solta"] = True
             self._retomar = None
@@ -4897,8 +4923,14 @@ class Operador:
                         return
                     cancel.wait(self.cfg["monitor_intervalo_s"])
                     continue
-                if orfa_ret is not None and getattr(self, "_orfa_concluida", None) == orfa_ret[0].get("id"):
-                    bo = orfa_ret[0]
+                bconc = None
+                if getattr(self, "_orfa_concluida", None) is not None and (orfa_ret is None or
+                                                                         self._orfa_concluida != orfa_ret[0].get("id")):
+                    bconc = next((b for b in self.estado.bilhetes if b.get("id") == self._orfa_concluida), None)
+                    if bconc is not None and not _mesmo_jogo(bconc.get("times") or ["", ""], times):
+                        bconc = None
+                if bconc is not None or (orfa_ret is not None and getattr(self, "_orfa_concluida", None) == orfa_ret[0].get("id")):
+                    bo = bconc if bconc is not None else orfa_ret[0]
                     self._orfa_concluida = None
                     orfa_ret = None
                     if bo.get("id") not in entradas:
@@ -4911,10 +4943,8 @@ class Operador:
                     self._publicar_protecao()
                     log("✔ %s: o operador confirmou as duas pernas — paro de procurar cobertura e sigo com escadinha/âncora" % sinal["jogo"])
                     if self._fila:
-                        # sinal que esperou a perna solta: ele ASSUME agora (é o pedido do operador para trocar de jogo)
-                        log("▶ a perna solta foi resolvida — o sinal que esperava na fila assume")
-                        self._puxar_fila()
-                        return
+                        # 24/11 (operador): 'quero bater os 4 pares deste jogo e depois ir pro Chicago' — a fila ESPERA
+                        log("📥 sinal(is) na fila esperam este jogo terminar (4 pares ou mercado fechado)")
                     cancel.wait(self.cfg["monitor_intervalo_s"])
                     continue
                 if orfa_ret is not None:
@@ -4946,9 +4976,7 @@ class Operador:
                             sinal["jogo"], bo["pernas"][0]["selecao"], bo["pernas"][1]["selecao"]))
                         self.estado.set_monitor("%s: perna coberta — procurando reentrada" % sinal["jogo"])
                         if self._fila:
-                            log("▶ a perna solta foi coberta — o sinal que esperava na fila assume")
-                            self._puxar_fila()
-                            return
+                            log("📥 sinal(is) na fila esperam este jogo terminar (4 pares ou mercado fechado)")
                         cancel.wait(self.cfg["monitor_intervalo_s"])
                         continue
                     if rec == "incerto":
@@ -6488,7 +6516,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  {const pr=d.protecao;let ph='';
   if(pr&&pr.jogo){const seg=pr.ultima?Math.max(0,Math.round(Date.now()/1000-pr.ultima)):0;
    ph='<div style="margin-top:4px">🛡️ <b>Jogo protegido:</b> '+esc(pr.jogo)+' · pares confirmados: <b>'+pr.pares+'/'+pr.max+'</b> · última entrada confirmada há <b>'+Math.floor(seg/60)+'m'+String(seg%60).padStart(2,'0')+'s</b> (encerra só com outro sinal, 4 pares ou mercado fechado)</div>';}
-  if(pr&&pr.fila&&pr.fila.length)ph+='<div>📥 <b>Sinais na fila ('+pr.fila.length+'):</b> '+pr.fila.map(f=>esc(f.jogo)+' <span class="mut">('+f.chegou+')</span>').join(' · ')+'</div>';
+  if(pr&&pr.fila&&pr.fila.length)ph+='<div>📥 <b>Sinais na fila ('+pr.fila.length+'):</b> '+pr.fila.map(f=>esc(f.jogo)+' <span class="mut">('+f.chegou+')</span>').join(' · ')+' <button onclick="if(confirm(\'Descartar os sinais da fila e ficar no jogo atual?\'))post(\'/api/fila/limpar\')">Descartar fila</button></div>';
   if(pr&&pr.liberado)ph+='<div class="mut">🔓 último: '+esc(pr.liberado)+'</div>';
   if(pr&&pr.alerta)ph+='<div class="no"><b>'+esc(pr.alerta)+'</b></div>';
   const bq=pr&&pr.bloqueio;
@@ -6602,6 +6630,12 @@ def criar_painel(estado, operador, porta):
                     pass
                 log("📌 cobertura pós-entrada: %s (pelo painel — fica assim também quando o programa reabrir)" % {
                     "auto": "AUTOMÁTICA", "manual": "MANUAL", "off": "DESLIGADA"}[modo])
+                return self._env(200, '{"ok":true}')
+            if p == "/api/fila/limpar" and operador:
+                n = len(operador._fila)
+                operador._fila = []
+                operador._publicar_protecao()
+                log("🗑 fila descartada pelo operador (%d sinal(is)) — sigo no jogo atual" % n)
                 return self._env(200, '{"ok":true}')
             m6 = re.match(r"^/api/concluir/(\w+)$", p)
             if m6 and operador:
