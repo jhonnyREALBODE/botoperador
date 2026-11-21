@@ -150,6 +150,7 @@ DEFAULTS = {
     "max_substituicoes_tentativa": 1,  # trocas de perna (âncora/escadinha) dentro de UMA tentativa
     "max_tentativas_por_minuto": 6,    # tentativas de montagem no MESMO jogo por minuto
     "orfa_tentativas": 2,              # PERNA_ORFA: quantas vezes tenta colocar a perna que faltou (mesmas regras)
+    "cobrir_orfa_automatico": True,    # 24/11: sem cobertura nas tentativas -> segue no jogo tentando a cada rodada (não bloqueia)
 
     "odd_min": 1.78,                  # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
@@ -5081,6 +5082,25 @@ class Operador:
                             self.estado.salvar()
                             log("‼ %s: PERNA ÓRFÃ — ACEITA %s na %s; falhou %s na %s. Novas entradas CONGELADAS" % (
                                 sinal["jogo"], pa["selecao"], NOME_CASA[orfa["aceita"]], pf["selecao"], NOME_CASA[orfa["falta"]]))
+                        if st == "exposto" and self.cfg.get("cobrir_orfa_automatico", True):
+                            # 24/11 (operador): 'só foi em 1 casa, já pega e corrige automático'. Uma casa ACEITOU e a outra
+                            # RECUSOU (comprovado): em vez de bloquear e esperar o painel, segue no jogo e tenta cobrir a
+                            # perna a CADA rodada (mesmas regras), igual ao botão 'Só a X entrou'. INCERTO continua bloqueando.
+                            orfa_ret = (bil, orfa["falta"])
+                            if not self._prot or self._prot.get("jogo") != sinal["jogo"]:
+                                self._prot = {"jogo": sinal["jogo"], "pares": len(entradas),
+                                              "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
+                                              "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas),
+                                              "linha_ultima": ultima[1]}
+                            self._prot["ultima"] = time.time()
+                            self._publicar_protecao()
+                            log("🧩 %s: só a %s entrou (%s) — sigo no jogo e tento COBRIR a perna na %s a cada rodada, "
+                                "sozinho (sinais novos ficam na fila)" % (sinal["jogo"], NOME_CASA[orfa["aceita"]], pa["selecao"],
+                                                                         NOME_CASA[orfa["falta"]]))
+                            self.estado.set_monitor("%s: PERNA SOLTA — procurando cobertura na %s" % (
+                                sinal["jogo"], NOME_CASA[orfa["falta"]]))
+                            cancel.wait(self.cfg["monitor_intervalo_s"])
+                            continue
                         if st == "exposto" and orfa["aceita"] == CASA_1W and self.cfg.get("cobrir_perna_solta", True):
                             # 18/11, operador: 'sempre buscar pares para cobrir' — a 1aWin entrou e a PS não: NÃO para;
                             # a cada rodada procura na PS uma linha do lado oposto que forme par com a perna solta

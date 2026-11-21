@@ -1007,6 +1007,7 @@ def test_perna_solta_procura_o_par_na_ps(casas, cfgc):
     # 22/11: a PS recusa 2x (a 1ª + 1 recuperação, ambas COMPROVADAS por texto novo): 1 tentativa só, porque a 2ª recusa
     # numa linha nova repetiria o MESMO texto na tela -> sem prova nova -> INCERTO (comportamento seguro, outro teste)
     cfgc["orfa_tentativas"] = 1
+    cfgc["cobrir_orfa_automatico"] = False   # mecânica antiga da perna solta (a automática tem teste próprio)
     servidor.ESTADO["rejeita_ps"] = 2
     ir_jogo(casas)
     for c in casas.values():
@@ -1104,6 +1105,7 @@ def test_incompleto_bloqueia_tudo_e_a_fila_nao_anda(casas, cfgc):
     cfgc["modo_teste"] = False
     cfgc["monitor_intervalo_s"] = 0.5
     cfgc["orfa_tentativas"] = 1   # 22/11: 1 recuperação com recusa comprovada -> INCOMPLETO (ver test_perna_solta…)
+    cfgc["cobrir_orfa_automatico"] = False   # aqui o teste é do BLOQUEIO (a cobertura automática tem teste próprio)
     servidor.ESTADO["rejeita_ps"] = 3
     ir_jogo(casas)
     for c in casas.values():
@@ -1417,3 +1419,33 @@ def test_botao_desabilitado_clique_nao_saiu_nao_e_incerto(casas, cfgc, monkeypat
     for c in casas.values():
         recarregar(c)
     limpar_cupons(casas)
+
+
+def test_so_uma_casa_entrou_cobre_sozinho_sem_bloquear(casas, cfgc):
+    """24/11 (operador): 'só foi em 1 casa, já pega e faz a correção automático'. A PS recusa (comprovado) 2x: a entrada e
+    a recuperação imediata falham; o programa NÃO bloqueia — segue no jogo e cobre a perna sozinho na rodada seguinte."""
+    cfgc["modo_teste"] = False
+    cfgc["monitor_intervalo_s"] = 0.5
+    cfgc["reentrar_mesmo_jogo"] = True
+    cfgc["orfa_tentativas"] = 1
+    servidor.ESTADO["rejeita_ps"] = 2
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    est = P.Estado(cfgc)
+    op = P.Operador(cfgc, est, casas)
+    try:
+        op.novo_sinal(dict(SINAL, id="auto-orfa"))
+        assert esperar(lambda: any("tento COBRIR a perna" in l for l in P._LOG_MEM[-80:]), 120), "\n".join(P._LOG_MEM[-30:])
+        assert op.bloqueio is None
+        assert esperar(lambda: any("perna solta COBERTA" in l for l in P._LOG_MEM[-80:]), 90), "\n".join(P._LOG_MEM[-30:])
+        assert op.bloqueio is None and op._prot and op._prot.get("pares") == 1
+    finally:
+        if op._atual:
+            op._atual[1].set()
+        time.sleep(1.5)
+        servidor.ESTADO.clear()
+        for c in casas.values():
+            recarregar(c)
+        limpar_cupons(casas)
