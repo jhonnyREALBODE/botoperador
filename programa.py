@@ -151,9 +151,9 @@ DEFAULTS = {
     "max_tentativas_por_minuto": 6,    # tentativas de montagem no MESMO jogo por minuto
     "orfa_tentativas": 2,              # PERNA_ORFA: quantas vezes tenta colocar a perna que faltou (mesmas regras)
     "cobrir_orfa_automatico": True,
-    "orfa_odd_min": 1.50,              # 24/11: PROTEÇÃO de perna solta: odd mínima própria (a entrada nova segue 1,78)    # 24/11: sem cobertura nas tentativas -> segue no jogo tentando a cada rodada (não bloqueia)
+    "orfa_odd_min": 1.75,              # 24/11: PROTEÇÃO de perna solta: mesma faixa (1,75–1,85), preferindo a odd mais alta    # 24/11: sem cobertura nas tentativas -> segue no jogo tentando a cada rodada (não bloqueia)
 
-    "odd_min": 1.78,                  # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
+    "odd_min": 1.75,  # 24/11 (operador): faixa 1,75–1,85, sempre a odd mais alta (era 1,78)                  # nenhuma perna abaixo disso (operador 17/11: 'sempre o mínimo 1.78/1.79')
     "odd_fantasma_margem": 0.15,       # odd da 1aWin > justo(PS) × 1,15 = tela velha, não entra (null desliga)
     "perda_max_por_jogo_brl": 100.0,   # pior caso da CARTEIRA inteira do jogo (operador 16/11: R$ 100)
     "pausa_ps_indisponivel_s": 45,
@@ -1325,7 +1325,7 @@ def validar_protecao(acc, nova, carteira, cfg):
     """24/11 (Chicago 23:36): PROTEÇÃO de perna solta não é entrada nova — o objetivo é REDUZIR o prejuízo. Aceita a
     cobertura se: odd ≥ orfa_odd_min (1,50); janela ≥ janela_min; o pior caso da carteira COM a cobertura é MELHOR que
     sem ela; e não passa da perda máxima (R$ 100). Devolve (ok, motivo, pior_com)."""
-    om = float(cfg.get("orfa_odd_min", 1.50))
+    om = float(cfg.get("orfa_odd_min", 1.75))
     if nova["odd"] < om - 1e-9:
         return False, "proteção: odd %s abaixo de %s" % (_br(nova["odd"]), _br(om)), None
     ov, un = (acc, nova) if acc["lado"] == "acima" else (nova, acc)
@@ -3233,7 +3233,7 @@ class Casa:
         if perna.get("_protecao"):
             # 21/11 13:29 (Keila x Latvijas): a PROTEÇÃO achou Under 36,5 @1,653 e a própria montagem recusava pelo piso de
             # ENTRADA (1,78). Perna de proteção usa o piso da proteção (orfa_odd_min, 1,50).
-            return float(self.cfg.get("orfa_odd_min", 1.50))
+            return float(self.cfg.get("orfa_odd_min", 1.75))
         om = self.cfg.get("odd_min")
         if om:
             return float(om)
@@ -5876,7 +5876,7 @@ class Operador:
                 motivo = mot
                 okp, motp, pior_p = validar_protecao(acc, nova, carteira, self.cfg)
                 if okp:
-                    nota = (0, pior_p, jan)   # proteção: só se nenhuma passar nas regras normais; menor perda, maior janela
+                    nota = (0, nova["odd"], pior_p, jan)   # proteção: odd MAIS ALTA primeiro (operador 24/11), depois menor perda
                     if melhor_p is None or nota > melhor_p[0]:
                         melhor_p = (nota, nova, mesma, jan)
                 else:
@@ -5896,7 +5896,7 @@ class Operador:
         nova["_protecao"] = protecao
         if protecao:
             log("🛡 PERNA_ORFA: nenhuma linha cabe nas regras de entrada; uso a regra de PROTEÇÃO (reduz o pior caso para "
-                "R$ %s, odd ≥ %s): %s @%s" % (_br(melhor[0][1]), _br(float(self.cfg.get("orfa_odd_min", 1.5))),
+                "R$ %s, odd ≥ %s): %s @%s" % (_br(melhor[0][2]), _br(float(self.cfg.get("orfa_odd_min", 1.75))),
                                               nova["selecao"], nova["odd"]))
         return nova, ""
 

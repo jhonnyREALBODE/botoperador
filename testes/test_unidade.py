@@ -1152,7 +1152,7 @@ def test_reentrada_custo_ate_10_preferindo_4(cfg):
 
 def test_odd_minima_1_78(cfg):
     """Operador 17/11: odds sempre no mínimo 1.78/1.79 — nenhuma perna abaixo (par, reentrada ou avulsa)."""
-    assert P.DEFAULTS["odd_min"] == 1.78
+    assert P.DEFAULTS["odd_min"] == 1.75   # 24/11 (operador): faixa 1,75–1,85
     c = dict(cfg, odd_min=1.78)
     a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 1.77)
     b = oferta("ps3838", "total", "jogo", "acima", 211.5, 2.30)
@@ -1623,7 +1623,7 @@ def test_r21_invalido_continua_recusado_com_motivo_real(cfg):
 def test_r21_nenhuma_regra_financeira_afrouxada():
     d = P.DEFAULTS
     assert d["custo_por_janela"] == [[1, 2, 9.0], [2, 3, 10.0], [3, 7, 11.0], [7, 11, 12.0]]   # tabela D: ordem do operador 24/11
-    assert d["odd_min"] == 1.78 and d["perda_max_por_jogo_brl"] == 100.0 and d["janela_min"] == 1.0
+    assert d["odd_min"] == 1.75 and d["perda_max_por_jogo_brl"] == 100.0 and d["janela_min"] == 1.0
     assert d["max_entradas_por_jogo"] == 4
     # reentrada usa a MESMA tabela por janela (não há mais teto fixo de 16% aplicado)
     import inspect
@@ -2119,7 +2119,7 @@ def test_r22_reconciliacao_classifica(cfg):
 
 def test_r22_nenhuma_regra_financeira_afrouxada(cfg):
     d = P.DEFAULTS
-    assert d["odd_min"] == 1.78 and d["custo_max"] == 12.0 and d["perda_max_por_jogo_brl"] == 100.0
+    assert d["odd_min"] == 1.75 and d["custo_max"] == 12.0 and d["perda_max_por_jogo_brl"] == 100.0
     assert d["custo_por_janela"] == [[1, 2, 9.0], [2, 3, 10.0], [3, 7, 11.0], [7, 11, 12.0]]   # tabela D (operador 24/11, 2ª vez)
     c = dict(cfg, odd_min=1.78)
     bil = _bucks(c)
@@ -2378,11 +2378,11 @@ def test_protecao_de_perna_solta_reduz_o_prejuizo(cfg):
 
 
 
-def test_r22a_2b_odd_entre_1_50_e_1_78_protege_pela_regra_de_protecao(cfg):
-    """A PS caiu para 1,70 (abaixo de 1,78) com a 1aWin já aceita: a ENTRADA não aceita, mas a PROTEÇÃO sim (reduz o pior
-    caso) — a perna não fica solta."""
-    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"odds_lidas": [1.99, 1.70, 1.70], "recuperacao": True,
-                                                "escada": [_of("abaixo", 233.5, 1.70, P.CASA_PS)]})
+def test_r22a_2b_odd_entre_1_75_e_1_78_protege_pela_regra_de_protecao(cfg):
+    """A PS caiu para 1,76 (abaixo do 1,78 deste teste) com a 1aWin já aceita: a ENTRADA não aceita, mas a PROTEÇÃO sim
+    (piso da proteção 1,75; reduz o pior caso) — a perna não fica solta."""
+    op, casas, est, cfg2 = _op_aceita(cfg, {}, {"odds_lidas": [1.99, 1.76, 1.76], "recuperacao": True,
+                                                "escada": [_of("abaixo", 233.5, 1.76, P.CASA_PS)]})
     bil = _bucks(cfg2)
     assert _rodar(op, est, bil) == "confirmado", bil.get("detalhe")
     assert any("regra de PROTEÇÃO" in l for l in P._LOG_MEM[-20:])
@@ -2392,7 +2392,7 @@ def test_r22a_2b_odd_entre_1_50_e_1_78_protege_pela_regra_de_protecao(cfg):
 
 def test_perna_de_protecao_usa_o_piso_da_protecao(cfg):
     """21/11 13:29 (Keila x Latvijas): a proteção escolheu Under 36,5 @1,653 e a montagem recusava pelo piso 1,78."""
-    c = P.Casa(P.CASA_PS, dict(cfg, odd_min=1.78, orfa_odd_min=1.50), base_url="http://x")
+    c = P.Casa(P.CASA_PS, dict(cfg, odd_min=1.78, orfa_odd_min=1.50), base_url="http://x")   # (valores do teste)
     perna = {"odd": 1.653, "linha": 36.5}
     assert c._piso_odd(perna) == 1.78
     assert c._piso_odd(dict(perna, _protecao=True)) == 1.50

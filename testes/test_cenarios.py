@@ -96,7 +96,7 @@ def _ps_some(cps, bil):
 CASOS_ACEITA = [
     ("PS: linha some -> cobertura alternativa", {}, _ps_some, {}, ("confirmado", 1, 1), 212.5),
     # 24/11: odd entre 1,50 e 1,78 -> a PROTEÇÃO cobre (e agora monta: piso da proteção, 21/11 13:29)
-    ("PS: odd cai para 1,70 -> proteção cobre", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.700"), {},
+    ("PS: odd cai para 1,76 -> proteção cobre", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.760"), {},
      ("confirmado", 1, 1), None),
     ("PS: odd cai para 1,40 -> perna órfã", {}, lambda cps, bil: cps.page.evaluate(_JS_ODD_OVERS, "1.400"), {},
      ("exposto", 1, 0), None),
