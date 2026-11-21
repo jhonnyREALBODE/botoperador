@@ -760,6 +760,7 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
     candidatos = []
     recusados = []  # (janela, cálculo, perna 1aWin, perna PS, motivo) — para dizer POR QUE não entrou
     suspeitos = 0
+    hcp_susp = []   # 24/11: pares de handicap com dois positivos e janela > 10 (bloqueados; o monitor relê e confirma)
     melhor_janela = None
     menor_custo_ok = None
 
@@ -834,8 +835,12 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
                 if jan is None:
                     continue   # soma ≤ 0: não existe margem em que as duas ganham (não é meio)
                 if a["linha"] > 0 and b["linha"] > 0 and jan > float(cfg.get("handicap_janela_max_dois_positivos", 10)):
-                    # 14/11 (Kasentina: A +7 e B +7,5): as casas não discordam 14 pontos — é sinal lido errado
+                    # 14/11 (Kasentina: A +7 e B +7,5): as casas não discordam 14 pontos — provável sinal lido errado.
+                    # 24/11: NUNCA inverte/corrige o sinal sozinho; bloqueia, e o monitor relê as duas casas para confirmar
                     suspeitos += 1
+                    hcp_susp.append({"assinatura": "%s|%s|%s|t%s %s|t%s %s" % (
+                        a["periodo"], a.get("ot", "inc"), "hcp", a.get("time_idx"), a["linha"], b.get("time_idx"), b["linha"]),
+                        "descricao": descricao_par(a, b), "janela": jan, "periodo": a["periodo"]})
                     continue
                 if jan > TETO_JANELA_HANDICAP:
                     suspeitos += 1
@@ -868,6 +873,8 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
             candidatos.append((True, jan, c, a, b, preferir(a, b, c) if preferir else 0))
 
     # reentrada (parceiro 17/11): 'duplo duplo' primeiro (mais totais com 4+ greens), depois a maior janela, depois o custo
+    if raiox is not None:
+        raiox["hcp_suspeitos"] = hcp_susp
     validos = [x for x in candidatos if x[0]]
     restricao = ""
     hcp_on = cfg.get("handicap_ativo", True) or not so_totais
@@ -880,7 +887,17 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
             restricao = " [restrição ativa: só totais %s; handicap desligado]" % "/".join(
                 p for p in PERIODOS_TODOS if p in permitidos)
     if validos:
-        if preferir and any(isinstance(x[5], tuple) for x in validos):
+        tem_hcp = any(x[3]["tipo"] == "handicap" for x in validos)
+        if hcp_on and tem_hcp:
+            # 24/11 (operador): largura de janela de HANDICAP e de TOTAL são grandezas diferentes — entre mercados a
+            # escolha é financeira: menor perda externa, menor custo, maior lucro mínimo da faixa, melhor retorno sobre a
+            # exposição; a largura só desempata no fim. (Reentrada: o 'preferir' já devolve a chave financeira da carteira.)
+            def chave(x):
+                if isinstance(x[5], tuple) and x[5]:
+                    return x[5]
+                return chave_financeira_par(x[3], x[4], x[2], x[1])
+            validos.sort(key=chave, reverse=True)
+        elif preferir and any(isinstance(x[5], tuple) for x in validos):
             validos.sort(key=lambda x: (x[5] if isinstance(x[5], tuple) else (), x[1], -x[2]["custo"]), reverse=True)
         else:
             validos.sort(key=lambda x: (-x[5], -x[1], x[2]["custo"]))
@@ -1473,6 +1490,50 @@ def linha_principal_hcp(ofertas, periodo="jogo"):
 
 def _chave_par(pernas):
     return tuple((p.get("lado") or "t%s" % p.get("time_idx"), round(p["linha"], 2)) for p in pernas)
+
+
+def acompanhar_hcp_suspeitos(contagem, achados, leituras_para_confirmar=2):
+    """24/11: cada par de handicap suspeito (dois positivos, janela > 10) é bloqueado na hora. Se a MESMA leitura se
+    repete em leituras seguidas das duas casas, vira HANDICAP_SUSPEITO (confirmado, nunca apostado). Devolve
+    (novos_para_reler, confirmados)."""
+    vistos = {x["assinatura"] for x in achados}
+    for k in list(contagem):
+        if k not in vistos:
+            contagem.pop(k)           # sumiu na releitura: era leitura momentânea
+    novos, confirmados = [], []
+    for x in achados:
+        n = contagem.get(x["assinatura"], 0) + 1
+        contagem[x["assinatura"]] = n
+        if n == 1:
+            novos.append(x)
+        elif n == leituras_para_confirmar:
+            confirmados.append(x)
+    return novos, confirmados
+
+
+def chave_financeira_par(a, b, c, jan):
+    """Chave de escolha ENTRE MERCADOS (24/11), maior = melhor: (pior caso, −custo, lucro mínimo da faixa, retorno sobre a
+    exposição, largura). Funciona igual para total e handicap porque usa o resultado em R$, não a largura."""
+    pr = [dict(a, stake=c["stake_1w"]), dict(b, stake=c["stake_ps"])]
+    if a["tipo"] == "handicap":
+        liq = list(liquido_por_margem(pr).values())
+    else:
+        liq = list(liquido_por_placar(pr, faixa_carteira(pr)).values())
+    pior = round(min(liq), 2)
+    lucro_min = round(min([v for v in liq if v > 0.005] or [0.0]), 2)
+    total = c["stake_1w"] + c["stake_ps"]
+    return (pior, -round(c["custo"], 3), lucro_min, round(lucro_min / total, 4) if total else 0.0, jan)
+
+
+def chave_financeira_carteira(av, custo):
+    """Idem para REENTRADA (carteira inteira): pior caso da carteira depois, −custo, lucro mínimo da faixa, retorno sobre o
+    investido, e por último a largura da faixa nova."""
+    jn = av.get("janela_nova")
+    larg = (jn[1] - jn[0] + 1) if jn else 0
+    lm = av.get("lucro_min_janela") or 0.0
+    inv = av.get("investido_depois") or 0.0
+    return (round(av.get("pior_depois") or -1e9, 2), -round(custo or 0.0, 3), round(lm, 2),
+            round(lm / inv, 4) if inv else 0.0, larg)
 
 
 def resumo_handicap(pernas):
@@ -5086,6 +5147,8 @@ class Operador:
         geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
         ultima = [None, None]  # (quando, linha principal da PS) da última entrada aceita — 'esperar a linha andar'
         ultima_h = [None, None]  # 24/11: idem para o HANDICAP (portão próprio)
+        hcp_susp_cont = {}       # 24/11: handicap suspeito -> leituras seguidas com a mesma leitura
+        hcp_susp_conf = []       # HANDICAP_SUSPEITO confirmados (painel)
         avals = []             # avaliações de reentrada da rodada (painel)
         cand_ant = [None]      # candidato da leitura anterior (precisa aparecer em 2 leituras seguidas)
         incompleta = [False]   # uma perna entrou e a outra não: sem novas reentradas neste jogo
@@ -5109,6 +5172,9 @@ class Operador:
                 pos_l += [p for p in carteira(per) if p not in carteira_local]
             return list(carteira_local) + pos_l
 
+        def hcp_ligado():
+            return bool(self.cfg.get("handicap_ativo", True) or not self.cfg.get("so_totais"))
+
         def publicar_hcp(classe=None):
             """Painel 'Handicap' (24/11): carteiras de handicap do jogo + exposição TOTAL (totais + handicap)."""
             todas = todas_do_jogo()
@@ -5117,6 +5183,8 @@ class Operador:
                 self.estado.handicap = {"jogo": sinal["jogo"], "carteiras": resumo_handicap(todas),
                                         "exposicao": pior_global(todas) if todas else 0.0,
                                         "limite": float(self.cfg.get("perda_max_por_jogo_brl", 100.0)),
+                                        "suspeitos": [x["descricao"] + " (janela %s)" % _br(x["janela"], 1)
+                                                      for x in hcp_susp_conf][-5:],
                                         "ultima_classificacao": classe or ant.get("ultima_classificacao")}
 
         def excluir(a, b, jan):
@@ -5144,7 +5212,7 @@ class Operador:
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
             # 24/11: LIMITE GLOBAL do jogo — totais + handicaps juntos não passam da perda máxima
             lim = float(self.cfg.get("perda_max_por_jogo_brl", 100.0))
-            pg = pior_global(todas_do_jogo() + novas)
+            pg = pior_global(todas_do_jogo() + novas) if hcp_ligado() else 0.0   # (desligado: totais como antes)
             if pg < -lim - 1e-9:
                 return "perda máxima GLOBAL do jogo (totais + handicap) passaria de −R$ %s (ficaria %s)" % (_br(lim), _br(pg))
             cart = carteira(a["periodo"], a["tipo"], a.get("ot", "inc") if a["tipo"] == "handicap" else None)
@@ -5168,6 +5236,8 @@ class Operador:
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
             av = avaliar_reentrada_hcp(cart, novas, self.cfg) if a["tipo"] == "handicap" else \
                 avaliar_reentrada(cart, novas, self.cfg)
+            if hcp_ligado():
+                return chave_financeira_carteira(av, c["custo"])   # 24/11: entre mercados, escolha financeira
             return nota_reentrada(av, c["custo"], min(a["odd"], b["odd"]))
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
@@ -5441,6 +5511,19 @@ class Operador:
                     del avals[:]
                     bil, motivo = achar_par(lt[CASA_1W]["ofertas"], lt[CASA_PS]["ofertas"], sinal, cfg_par, raiox,
                                             excluir=excluir, preferir=preferir if entradas else None)
+                    novos_s, conf_s = acompanhar_hcp_suspeitos(hcp_susp_cont, raiox.get("hcp_suspeitos") or [])
+                    for x in novos_s:
+                        log("⚠ %s: handicap suspeito (dois positivos, janela %s): %s — BLOQUEADO; releio as duas casas e "
+                            "confirmo time, lado, linha, mercado e período (o sinal NUNCA é corrigido sozinho)" % (
+                                sinal["jogo"], _br(x["janela"], 1), x["descricao"]))
+                    for x in conf_s:
+                        log("‼ HANDICAP_SUSPEITO: %s (janela %s) se repetiu na releitura — não aposto neste par" % (
+                            x["descricao"], _br(x["janela"], 1)))
+                        hcp_susp_conf.append(x)
+                        publicar_hcp()
+                    if novos_s and not bil:
+                        cancel.wait(1.0)   # relê as duas casas JÁ (não espera o intervalo normal)
+                        continue
                     if entradas and self.cfg.get("reentrada_livre", True):
                         # especificação 19/11: espera mínima + movimento mínimo da linha + 2 leituras seguidas
                         e_hcp = bool(bil and bil["tipo"] == "handicap")
@@ -5498,7 +5581,7 @@ class Operador:
                         cart_antes = carteira(bil["periodo"], bil["tipo"],
                                               bil["pernas"][0].get("ot", "inc") if bil["tipo"] == "handicap" else None)
                         # 24/11: as OUTRAS carteiras do jogo (totais/handicaps de outros períodos) entram no limite global
-                        outras = [p for p in todas_do_jogo() if p not in cart_antes]
+                        outras = [p for p in todas_do_jogo() if p not in cart_antes] if hcp_ligado() else None
                         cfg_sub = cfg_par
 
                         def substituir(nome_f, b0, _cfg=cfg_sub):
@@ -7056,9 +7139,9 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
    document.getElementById('reent').innerHTML=h;}}
  {const hp=d.handicap;
   if(!hp)document.getElementById('hcp').innerHTML='Nenhum par de handicap neste jogo ainda (o handicap é procurado junto com os totais).';
-  else document.getElementById('hcp').innerHTML='<div><b>'+esc(hp.jogo)+'</b> · exposição TOTAL do jogo (totais + handicap, pior caso somado): <b class="'+(hp.exposicao<0?'no':'ok')+'">'+R(hp.exposicao)+'</b> · perda máxima permitida: '+R(-hp.limite)+(hp.ultima_classificacao?' · última reentrada de handicap: <b>'+esc(hp.ultima_classificacao)+'</b>':'')+'</div>'+
+  else document.getElementById('hcp').innerHTML='<div><b>'+esc(hp.jogo)+'</b> · <b>exposição conservadora</b> do jogo (totais + handicap — soma do pior saldo de CADA carteira, como se todas dessem o pior ao mesmo tempo): <b class="'+(hp.exposicao<0?'no':'ok')+'">'+R(hp.exposicao)+'</b> · perda máxima permitida: '+R(-hp.limite)+(hp.ultima_classificacao?' · última reentrada de handicap: <b>'+esc(hp.ultima_classificacao)+'</b>':'')+'</div>'+
    ((hp.carteiras||[]).length?'<table style="font-size:12px;margin-top:4px"><tr><th>Mercado</th><th>Pares confirmados</th><th>Margens lucrativas (mandante − visitante)</th><th>Melhor saldo</th><th>Pior saldo</th></tr>'+
-   hp.carteiras.map(c=>'<tr><td>Handicap '+esc(c.periodo)+(c.ot==='inc'?' (com OT)':c.ot==='reg'?' (sem OT)':'')+'</td><td>'+c.pares+'</td><td class="ok">'+esc(c.margens)+'</td><td class="ok">'+R(c.melhor)+'</td><td class="no">'+R(c.pior)+'</td></tr>').join('')+'</table>':'<div class="mut">sem pares de handicap confirmados</div>');}
+   hp.carteiras.map(c=>'<tr><td>Handicap '+esc(c.periodo)+(c.ot==='inc'?' (com OT)':c.ot==='reg'?' (sem OT)':'')+'</td><td>'+c.pares+'</td><td class="ok">'+esc(c.margens)+'</td><td class="ok">'+R(c.melhor)+'</td><td class="no">'+R(c.pior)+'</td></tr>').join('')+'</table>':'<div class="mut">sem pares de handicap confirmados</div>')+((hp.suspeitos||[]).length?'<div class="no">HANDICAP_SUSPEITO (não apostado): '+hp.suspeitos.map(esc).join(' · ')+'</div>':'');}
  document.getElementById('sinais').innerHTML=d.sinais.map(s=>'<div>'+s.hora+' '+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+' ('+s.origem+')</span></div>').join('')||'—';
  document.getElementById('res').innerHTML=d.resultados.map(r=>'<div>'+esc(r.quando)+' '+esc(r.jogo)+' — <b>'+esc(r.desfecho)+'</b></div>').join('')||'—';
  const lg=document.getElementById('log');const fim=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=d.log.join('\n');if(fim)lg.scrollTop=lg.scrollHeight;

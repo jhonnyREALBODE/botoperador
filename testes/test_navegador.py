@@ -1505,3 +1505,39 @@ def test_odds_changed_junto_do_confirmar_nao_duplica_a_aposta(casas, cfgc):
         for c in casas.values():
             recarregar(c)
         limpar_cupons(casas)
+
+
+def test_hcp_time_trocado_no_cupom_aborta_na_barreira(casas, cfgc):
+    """24/11: antes de confirmar, a barreira confere TIME, linha, odd... Se o cupom da 1aWin passar a mostrar o OUTRO time,
+    nada é apostado (ABORTADO NA BARREIRA)."""
+    cfgc["so_totais"] = False
+    cfgc["handicap_ativo"] = True
+    ir_jogo(casas)
+    for c in casas.values():
+        recarregar(c)
+    limpar_cupons(casas)
+    bil = achar(casas, cfgc)
+    assert bil["tipo"] == "handicap"
+    c1 = casas[P.CASA_1W]
+    t_certo = bil["pernas"][0]["time"]
+    t_outro = next(t for t in TIMES if not P._nome_bate(t, t_certo))
+    original = c1.preparar
+
+    def preparar_e_trocar_time(perna, times, *a):
+        r = original(perna, times, *a)
+        c1.page.evaluate("""([de, para]) => { const w = document.createTreeWalker(document.getElementById('slip'), NodeFilter.SHOW_TEXT);
+            for (let n = w.nextNode(); n; n = w.nextNode()) if (n.nodeValue.includes(de)) n.nodeValue = n.nodeValue.split(de).join(para); }""",
+                         [t_certo, t_outro])
+        return r
+    c1.preparar = preparar_e_trocar_time
+    try:
+        est = P.Estado(cfgc)
+        est.registrar_bilhete(bil, "sinal")
+        st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
+        assert st == "falhou", bil.get("detalhe")
+        assert "ABORTADO NA BARREIRA" in bil["detalhe"]["1aWin"] and "time" in bil["detalhe"]["1aWin"], bil["detalhe"]
+    finally:
+        del c1.preparar
+        for c in casas.values():
+            recarregar(c)
+        limpar_cupons(casas)

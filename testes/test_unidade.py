@@ -2530,3 +2530,102 @@ def test_hcp_totais_continuam_iguais(cfg):
     b1, _ = P.achar_par([a], [b], SINAL, dict(cfg, handicap_ativo=False))
     b2, _ = P.achar_par([a], [b], SINAL, dict(cfg, handicap_ativo=True))
     assert b1 and b2 and (b1["janela"], b1["custo"], b1["tipo"]) == (b2["janela"], b2["custo"], b2["tipo"])
+
+
+# ------------------------------------------------------------------ 24/11 (2ª rodada de ajustes do handicap)
+def test_hcp_mandante_visitante_invertidos_entre_as_casas(cfg):
+    """A PS lista 'Charlotte x Phoenix' e a 1aWin 'Phoenix x Charlotte': o time é reconhecido pelo NOME contra o sinal
+    (o mandante do sinal é a referência), nunca pela posição na página."""
+    assert P._idx_time("Charlotte Hornets", TIMES) == 1 and P._idx_time("Phoenix Suns", TIMES) == 0
+    c = dict(cfg, handicap_ativo=True, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    a = oferta("1awin", "handicap", "jogo", None, 5.5, 1.90, "Phoenix Suns", P._idx_time("Phoenix Suns", TIMES))
+    b = oferta("ps3838", "handicap", "jogo", None, 1.5, 1.90, "Charlotte Hornets", P._idx_time("Charlotte Hornets", TIMES))
+    bil, mot = P.achar_par([a], [b], SINAL, c)
+    assert bil and P.janela_hcp([dict(p, stake=30) for p in bil["pernas"]]) == (-5, 1), mot
+
+
+def test_hcp_linha_inteira_com_push_no_par():
+    """Mandante −3 e Visitante +4: margem 3 = mandante devolve e visitante ganha; margem 4 = mandante ganha e visitante
+    devolve. Os dois pontos dão lucro."""
+    pr = [_h(0, -3.0, stake=30), _h(1, 4.0, stake=30)]
+    liq = P.liquido_por_margem(pr)
+    assert liq[3] > 0 and liq[4] > 0 and liq[2] < 0 and liq[5] < 0
+    assert P._janela_handicap(pr[0], pr[1]) == 1.0
+
+
+def test_hcp_linha_zero():
+    """Mandante 0 (empate devolve) e Visitante +1,5: margem 0 devolve+ganha; margem 1 as duas ganham."""
+    pr = [_h(0, 0.0, stake=30), _h(1, 1.5, stake=30)]
+    liq = P.liquido_por_margem(pr)
+    assert liq[0] > 0 and liq[1] > 0 and liq[-1] < 0 and liq[2] < 0
+    assert P._janela_handicap(pr[0], pr[1]) == 1.5
+
+
+def test_hcp_periodo_sem_ot(cfg):
+    c = dict(cfg, handicap_ativo=True, handicap_periodos=["jogo", "q2"], odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    a = dict(oferta("1awin", "handicap", "q2", None, 2.5, 1.90, "Phoenix Suns", 0), ot="-")
+    b = dict(oferta("ps3838", "handicap", "q2", None, 0.5, 1.90, "Charlotte Hornets", 1), ot="-")
+    bil, mot = P.achar_par([a], [b], SINAL, c)
+    assert bil and bil["periodo"] == "q2", mot
+    assert P.mercado_de(dict(a, stake=1)) != P.mercado_de(_h(0, 2.5))
+
+
+def test_hcp_duas_positivas_legitimas_e_suspeita_acima_de_10(cfg):
+    c = dict(cfg, handicap_ativo=True, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    ok_a = oferta("1awin", "handicap", "jogo", None, 5.5, 1.90, "Phoenix Suns", 0)
+    ok_b = oferta("ps3838", "handicap", "jogo", None, 1.5, 1.90, "Charlotte Hornets", 1)
+    assert P.achar_par([ok_a], [ok_b], SINAL, c)[0]                               # janela 7: legítimo
+    rx = {}
+    s_a = oferta("1awin", "handicap", "jogo", None, 7.0, 1.90, "Phoenix Suns", 0)
+    s_b = oferta("ps3838", "handicap", "jogo", None, 7.5, 1.90, "Charlotte Hornets", 1)
+    bil, mot = P.achar_par([s_a], [s_b], SINAL, c, rx)
+    assert bil is None and len(rx["hcp_suspeitos"]) == 1                          # bloqueado, nunca invertido
+    cont = {}
+    n1, c1 = P.acompanhar_hcp_suspeitos(cont, rx["hcp_suspeitos"])
+    assert n1 and not c1                                                          # 1ª vez: relê as duas casas
+    n2, c2 = P.acompanhar_hcp_suspeitos(cont, rx["hcp_suspeitos"])
+    assert not n2 and c2                                                          # repetiu: HANDICAP_SUSPEITO
+    n3, c3 = P.acompanhar_hcp_suspeitos(cont, [])                                  # sumiu: zera
+    assert cont == {}
+
+
+def test_hcp_carteira_de_totais_aberta_e_handicap_acrescentado(cfg):
+    """Totais já abertos no jogo: o 1º par de handicap é a 1ª entrada da carteira de HANDICAP (a de totais não muda) e o
+    limite GLOBAL soma as duas."""
+    c = dict(cfg, perda_max_por_jogo_brl=100.0, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    tot = [{"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 150.5, "odd": 1.85, "stake": 30, "par": 1},
+           {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": 152.5, "odd": 1.85, "stake": 30, "par": 1}]
+    bil = {"tipo": "handicap", "janela": 7.0, "pernas": [_h(0, 5.5, stake=31, casa=P.CASA_1W), _h(1, 1.5, stake=31, casa=P.CASA_PS)]}
+    ok, mot, custo, pior = P.validar_par_vivo(bil, 1.90, 1.90, c, [], tot)
+    assert ok, mot
+    pg = P.pior_global(tot + [dict(p, odd=1.90) for p in bil["pernas"]])
+    assert abs(pg - (P.pior_do_mercado(tot) + pior)) < 0.02
+    # a carteira de totais continua sendo avaliada só com totais
+    av = P.avaliar_reentrada(tot, [dict(tot[0], linha=151.5, par=None), dict(tot[1], linha=153.5, par=None)], c)
+    assert av["janela_antiga"] == P.janela_continua(tot)
+
+
+def test_hcp_escolha_entre_mercados_e_financeira_nao_pela_largura(cfg):
+    """Handicap de janela 7 caro x total de janela 1 barato: vence o total (menor perda externa/custo); a largura só
+    desempata no fim."""
+    c = dict(cfg, handicap_ativo=True, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    ha = oferta("1awin", "handicap", "jogo", None, 5.5, 1.76, "Phoenix Suns", 0)
+    hb = oferta("ps3838", "handicap", "jogo", None, 1.5, 1.76, "Charlotte Hornets", 1)
+    ta = oferta("1awin", "total", "jogo", "abaixo", 151.5, 2.05)
+    tb = oferta("ps3838", "total", "jogo", "acima", 150.5, 2.05)
+    bil, mot = P.achar_par([ha, ta], [hb, tb], SINAL, c)
+    assert bil and bil["tipo"] == "total", (bil, mot)
+    # handicap barato ganha do total caro (não importa o mercado)
+    bil2, _ = P.achar_par([dict(ha, odd=2.05), dict(ta, odd=1.76)], [dict(hb, odd=2.05), dict(tb, odd=1.76)], SINAL, c)
+    assert bil2 and bil2["tipo"] == "handicap"
+
+
+def test_hcp_desligado_nao_muda_nada_nos_totais(cfg):
+    """Handicap DESLIGADO: a seleção/ordenação dos totais é exatamente a de antes (maior janela, depois custo)."""
+    c = dict(cfg, handicap_ativo=False)
+    t1 = (oferta("1awin", "total", "jogo", "abaixo", 152.5, 1.95), oferta("ps3838", "total", "jogo", "acima", 150.5, 1.95))
+    t2 = (oferta("1awin", "total", "jogo", "abaixo", 151.5, 2.05), oferta("ps3838", "total", "jogo", "acima", 150.5, 2.05))
+    h = (oferta("1awin", "handicap", "jogo", None, 5.5, 2.5, "Phoenix Suns", 0),
+         oferta("ps3838", "handicap", "jogo", None, 1.5, 2.5, "Charlotte Hornets", 1))
+    bil, _ = P.achar_par([t1[0], t2[0], h[0]], [t1[1], t2[1], h[1]], SINAL, c)
+    assert bil["tipo"] == "total" and bil["janela"] == 2.0     # regra antiga: maior janela primeiro
