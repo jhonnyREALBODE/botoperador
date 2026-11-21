@@ -2735,3 +2735,26 @@ def test_painel_limpar_e_tirar_posicao(cfg):
         assert "tirar do painel" in html
     finally:
         srv.shutdown()
+
+
+def test_jogo_que_acabou_nao_fica_cacando_para_sempre(cfg):
+    """25/11 (operador: 'tá rodando o jogo antigo caçando sem parar'): 3 caças seguidas sem achar o jogo = encerra."""
+    class C:
+        def __init__(self, nome):
+            self.nome, self.limitada, self.n = nome, False, 0
+        def executar(self, fn, *a, timeout=0):
+            return fn(*a)
+        def em_paralelo(self, fn, *a, timeout=0):
+            r = fn(*a)
+            return lambda: r
+        def cacar(self, times, liga=""):
+            self.n += 1
+            return {"ok": False, "motivo": "jogo não encontrado"}
+    casas = {P.CASA_1W: C(P.CASA_1W), P.CASA_PS: C(P.CASA_PS)}
+    op = P.Operador(dict(cfg, monitor_intervalo_s=0.01, caca_max_falhas=3), P.Estado(cfg), casas)
+    cancel = threading.Event()
+    threading.Timer(10, cancel.set).start()
+    t0 = time.time()
+    op._monitorar(dict(SINAL), cancel, "retomada")
+    assert time.time() - t0 < 5 and casas[P.CASA_PS].n == 3
+    assert "não encontrado" in op._motivo_lib

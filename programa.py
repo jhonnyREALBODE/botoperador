@@ -5149,6 +5149,7 @@ class Operador:
         times = sinal["times"]
         c1, cps = self.casas[CASA_1W], self.casas[CASA_PS]
         achado = {CASA_1W: False, CASA_PS: False}
+        falhas_caca = {CASA_1W: 0, CASA_PS: 0}   # caças SEGUIDAS sem achar o jogo (jogo acabou?)
         liga_ps = ""
         rodada = 0
         vazias = 0
@@ -5378,8 +5379,11 @@ class Operador:
                     achado[CASA_PS] = r["ok"]
                     if r["ok"]:
                         liga_ps = r.get("liga", "")
+                        falhas_caca[CASA_PS] = 0
                     else:
                         log("PS: " + r["motivo"])
+                        if not r.get("interrompida"):
+                            falhas_caca[CASA_PS] += 1
                 if cancel.is_set():
                     break
                 if not achado[CASA_1W]:
@@ -5389,8 +5393,22 @@ class Operador:
                     achado[CASA_1W] = r["ok"]
                     if not r["ok"]:
                         log("1aWin: " + r["motivo"])
+                        if not r.get("interrompida"):
+                            falhas_caca[CASA_1W] += 1
+                    else:
+                        falhas_caca[CASA_1W] = 0
                 if cancel.is_set():
                     break
+                lim_caca = int(self.cfg.get("caca_max_falhas", 3))
+                if max(falhas_caca.values()) >= lim_caca:
+                    # 25/11 (operador: 'tá rodando o jogo antigo caçando sem parar'): ao reiniciar ele voltou ao último jogo
+                    # protegido, que já tinha ACABADO — as casas não mostram mais. N caças seguidas sem achar = encerra.
+                    casa_f = max(falhas_caca, key=falhas_caca.get)
+                    self._motivo_lib = "jogo não encontrado na %s em %d caças seguidas (já acabou?)" % (
+                        NOME_CASA[casa_f], falhas_caca[casa_f])
+                    log("■ %s: %s — encerro este jogo" % (sinal["jogo"], self._motivo_lib))
+                    self.estado.set_monitor("%s: encerrado — %s" % (sinal["jogo"], self._motivo_lib))
+                    return
                 rodada += 1
                 esperas = {}
                 for c in (c1, cps):
