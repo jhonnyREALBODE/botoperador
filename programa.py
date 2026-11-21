@@ -4757,7 +4757,7 @@ class Operador:
         p = self._prot
         with _TRAVA:
             self.estado.protecao = {
-                "jogo": (p or {}).get("jogo"), "pares": (p or {}).get("pares", 0),
+                "jogo": (p or {}).get("jogo"), "pares": (p or {}).get("pares", 0), "por_periodo": (p or {}).get("por_periodo", ""),
                 "max": (p or {}).get("max", int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4))),
                 "ultima": (p or {}).get("ultima"),
                 "fila": [{"jogo": x["jogo"], "chegou": datetime.fromtimestamp(t).strftime("%H:%M:%S")} for t, x in self._fila],
@@ -4837,6 +4837,13 @@ class Operador:
         solta = [None, None]  # [perna da 1aWin sem par, bilhete] — 'sempre buscar pares para cobrir' (18/11)
         indisp_ps = [0]  # quantas vezes a PS disse 'mínima maior que a máxima' neste jogo
 
+        def pares_periodo(per):
+            return len({p.get("par") for p in carteira_local if p.get("periodo", "jogo") == per})
+
+        def txt_pares():
+            pers = sorted({p.get("periodo", "jogo") for p in carteira_local}, key=lambda x: (x != "jogo", x))
+            return " · ".join("%s %d" % (NOME_PERIODO.get(x, x), pares_periodo(x)) for x in pers)
+
         def excluir(a, b, jan):
             """Regras obrigatórias (além da odd mínima e da tabela de custo, que o achar_par já aplica).
             Devolve o MOTIVO (texto) quando recusa, ou None."""
@@ -4847,8 +4854,11 @@ class Operador:
                 if geladeira.get((casa_n, _chave_oferta(o)), 0) > agora_s:
                     return "linha da %s falhou há pouco (geladeira)" % NOME_CASA[casa_n]
             maxe = int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4))
-            if len(entradas) >= maxe:
-                return "este jogo já tem %d de %d pares confirmados" % (len(entradas), maxe)
+            # 24/11 (operador): o limite de 4 pares vale POR MERCADO (total do jogo, cada quarto), não somando tudo
+            n_per = pares_periodo(a.get("periodo", "jogo"))
+            if n_per >= maxe:
+                return "o mercado %s já tem %d de %d pares confirmados" % (
+                    NOME_PERIODO.get(a.get("periodo"), a.get("periodo")), n_per, maxe)
             falta = self._tent.cooldown(assinatura_par(times, a, b), agora_s)
             if falta:
                 return "o mesmo par falhou há pouco — cooldown de mais %ds (não repito o mesmo par na hora)" % int(falta + 0.99)
@@ -4935,7 +4945,8 @@ class Operador:
                 self._prot = {"jogo": sinal["jogo"], "pares": len(entradas),
                               "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
                               "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas), "linha_ultima": ultima[1]}
-                self._publicar_protecao()
+            self._prot["por_periodo"] = txt_pares()
+            self._publicar_protecao()
         if entradas and origem not in ("retomada", "perna_solta"):
             log("↻ %s: %d par(es) já confirmado(s) neste jogo entram na carteira — reentrada segue as regras "
                 "(escadinha/âncora, sem ilha, sem par repetido)" % (sinal["jogo"], len(entradas)))
@@ -5235,16 +5246,20 @@ class Operador:
                             ultima[0], ultima[1] = time.time(), linha_principal(lt[CASA_PS]["ofertas"], "jogo")
                             janela_padrao.setdefault(bil["periodo"], bil["janela"])
                             maxe = int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 1))
-                            # 18/11: 'e assim por diante até bater 4 linhas' — o limite de 4 entradas por jogo voltou
-                            if not self.cfg.get("reentrar_mesmo_jogo") or len(entradas) >= maxe:
-                                self._motivo_lib = "completou %d/%d pares" % (len(entradas), maxe)
+                            # 18/11: 'e assim por diante até bater 4 linhas'. 24/11: 4 pares POR MERCADO; o jogo encerra quando o
+                            # TOTAL DO JOGO completa 4 (os quartos têm o seu limite e acabam sozinhos)
+                            self._prot["por_periodo"] = txt_pares()
+                            self._publicar_protecao()
+                            if not self.cfg.get("reentrar_mesmo_jogo") or pares_periodo("jogo") >= maxe:
+                                self._motivo_lib = "completou %d/%d pares no total do jogo (%s)" % (
+                                    pares_periodo("jogo"), maxe, txt_pares())
                                 self.estado.set_monitor("%s: %s — monitoramento encerrado (%d entrada(s))" % (
                                     sinal["jogo"], st, len(entradas)))
                                 log("■ %s: rodada %s — monitoramento encerrado (%d entrada(s) neste jogo)" % (
                                     sinal["jogo"], st, len(entradas)))
                                 return
-                            log("➕ %s: entrada %d de %d aceita — continuo no jogo procurando duplo duplo ou sequência "
-                                "(nunca o mesmo par)" % (sinal["jogo"], len(entradas), maxe))
+                            log("➕ %s: entrada aceita (%s; até %d por mercado) — continuo no jogo procurando escadinha/âncora "
+                                "(nunca o mesmo par)" % (sinal["jogo"], txt_pares(), maxe))
                             self.estado.set_monitor("%s: %d entrada(s) — procurando reentrada" % (sinal["jogo"], len(entradas)))
                             ultimo_motivo = None
                             cancel.wait(self.cfg["monitor_intervalo_s"])
@@ -6674,7 +6689,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  const pa=d.params;document.getElementById('params').textContent='janela ≥ '+P(pa.janela_min,1)+' · custo ≤ '+P(pa.custo_max,1)+'% · PS €'+P(pa.perna_ps_eur)+' · câmbio '+P(pa.cambio_brl_eur)+(pa.so_totais?' · só totais '+pa.totais_periodos.join('/'):'');
  {const pr=d.protecao;let ph='';
   if(pr&&pr.jogo){const seg=pr.ultima?Math.max(0,Math.round(Date.now()/1000-pr.ultima)):0;
-   ph='<div style="margin-top:4px">🛡️ <b>Jogo protegido:</b> '+esc(pr.jogo)+' · pares confirmados: <b>'+pr.pares+'/'+pr.max+'</b> · última entrada confirmada há <b>'+Math.floor(seg/60)+'m'+String(seg%60).padStart(2,'0')+'s</b> (encerra só com outro sinal, 4 pares ou mercado fechado)</div>';}
+   ph='<div style="margin-top:4px">🛡️ <b>Jogo protegido:</b> '+esc(pr.jogo)+' · pares confirmados: <b>'+(pr.por_periodo?esc(pr.por_periodo)+'</b> (até '+pr.max+' por mercado)':pr.pares+'/'+pr.max+'</b>')+' · última entrada confirmada há <b>'+Math.floor(seg/60)+'m'+String(seg%60).padStart(2,'0')+'s</b> (encerra só com outro sinal, 4 pares ou mercado fechado)</div>';}
   if(pr&&pr.fila&&pr.fila.length)ph+='<div>📥 <b>Sinais na fila ('+pr.fila.length+'):</b> '+pr.fila.map(f=>esc(f.jogo)+' <span class="mut">('+f.chegou+')</span>').join(' · ')+' <button onclick="if(confirm(\'Descartar os sinais da fila e ficar no jogo atual?\'))post(\'/api/fila/limpar\')">Descartar fila</button></div>';
   if(pr&&pr.liberado)ph+='<div class="mut">🔓 último: '+esc(pr.liberado)+'</div>';
   if(pr&&pr.alerta)ph+='<div class="no"><b>'+esc(pr.alerta)+'</b></div>';
