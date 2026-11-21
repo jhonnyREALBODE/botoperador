@@ -5486,7 +5486,11 @@ class Operador:
                     per_o = bo["pernas"][0].get("periodo", "jogo")
                     tem_per = any(o.get("periodo") == per_o for o in (lt.get(falta, {}).get("ofertas") or []))
                     sem_per[0] = 0 if tem_per else sem_per[0] + 1
-                    if sem_per[0] >= int(self.cfg.get("orfa_rodadas_sem_periodo", 12)):
+                    # 21/11 18:43 (Missouri St x Drake): no começo do 2º tempo a PS travou HDP e OU (cadeado) — mercado
+                    # TRAVADO não é período encerrado. Só desiste de quarto/tempo que JÁ ACABOU; o jogo inteiro segue
+                    # tentando enquanto o jogo rola (o fim do mercado do jogo encerra o monitor por outro caminho).
+                    per_acabou = per_o != "jogo" and q_atual is not None and per_o in periodos_encerrados(q_atual)
+                    if per_acabou and sem_per[0] >= int(self.cfg.get("orfa_rodadas_sem_periodo", 12)):
                         # 24/11 (Keila 2º quarto): o PERÍODO da perna solta acabou — não existe mais linha para cobrir. Ficava
                         # 'procurando cobertura' para sempre e segurava a fila. Desiste, registra e libera.
                         msg = "a %s não tem mais linhas do %s (período encerrado) — a perna %s ficou SEM cobertura" % (
