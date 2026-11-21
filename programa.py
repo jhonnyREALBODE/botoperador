@@ -112,10 +112,10 @@ def log(msg):
 # ---------------------------------------------------------------- config
 DEFAULTS = {
     "janela_min": 1.0,
-    "custo_max": 12.0,           # 24/11: tabela D de volta (fora das faixas da tabela vale este teto)
+    "custo_max": 10.0,           # 25/11: tabela B (fora das faixas da tabela vale este teto)
     # tabela do operador: [janela de, janela até (exclusiva), perda máxima %]
-    # 24/11 (operador, 2ª vez): TABELA D — 9 / 10 / 11 / 12 ('muito poucos pares' com a C)
-    "custo_por_janela": [[1, 2, 9.0], [2, 3, 10.0], [3, 7, 11.0], [7, 11, 12.0]],
+    # 25/11 (operador): TABELA B — 7 / 8 / 9 / 10 (antes D 9/10/11/12)
+    "custo_por_janela": [[1, 2, 7.0], [2, 3, 8.0], [3, 7, 9.0], [7, 11, 10.0]],
     # ---- monitoramento pós-entrada e cobertura dinâmica (ordem do operador 15/11)
     # ---- reentrada no mesmo jogo (estilo do parceiro, 15/11): novo middle em outras linhas
     "reentrar_mesmo_jogo": True,

@@ -52,7 +52,7 @@ def test_config_modo_real_so_com_false(tmp_path):
 
 def test_config_imprime_parametros_efetivos(tmp_path):
     P.carregar_config(str(tmp_path / "x.json"))
-    assert any("PARÂMETROS EFETIVOS" in l and "custo_max=12.0" in l for l in P._LOG_MEM)   # tabela D (24/11)
+    assert any("PARÂMETROS EFETIVOS" in l and "custo_max=10.0" in l for l in P._LOG_MEM)   # tabela B (25/11)
 
 
 # ------------------------------------------------------------------ texto e números
@@ -1623,7 +1623,7 @@ def test_r21_invalido_continua_recusado_com_motivo_real(cfg):
 
 def test_r21_nenhuma_regra_financeira_afrouxada():
     d = P.DEFAULTS
-    assert d["custo_por_janela"] == [[1, 2, 9.0], [2, 3, 10.0], [3, 7, 11.0], [7, 11, 12.0]]   # tabela D: ordem do operador 24/11
+    assert d["custo_por_janela"] == [[1, 2, 7.0], [2, 3, 8.0], [3, 7, 9.0], [7, 11, 10.0]]   # tabela B: ordem do operador 25/11
     assert d["odd_min"] == 1.75 and d["perda_max_por_jogo_brl"] == 100.0 and d["janela_min"] == 1.0
     assert d["max_entradas_por_jogo"] == 4
     # reentrada usa a MESMA tabela por janela (não há mais teto fixo de 16% aplicado)
@@ -2120,8 +2120,8 @@ def test_r22_reconciliacao_classifica(cfg):
 
 def test_r22_nenhuma_regra_financeira_afrouxada(cfg):
     d = P.DEFAULTS
-    assert d["odd_min"] == 1.75 and d["custo_max"] == 12.0 and d["perda_max_por_jogo_brl"] == 100.0
-    assert d["custo_por_janela"] == [[1, 2, 9.0], [2, 3, 10.0], [3, 7, 11.0], [7, 11, 12.0]]   # tabela D (operador 24/11, 2ª vez)
+    assert d["odd_min"] == 1.75 and d["custo_max"] == 10.0 and d["perda_max_por_jogo_brl"] == 100.0
+    assert d["custo_por_janela"] == [[1, 2, 7.0], [2, 3, 8.0], [3, 7, 9.0], [7, 11, 10.0]]   # tabela B (operador 25/11)
     c = dict(cfg, odd_min=1.78)
     bil = _bucks(c)
     assert P.validar_par_vivo(bil, 1.85, 1.99, c)[0]                        # o par do log passa
