@@ -879,12 +879,14 @@ def test_ps_aguardando_processamento(casas, final, esperado):
     recarregar(cps)
 
 
-def test_1awin_processa_e_nao_entra(casas, cfgc):
+@pytest.mark.parametrize("modo", ["sequencial_aceita", "sequencial_processando"])
+def test_1awin_processa_e_nao_entra(casas, cfgc, modo):
     """15/11 17:02: spinner, saldo cai, depois volta e o cupom limpa — a 1aWin NÃO entrou.
-    22/11 (modo sequencial_processando): 'processando' é a prova IMEDIATA de que o clique foi recebido, então a PS é
-    disparada logo em seguida. A 1aWin não entra e some SEM recusa comprovada: PERNA_ORFA ambígua -> INCERTO (congela,
-    nada é repetido)."""
+    sequencial_aceita (padrão 24/11): a PS só sai com a 1aWin ACEITA -> nada apostado.
+    sequencial_processando: a PS sai no 'processando' -> PS órfã; 'saldo voltou' é recusa comprovada -> tenta a 1aWin de
+    novo (não entra) -> perna órfã (exposto). A PS aceita nunca é repetida."""
     cfgc["modo_teste"] = False
+    cfgc["confirmacao"] = modo
     servidor.ESTADO["processa_e_some"] = True
     ir_jogo(casas)
     for c in casas.values():
@@ -894,13 +896,12 @@ def test_1awin_processa_e_nao_entra(casas, cfgc):
     est = P.Estado(cfgc)
     est.registrar_bilhete(bil, "sinal")
     try:
-        # 23/11: 'o saldo caiu e VOLTOU' é prova de que NÃO entrou (conferido pelo operador 15/11) -> recusa comprovada ->
-        # tenta colocar a 1aWin de novo dentro das regras (até 2x); no site falso ela nunca entra -> PERNA ÓRFÃ (exposto)
-        assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "exposto", bil["detalhe"]
-        assert bil["_orfa"] == {"aceita": P.CASA_PS, "falta": P.CASA_1W}
-        assert bil["detalhe"]["PS3838"] == "confirmada"
+        st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
         a = [c.executar(lambda c=c: c.page.evaluate("() => +sessionStorage.aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
-        assert a == [0, 1], a   # a PS aceita NUNCA é repetida; a 1aWin nunca entrou
+        if modo == "sequencial_aceita":
+            assert st == "falhou" and a == [0, 0], (st, a, bil["detalhe"])
+        else:
+            assert st == "exposto" and a == [0, 1], (st, a, bil["detalhe"])
     finally:
         servidor.ESTADO.clear()
         for c in casas.values():

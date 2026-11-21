@@ -2544,7 +2544,6 @@ class Casa:
     def ir(self, url):
         """Navega tolerando o redirecionamento da casa (a 1aWin manda do domínio de
         referência para o espelho atual no meio do carregamento)."""
-        self._odd_melhor_ok = False  # página nova: confere de novo a opção 'Aceitar melhores probabilidades'
         if self.nome == CASA_1W:
             url = trocar_origem(url, self.base)
         try:
@@ -3542,21 +3541,22 @@ class Casa:
     def aceitar_odd_melhor(self):
         """PS: marca 'Aceitar melhores probabilidades' no boletim (24/11, operador: 'a odd só alterando pra cima e demora pra
         aceitar'). Só odd MELHOR é aceita pela casa; odd que cai continua recusada. Nunca desmarca nada."""
-        if self.nome != CASA_PS or getattr(self, "_odd_melhor_ok", False):
+        if self.nome != CASA_PS:
             return
         try:
-            r = self._eval(r"""() => { const RX = /aceitar melhores (probabilidades|odds|cota)|accept (better|higher) odds/i;
+            # a marca fica NA PÁGINA (window.__oddMelhor): recarregou a página -> confere de novo
+            r = self._eval(r"""() => { if (window.__oddMelhor) return 'cache';
+                const RX = /aceitar melhores (probabilidades|odds|cota)|accept (better|higher) odds/i;
                 for (const e of document.querySelectorAll('label, span, div')) {
                     if (!RX.test((e.innerText || '').trim()) || (e.innerText || '').length > 60) continue;
                     const box = e.querySelector('input[type=checkbox]') || (e.closest('label') || e.parentElement || e).querySelector('input[type=checkbox]');
-                    if (box) { if (!box.checked) { box.click(); return 'marquei'; } return 'ja'; }
+                    if (box) { window.__oddMelhor = 1; if (!box.checked) { box.click(); return 'marquei'; } return 'ja'; }
                     const fake = (e.closest('label') || e.parentElement || e).querySelector('[role=checkbox], [class*="checkbox" i]');
                     if (fake) { const on = fake.getAttribute('aria-checked') === 'true' || /checked|active|selected/i.test(fake.className + '');
-                        if (!on) { fake.click(); return 'marquei'; } return 'ja'; }
+                        window.__oddMelhor = 1; if (!on) { fake.click(); return 'marquei'; } return 'ja'; }
                 }
                 return ''; }""")
             if r:
-                self._odd_melhor_ok = True
                 if r == "marquei":
                     log("PS3838: marquei 'Aceitar melhores probabilidades' (a casa aceita sozinha quando a odd SOBE)")
         except Exception:
