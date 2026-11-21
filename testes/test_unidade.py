@@ -2302,3 +2302,16 @@ def test_bloqueio_liberacao_manual_tambem_volta_ao_jogo_com_pares(cfg):
     op.bloquear("INCERTO", {"id": 9, "jogo": SINAL["jogo"], "times": TIMES}, "x", "y")
     op._prot = None
     assert op.resolver("liberar") and chamadas == ["retomada"] and op._retomar["bilhetes"] == [5]
+
+
+def test_perna_solta_sem_par_anterior_nao_quebra_o_monitor(cfg):
+    """20/11 22:12 (Detroit x Toronto): 'Só a PS entrou' num jogo SEM par anterior -> KeyError 'max' ao publicar a proteção
+    e o monitoramento morreu. A carteira guardada no bloqueio agora é completa e o painel tolera campos faltando."""
+    cfg = dict(cfg, modo_teste=False)
+    est = P.Estado(cfg)
+    op = P.Operador(cfg, est, {})
+    op.bloquear("INCOMPLETO", {"id": 9, "jogo": SINAL["jogo"], "times": TIMES}, "PS: x", "1aWin: y")
+    assert op.bloqueio["carteira"]["max"] == 4
+    op._prot = {"jogo": SINAL["jogo"], "bilhetes": [], "ultima": time.time()}   # carteira velha, sem 'max'
+    op._publicar_protecao()
+    assert est.protecao["max"] == 4

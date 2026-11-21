@@ -4540,6 +4540,7 @@ class Operador:
             cart = {k: v for k, v in self._prot.items() if k in ("jogo", "max", "sinal", "bilhetes", "ultima", "linha_ultima")}
         else:
             cart = {"jogo": bil.get("jogo"), "bilhetes": [], "ultima": time.time(), "linha_ultima": None,
+                    "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
                     "sinal": {"id": "retomada-%s" % bil.get("id"), "jogo": bil.get("jogo", ""), "times": bil.get("times") or [],
                               "liga": bil.get("liga", ""), "mercado": "retomada após bloqueio"}}
         cart["bilhetes"] = list(cart.get("bilhetes") or [])
@@ -4641,8 +4642,9 @@ class Operador:
         p = self._prot
         with _TRAVA:
             self.estado.protecao = {
-                "jogo": p["jogo"] if p else None, "pares": p["pares"] if p else 0, "max": p["max"] if p else 0,
-                "ultima": p["ultima"] if p else None,
+                "jogo": (p or {}).get("jogo"), "pares": (p or {}).get("pares", 0),
+                "max": (p or {}).get("max", int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4))),
+                "ultima": (p or {}).get("ultima"),
                 "fila": [{"jogo": x["jogo"], "chegou": datetime.fromtimestamp(t).strftime("%H:%M:%S")} for t, x in self._fila],
                 "liberado": self._motivo_lib, "bloqueio": self.bloqueio,
                 "vazio": list(self._vazio), "alerta": getattr(self, "_alerta", "")}
@@ -4650,6 +4652,11 @@ class Operador:
     def _rodar_monitor(self, sinal, ev, origem):
         try:
             self._monitorar(sinal, ev, origem)
+        except Exception as e:
+            # 20/11 22:12: KeyError 'max' derrubou o monitoramento da perna solta sem aviso no painel
+            log("‼ ERRO no monitoramento de %s: %s — o jogo NÃO está sendo acompanhado; me mande o log" % (
+                sinal.get("jogo"), str(e)[:120]))
+            log(traceback.format_exc()[-800:])
         finally:
             cancelado_por_sinal = ev.is_set()
             if self._prot and self._prot.get("jogo") == sinal["jogo"]:
@@ -4769,6 +4776,10 @@ class Operador:
             ultima[0], ultima[1] = float(r.get("ultima") or time.time()), r.get("linha_ultima")
             self._prot = dict(r)
             self._prot["pares"] = len(entradas)
+            self._prot.setdefault("max", int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)))
+            self._prot.setdefault("jogo", sinal["jogo"])
+            self._prot.setdefault("sinal", sinal)
+            self._prot.setdefault("ultima", time.time())
             self._retomar = None
             log("↻ carteira retomada: %d par(es), contador de vazio %d" % (len(entradas), self._vazio[0]))
             self._publicar_protecao()
