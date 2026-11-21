@@ -1397,7 +1397,7 @@ def portao_reentrada(ultima_t, ultima_ml, agora, ml, cfg):
         return True, ""
     espera = float(cfg.get("reentrada_espera_min_s", 60))
     if agora - ultima_t < espera - 1e-9:
-        return False, "intervalo mínimo ainda não terminou (%.0fs de %.0fs)" % (agora - ultima_t, espera)
+        return False, "espera entre uma entrada e outra (%.0fs de %.0fs) — não é o intervalo do jogo" % (agora - ultima_t, espera)
     mov = float(cfg.get("min_movimento_linha", cfg.get("reentrada_movimento_min", 0.5)))
     if ultima_ml is None:
         # 24/11 (print 'na última entrada: ?'): sem a linha da última entrada (par confirmado pelo operador / retomado)

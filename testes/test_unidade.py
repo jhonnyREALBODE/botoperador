@@ -1279,7 +1279,7 @@ def test_esc_10_11_devolucao_so_em_linha_inteira():
 def test_esc_12_13_intervalo_e_movimento(cfg):
     c = dict(cfg, reentrada_espera_min_s=60, min_movimento_linha=0.5)
     ok, mot = P.portao_reentrada(1000.0, 232.5, 1030.0, 234.0, c)
-    assert not ok and "intervalo mínimo" in mot                 # 30 s < 60 s, mesmo com a linha andando
+    assert not ok and "espera entre uma entrada e outra" in mot                 # 30 s < 60 s, mesmo com a linha andando
     ok, mot = P.portao_reentrada(1000.0, 232.5, 1070.0, 232.5, c)
     assert not ok and "não se movimentou" in mot                # passou 60 s mas a linha não andou
     ok, _ = P.portao_reentrada(1000.0, 232.5, 1070.0, 233.0, c)
