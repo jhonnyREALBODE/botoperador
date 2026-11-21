@@ -2315,3 +2315,20 @@ def test_perna_solta_sem_par_anterior_nao_quebra_o_monitor(cfg):
     op._prot = {"jogo": SINAL["jogo"], "bilhetes": [], "ultima": time.time()}   # carteira velha, sem 'max'
     op._publicar_protecao()
     assert est.protecao["max"] == 4
+
+
+def test_operador_confirma_as_duas_pernas_fora_do_bloqueio(cfg):
+    """24/11 (print 'Aposta aceita #3851641783'): o programa procurava cobertura de uma perna que JÁ tinha par. O botão
+    'As duas entraram' confirma o bilhete e avisa o monitor para parar de cobrir."""
+    est = P.Estado(cfg)
+    op = P.Operador(dict(cfg, modo_teste=False), est, {})
+    bil = {"jogo": SINAL["jogo"], "times": TIMES, "pernas": [
+        {"casa": P.CASA_1W, "selecao": "Abaixo de 142.5", "lado": "abaixo", "linha": 142.5, "odd": 1.85, "stake": 30,
+         "tipo": "total", "periodo": "jogo"},
+        {"casa": P.CASA_PS, "selecao": "Acima de 144.0", "lado": "acima", "linha": 144.0, "odd": 1.854, "stake": 31,
+         "tipo": "total", "periodo": "jogo"}]}
+    est.registrar_bilhete(bil, "sinal")
+    est.atualizar(bil, status="exposto")
+    bil["_orfa"] = {"aceita": P.CASA_1W, "falta": P.CASA_PS}
+    assert op.concluir_bilhete(bil["id"])
+    assert bil["status"] == "confirmado" and "_orfa" not in bil and op._orfa_concluida == bil["id"]

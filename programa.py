@@ -4586,6 +4586,24 @@ class Operador:
             NOME_CASA[casa], bil.get("jogo"), bil["pernas"][0 if casa == CASA_1W else 1]["selecao"], NOME_CASA[falta]))
         return self.novo_sinal(sinal, origem="perna_solta")
 
+    def concluir_bilhete(self, bid):
+        """24/11 (print da PS 'Aposta aceita #3851641783'): o programa achava que a PS não tinha entrado e ficou procurando
+        cobertura. O operador conferiu nas casas: AS DUAS entraram. O par vira confirmado, entra na carteira e a busca por
+        cobertura para (se este bilhete for a perna solta em cobertura)."""
+        bil = next((b for b in self.estado.bilhetes if str(b.get("id")) == str(bid)), None)
+        if not bil or len(bil.get("pernas") or []) != 2:
+            return False
+        with _TRAVA:
+            bil.pop("_orfa", None)
+            bil.setdefault("avisos", []).append("operador: AS DUAS pernas entraram (conferido nas casas)")
+        self.estado.atualizar(bil, status="confirmado", detalhe={"1aWin": "confirmada (conferida pelo operador)",
+                                                                 "PS3838": "confirmada (conferida pelo operador)"})
+        self._orfa_concluida = bil.get("id")
+        if self.bloqueio and str(self.bloqueio.get("bilhete")) == str(bil.get("id")):
+            return self.resolver("concluido")
+        log("✔ operador: as duas pernas do bilhete #%s entraram (%s) — par confirmado na carteira" % (bil.get("id"), bil.get("jogo")))
+        return True
+
     def resolver(self, acao):
         """Saída do BLOQUEIO: 'concluido' (as duas aceitas), 'nao_apostado' (nenhuma aceita), 'liberar' (manual),
         'so_1awin' / 'so_ps' (só uma entrou: cobre a perna e segue no jogo)."""
@@ -4877,6 +4895,21 @@ class Operador:
                                                 "reentradas neste jogo" % sinal["jogo"])
                         log("■ %s: perna solta coberta — monitoramento encerrado (posição incompleta não reentra)" % sinal["jogo"])
                         return
+                    cancel.wait(self.cfg["monitor_intervalo_s"])
+                    continue
+                if orfa_ret is not None and getattr(self, "_orfa_concluida", None) == orfa_ret[0].get("id"):
+                    bo = orfa_ret[0]
+                    self._orfa_concluida = None
+                    orfa_ret = None
+                    if bo.get("id") not in entradas:
+                        carteira_local.extend(pernas_aceitas(bo))
+                        entradas.append(bo.get("id"))
+                    self._prot = {"jogo": sinal["jogo"], "pares": len(entradas),
+                                  "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
+                                  "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas), "linha_ultima": ultima[1]}
+                    ultima[0] = time.time()
+                    self._publicar_protecao()
+                    log("✔ %s: o operador confirmou as duas pernas — paro de procurar cobertura e sigo com escadinha/âncora" % sinal["jogo"])
                     cancel.wait(self.cfg["monitor_intervalo_s"])
                     continue
                 if orfa_ret is not None:
@@ -6463,7 +6496,7 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
  document.getElementById('calc').innerHTML=calc(d.calculadora);
  document.getElementById('backlog').innerHTML=d.backlog.length?d.backlog.map((s,i)=>'<div style="margin:4px 0">'+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+'</span> <button onclick="post(\'/api/backlog/'+i+'\')">MONTAR</button></div>').join(''):'—';
  const _nf=d.bilhetes.filter(b=>b.status=='falhou').length; const _umaEntrou=b=>Object.values(b.detalhe||{}).some(v=>/^confirmada/.test(v)); const _bs=window.verFalhas?d.bilhetes:d.bilhetes.filter(b=>b.status!='falhou'||_umaEntrou(b));
- document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(({confirmado:'CONCLUÍDO',falhou:'NÃO APOSTADO',exposto:'INCOMPLETO',INCERTO:'INCERTO',testado:'testado (simulado)'})[b.status]||b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.avisos&&b.avisos.length?'<br><b class="no">'+b.avisos.map(esc).join('<br>')+'</b>':'')+(b.carteira?'<br><span class="mut">carteira: lucro em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+(d.modo==='REAL'&&b.status!=='confirmado'&&b.status!=='testado'&&(['INCERTO','exposto'].includes(b.status)||Object.values(b.detalhe||{}).some(v=>/^confirmada/.test(v))||(b.avisos||[]).some(a=>/resolvido pelo operador/.test(a)))?'<br><span class="mut">Uma perna entrou de verdade? </span><button onclick="if(confirm(\'Confirmou no histórico que SÓ a 1aWin entrou?\'))post(\'/api/perna/'+b.id+'/1awin\')">Só a 1aWin entrou</button> <button onclick="if(confirm(\'Confirmou no histórico que SÓ a PS entrou?\'))post(\'/api/perna/'+b.id+'/ps3838\')">Só a PS entrou</button>':'')+'</td></tr>').join('')+'</table>';
+ document.getElementById('bil').innerHTML='<div class="mut" style="margin-bottom:6px">'+(window.verFalhas?'mostrando tudo · <a href="#" onclick="window.verFalhas=0;return false">esconder falhas</a>':(_nf?_nf+' tentativa(s) que falharam escondida(s) (nada apostado) · <a href="#" onclick="window.verFalhas=1;return false">mostrar</a>':''))+'</div><table><tr><th>#</th><th>Hora</th><th>Jogo</th><th>Pernas</th><th>Janela</th><th>Custo</th><th>Status</th><th>Detalhe</th></tr>'+_bs.map(b=>'<tr><td>'+b.id+'</td><td>'+esc(b.criado)+'</td><td>'+esc(b.jogo)+'</td><td>'+b.pernas.map(l=>(l.casa=='1awin'?'1aWin':'PS')+': '+esc(l.selecao)+' @'+l.odd+' '+R(l.stake)).join('<br>')+'</td><td>'+P(b.janela,1)+'</td><td>'+P(b.custo)+'%</td><td class="'+({testado:'ok',confirmado:'ok',falhou:'no',exposto:'no'}[b.status]||'am')+'">'+esc(({confirmado:'CONCLUÍDO',falhou:'NÃO APOSTADO',exposto:'INCOMPLETO',INCERTO:'INCERTO',testado:'testado (simulado)'})[b.status]||b.status)+(b.desfecho?'<br>'+esc(b.desfecho):'')+'</td><td>'+Object.entries(b.detalhe||{}).map(([k,v])=>esc(k)+': '+esc(v)).join('<br>')+(b.avisos&&b.avisos.length?'<br><b class="no">'+b.avisos.map(esc).join('<br>')+'</b>':'')+(b.carteira?'<br><span class="mut">carteira: lucro em '+(b.carteira.cobertura||[]).length+' total(is)'+(b.carteira.novos_totais&&b.carteira.novos_totais.length?' (novos: '+b.carteira.novos_totais.join(', ')+')':'')+' · pior '+R(b.carteira.pior)+'</span>'+(b.carteira.piorou_em&&b.carteira.piorou_em.length?' <b class="no">⚠ aumentou a perda em '+b.carteira.piorou_em.join(', ')+'</b>':''):'')+'<br>'+(b.fotos||[]).filter(x=>x).map(f=>'<a target="_blank" href="/prints/'+encodeURIComponent(f)+'">foto</a>').join(' ')+(d.modo==='REAL'&&b.status!=='confirmado'&&b.status!=='testado'&&(['INCERTO','exposto'].includes(b.status)||Object.values(b.detalhe||{}).some(v=>/^confirmada/.test(v))||(b.avisos||[]).some(a=>/resolvido pelo operador/.test(a)))?'<br><span class="mut">Uma perna entrou de verdade? </span><button onclick="if(confirm(\'Confirmou no histórico que SÓ a 1aWin entrou?\'))post(\'/api/perna/'+b.id+'/1awin\')">Só a 1aWin entrou</button> <button onclick="if(confirm(\'Confirmou no histórico que SÓ a PS entrou?\'))post(\'/api/perna/'+b.id+'/ps3838\')">Só a PS entrou</button> <button onclick="if(confirm(\'Confirmou nas DUAS casas que as duas pernas entraram?\'))post(\'/api/concluir/'+b.id+'\')">As duas entraram</button>':'')+'</td></tr>').join('')+'</table>';
  {const on=pa.pos_monitorar, md=on?pa.pos_modo:'off';
   const nome={auto:'AUTOMÁTICO (aposta sozinho)',manual:'MANUAL (mostra a oportunidade e espera o seu clique)',off:'DESLIGADO'}[md];
   const bt=(m,t)=>'<button style="margin-left:6px;'+(md==m?'background:#1e8e3e':'background:#555')+'" onclick="post(\'/api/pos_modo/'+m+'\')">'+t+'</button>';
@@ -6561,6 +6594,10 @@ def criar_painel(estado, operador, porta):
                 log("📌 cobertura pós-entrada: %s (pelo painel — fica assim também quando o programa reabrir)" % {
                     "auto": "AUTOMÁTICA", "manual": "MANUAL", "off": "DESLIGADA"}[modo])
                 return self._env(200, '{"ok":true}')
+            m6 = re.match(r"^/api/concluir/(\w+)$", p)
+            if m6 and operador:
+                ok = operador.concluir_bilhete(m6.group(1))
+                return self._env(200, '{"ok":%s}' % ("true" if ok else "false"))
             m5 = re.match(r"^/api/perna/(\w+)/(1awin|ps3838)$", p)
             if m5 and operador:
                 ok = operador.retomar_perna(m5.group(1), m5.group(2))
