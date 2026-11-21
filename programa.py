@@ -4910,6 +4910,11 @@ class Operador:
                     ultima[0] = time.time()
                     self._publicar_protecao()
                     log("✔ %s: o operador confirmou as duas pernas — paro de procurar cobertura e sigo com escadinha/âncora" % sinal["jogo"])
+                    if self._fila:
+                        # sinal que esperou a perna solta: ele ASSUME agora (é o pedido do operador para trocar de jogo)
+                        log("▶ a perna solta foi resolvida — o sinal que esperava na fila assume")
+                        self._puxar_fila()
+                        return
                     cancel.wait(self.cfg["monitor_intervalo_s"])
                     continue
                 if orfa_ret is not None:
@@ -4940,6 +4945,10 @@ class Operador:
                         log("✔ %s: perna solta COBERTA — par completo (%s + %s); sigo no jogo com escadinha/âncora" % (
                             sinal["jogo"], bo["pernas"][0]["selecao"], bo["pernas"][1]["selecao"]))
                         self.estado.set_monitor("%s: perna coberta — procurando reentrada" % sinal["jogo"])
+                        if self._fila:
+                            log("▶ a perna solta foi coberta — o sinal que esperava na fila assume")
+                            self._puxar_fila()
+                            return
                         cancel.wait(self.cfg["monitor_intervalo_s"])
                         continue
                     if rec == "incerto":
