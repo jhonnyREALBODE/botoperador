@@ -4888,6 +4888,18 @@ class Operador:
             return nota_reentrada(avaliar_reentrada(cart, novas, self.cfg), c["custo"], min(a["odd"], b["odd"]))
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
+        # 24/11 (operador): 'limpar as posições, tá mostrando jogo antepassado' — jogo novo assumiu: as posições ABERTAS de
+        # outros jogos vão para 'encerradas' (só o painel; nada é feito nas casas). As do jogo atual ficam.
+        if self.gerente:
+            velhas = [p for p in self.estado.posicoes if p.get("aberta") and not _mesmo_jogo(p.get("times") or ["", ""], times)]
+            if velhas:
+                def _fechar_velhas(ps=velhas):
+                    for pz in ps:
+                        try:
+                            self.gerente.fechar(pz, "outro jogo assumiu (%s)" % sinal["jogo"])
+                        except Exception:
+                            pass
+                threading.Thread(target=_fechar_velhas, daemon=True).start()
         orfa_ret = None
         sem_per = [0]   # rodadas seguidas sem nenhuma linha do período da perna solta (período encerrado)
         if origem == "perna_solta" and getattr(self, "_solta_pendente", None):

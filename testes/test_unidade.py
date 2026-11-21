@@ -2402,3 +2402,27 @@ def test_perna_de_protecao_usa_o_piso_da_protecao(cfg):
 def test_ps_selection_unavailable_e_recusa():
     """21/11 13:24 (Keila x Latvijas): 'Atenção | Selection is currently unavailable.' depois do OK virou INCERTO."""
     assert P._RX_RECUSA.search("Atenção\nSelection is currently unavailable.")
+
+
+
+def test_jogo_novo_limpa_posicoes_de_outros_jogos(cfg, monkeypatch):
+    """24/11 (operador): o painel de posições mostrava jogo antigo. Jogo novo assumiu -> as posições abertas dos OUTROS
+    jogos vão para 'encerradas'; as do jogo atual ficam."""
+    est = P.Estado(cfg)
+    from types import SimpleNamespace
+    casas = {P.CASA_1W: SimpleNamespace(nome=P.CASA_1W, limitada=False), P.CASA_PS: SimpleNamespace(nome=P.CASA_PS, limitada=False)}
+    op = P.Operador(dict(cfg), est, casas)
+    fechadas = []
+
+    class G:
+        def fechar(self, pos, motivo):
+            pos["aberta"] = False
+            fechadas.append(pos["id"])
+    op.gerente = G()
+    est.posicoes = [{"id": 1, "aberta": True, "times": ["Velho", "Jogo"]},
+                    {"id": 2, "aberta": True, "times": TIMES}]
+    cancel = threading.Event()
+    cancel.set()   # o monitor sai logo depois do começo (só queremos a limpeza)
+    op._monitorar(dict(SINAL), cancel, "sinal")
+    time.sleep(0.3)
+    assert fechadas == [1] and est.posicoes[1]["aberta"] is True
