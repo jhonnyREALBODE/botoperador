@@ -3654,10 +3654,13 @@ class Casa:
                 return {"clicou": False, "talvez": False, "t": None, "motivo": "a outra casa não ficou pronta para o disparo — não cliquei"}
         clicou, erro, talvez = False, "", False
         t_clique = None
+        forcar = False
         for tentativa in range(3):
             try:
                 t_clique = time.time()
-                self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=1500, no_wait_after=True)
+                # 20/11 19:55:51: o botão da PS 'piscava' ('element is not stable') e o clique nunca saiu nas 3 tentativas.
+                # Depois de um erro SEM clique (comprovado pelo registro), a próxima tentativa força o clique.
+                self.page.locator('[data-alvo-apostar="1"]').first.click(timeout=1500, no_wait_after=True, force=forcar)
                 clicou = True
                 break
             except Exception as e:
@@ -3677,6 +3680,7 @@ class Casa:
                 if clicou_real or not nao_saiu:
                     talvez = True
                     break
+                forcar = bool(re.search(r"not stable|intercepts pointer events|outside of the viewport", erro, re.I))
                 b = self._marcar_botao_apostar()
                 if b.get("n") != 1 or b.get("desabilitado"):
                     # o botão sumiu/desabilitou: pode ser porque a aposta JÁ foi feita -> provas, nunca 'não apostou'
@@ -5248,11 +5252,32 @@ class Operador:
         a barreira final é refeita do zero. carteira = apostas já aceitas neste jogo/período (regras de reentrada)."""
         with _TRAVA_CLIQUES:
             ex = {"estado": None, "subs": 0, "reinicios": 0, "t0": time.time()}
+            st = None
             try:
-                return self._executar(bil, substituir, list(carteira or []), ex)
+                st = self._executar(bil, substituir, list(carteira or []), ex)
+                return st
             finally:
                 with _TRAVA:
                     bil["estado_execucao"] = ex.get("estado")
+                if st in ("confirmado", "falhou", "testado"):
+                    self._limpar_depois()
+
+    def _limpar_depois(self):
+        """20/11 20:08: a PS começava a preparação com o cupom SUJO (recibo/seleção da tentativa anterior) e gastava 2–3 s
+        limpando dentro do prazo de 3 s. Agora limpa logo depois de cada tentativa, fora do cronômetro. (INCERTO/órfã: o
+        cupom fica como está, para o operador conferir.)"""
+        ws = []
+        for c in self.casas.values():
+            if hasattr(c, "limpar_cupom") and hasattr(c, "em_paralelo"):
+                try:
+                    ws.append(c.em_paralelo(c.limpar_cupom, timeout=40))
+                except Exception:
+                    pass
+        for w in ws:
+            try:
+                w()
+            except Exception:
+                pass
 
     def _preparar_duas(self, bil):
         """PREPARAR: as DUAS casas ao mesmo tempo (uma não espera a outra). A primeira que falhar (ou o prazo) cancela a
@@ -5743,8 +5768,14 @@ class Operador:
             log("PERNA_ORFA: tentativa %d/%d — protejo %s @%s (aceita, stake R$ %s) com %s @%s na %s (%s)" % (
                 i, n_max, acc["selecao"], acc["odd"], _br(acc["stake"]), nova["selecao"], nova["odd"], NOME_CASA[falta],
                 "mesma linha" if nova["_mesma"] else "outra linha"))
+            if not (nova["_mesma"] and i == 1):
+                # 20/11 20:05:13: a 2ª tentativa achou no boletim a seleção da 1ª (116.5 ≠ 119) — limpa antes de outra seleção
+                try:
+                    c.executar(c.limpar_cupom, timeout=40)
+                except Exception:
+                    pass
             try:
-                rr = c.executar(c.recolocar if nova["_mesma"] else c.montar, nova, bil["times"], timeout=ESPERA_FASE1_S)
+                rr = c.executar(c.recolocar if (nova["_mesma"] and i == 1) else c.montar, nova, bil["times"], timeout=ESPERA_FASE1_S)
             except Exception as e:
                 rr = {"ok": False, "motivo": "erro: %s" % str(e)[:80]}
             if not rr["ok"]:

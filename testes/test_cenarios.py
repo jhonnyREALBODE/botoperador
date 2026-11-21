@@ -37,11 +37,12 @@ CASOS = [(r, m, c) for r, m in enumerate(RODADAS, 1) for c in CENARIOS]
 
 
 def _aceitas(c):
-    return c.executar(lambda: c.page.evaluate("() => window.__aceitas || 0"))
+    return c.executar(lambda: c.page.evaluate("() => +sessionStorage.aceitas || 0"))
 
 
 def _recarregar_tudo(casas):
     for c in casas.values():
+        c.executar(lambda c=c: c.page.evaluate("() => { try { sessionStorage.removeItem('aceitas'); } catch (e) {} }"))
         c.executar(lambda c=c: c.page.reload(wait_until="domcontentloaded"))
     for c in casas.values():
         c.executar(c.limpar_cupom)

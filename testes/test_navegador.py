@@ -23,6 +23,7 @@ def ler(casas, times=TIMES):
 
 
 def recarregar(c):
+    c.executar(lambda: c.page.evaluate("() => { try { sessionStorage.removeItem('aceitas'); } catch (e) {} }"))
     c.executar(lambda: c.page.reload(wait_until="domcontentloaded"))
 
 
@@ -897,7 +898,7 @@ def test_1awin_processa_e_nao_entra(casas, cfgc):
         assert P.Operador(cfgc, est, casas).executar_bilhete(bil) == "exposto", bil["detalhe"]
         assert bil["_orfa"] == {"aceita": P.CASA_PS, "falta": P.CASA_1W}
         assert bil["detalhe"]["PS3838"] == "confirmada"
-        a = [c.executar(lambda c=c: c.page.evaluate("() => window.__aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
+        a = [c.executar(lambda c=c: c.page.evaluate("() => +sessionStorage.aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
         assert a == [0, 1], a   # a PS aceita NUNCA é repetida; a 1aWin nunca entrou
     finally:
         servidor.ESTADO.clear()
@@ -1305,7 +1306,7 @@ def test_ps_odd_mudou_no_clique_e_recusa_comprovada_e_recupera(casas, cfgc, modo
     try:
         st = P.Operador(cfgc, est, casas).executar_bilhete(bil)
         assert st == "confirmado", (bil["detalhe"], "\n".join(P._LOG_MEM[-25:]))
-        a = [c.executar(lambda c=c: c.page.evaluate("() => window.__aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
+        a = [c.executar(lambda c=c: c.page.evaluate("() => +sessionStorage.aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
         assert a == [1, 1], a
         assert bil["pernas"][1].get("odd_aceita") or bil["pernas"][1].get("odd_viva") == 1.79
     finally:
@@ -1337,7 +1338,7 @@ def test_operador_diz_que_so_a_1awin_entrou_e_o_programa_cobre_e_segue(casas, cf
         assert op.retomar_perna(bil["id"], P.CASA_1W)
         assert esperar(lambda: bil["status"] == "confirmado", 120), "\n".join(P._LOG_MEM[-30:])
         assert esperar(lambda: op._prot and op._prot.get("pares") == 1, 10)
-        a = [c.executar(lambda c=c: c.page.evaluate("() => window.__aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
+        a = [c.executar(lambda c=c: c.page.evaluate("() => +sessionStorage.aceitas || 0")) for c in (casas[P.CASA_1W], casas[P.CASA_PS])]
         assert a[0] == 0 and a[1] == 1, a      # a 1aWin NÃO foi apostada de novo; só a cobertura na PS
         assert any("perna solta COBERTA" in l for l in P._LOG_MEM[-40:])
     finally:

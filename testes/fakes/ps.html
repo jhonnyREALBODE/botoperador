@@ -59,16 +59,16 @@ document.getElementById('apostar').onclick = () => {
     const m = document.createElement('div'); m.className = 'modal';
     m.innerHTML = '<h3>Confirmar Apostas</h3><p>Tem certeza de que deseja arriscar 5.00 EUR para ganhar 5.50 EUR?</p><button id="okc">OK</button> <button id="canc2">CANCELAR</button>';
     document.body.appendChild(m);
-    m.querySelector('#okc').onclick = () => { m.remove(); window.__aceitas = (window.__aceitas || 0) + 1; document.getElementById('msg').textContent = 'Aposta aceita #3846942995'; };
+    m.querySelector('#okc').onclick = () => { m.remove(); sessionStorage.aceitas = (+sessionStorage.aceitas || 0) + 1; document.getElementById('msg').textContent = 'Aposta aceita #3846942995'; };
     m.querySelector('#canc2').onclick = () => m.remove();
     return;
   }
   if (ESTADO.processando) {  // PS real: 'Aguarde… sendo processada' e depois rejeita
     document.getElementById('msg').textContent = 'Aguarde enquanto a sua aposta está sendo processada. O Status da aposta mudará de Aguardando para Pendente assim que for aceita.';
-    setTimeout(() => { if (ESTADO.processando === 'aceita') window.__aceitas = (window.__aceitas || 0) + 1; document.getElementById('msg').textContent = ESTADO.processando === 'aceita' ? 'Aposta aceita #1' : 'Your bet has been rejected.'; }, 3000);
+    setTimeout(() => { if (ESTADO.processando === 'aceita') sessionStorage.aceitas = (+sessionStorage.aceitas || 0) + 1; document.getElementById('msg').textContent = ESTADO.processando === 'aceita' ? 'Aposta aceita #1' : 'Your bet has been rejected.'; }, 3000);
     return;
   }
-  window.__aceitas = (window.__aceitas || 0) + 1; document.getElementById('msg').textContent = 'Aposta aceita'; };
+  sessionStorage.aceitas = (+sessionStorage.aceitas || 0) + 1; document.getElementById('msg').textContent = 'Aposta aceita'; };
 const PERS = {0: 'Jogo', 1: '1º Tempo', 3: '1º Quarto', 4: '2º Quarto', 6: '4º Quarto'};
 if (ESTADO.limite) {
   app.innerHTML = '<h2>Excesso de requisições</h2><p>Tente novamente mais tarde.</p>';
