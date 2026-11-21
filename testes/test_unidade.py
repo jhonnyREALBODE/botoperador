@@ -224,6 +224,7 @@ def test_handicap_mesmo_time_nao_pareia(cfg):
 
 
 def test_so_totais_desliga_handicap_e_declara(cfg):
+    cfg["handicap_ativo"] = False   # 24/11: o handicap é ligado por padrão; aqui testa o desligamento
     a = oferta("1awin", "handicap", "jogo", "time0", 5.5, 2.0, "A", 0)
     b = oferta("ps3838", "handicap", "jogo", "time1", -3.5, 2.0, "B", 1)
     bil, mot = P.achar_par([a], [b], SINAL, cfg)
@@ -2426,3 +2427,106 @@ def test_jogo_novo_limpa_posicoes_de_outros_jogos(cfg, monkeypatch):
     op._monitorar(dict(SINAL), cancel, "sinal")
     time.sleep(0.3)
     assert fechadas == [1] and est.posicoes[1]["aberta"] is True
+
+
+
+# ================================================================== 24/11: HANDICAP (mercado próprio, separado dos totais)
+def _h(idx, linha, odd=1.90, stake=30.0, per="jogo", ot="inc", par=None, casa=P.CASA_1W):
+    return {"tipo": "handicap", "periodo": per, "ot": ot, "time_idx": idx, "time": "Mandante" if idx == 0 else "Visitante",
+            "linha": linha, "odd": odd, "stake": stake, "casa": casa, "par": par}
+
+
+def test_hcp_referencia_mandante_e_selecao_original_preservada():
+    v = _h(1, 3.5)
+    assert P.linha_ref_hcp(v) == -3.5 and P.linha_ref_hcp(_h(0, -3.5)) == -3.5   # Visitante +3,5 = Mandante −3,5
+    assert v["linha"] == 3.5 and v["time_idx"] == 1                               # a seleção original não muda
+
+
+def test_hcp_exemplo_do_operador_mandante_5_5_visitante_1_5():
+    """Mandante +5,5 e Visitante +1,5: as duas ganham quando a margem do mandante fica entre −5 e +1."""
+    pr = [_h(0, 5.5), _h(1, 1.5)]
+    liq = P.liquido_por_margem(pr)
+    ambas = [m for m in liq if liq[m] > 0]
+    assert ambas == list(range(-5, 2)) and P.janela_hcp(pr) == (-5, 1)
+    assert liq[-6] < 0 and liq[2] < 0                    # fora da faixa: uma ganha e a outra perde
+    assert P._janela_handicap(pr[0], pr[1]) == 7.0        # dois positivos é meio válido (era recusado)
+
+
+def test_hcp_linha_inteira_devolve():
+    p = _h(0, -3.0, odd=2.0, stake=10)
+    assert P.pagamento_hcp(p, 3) == 10.0 and P.pagamento_hcp(p, 4) == 20.0 and P.pagamento_hcp(p, 2) == 0.0
+
+
+def test_hcp_carteiras_separadas_por_mercado_periodo_e_ot():
+    t = {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 150.5}
+    assert len({P.mercado_de(t), P.mercado_de(_h(0, 3.5)), P.mercado_de(_h(0, 3.5, per="t1")),
+                P.mercado_de(_h(0, 3.5, ot="reg"))}) == 4
+
+
+def test_hcp_achar_par_regras_da_entrada(cfg):
+    c = dict(cfg, handicap_ativo=True, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    a = oferta("1awin", "handicap", "jogo", None, 5.5, 1.90, "Mandante", 0)
+    b = oferta("ps3838", "handicap", "jogo", None, 1.5, 1.90, "Visitante", 1)
+    bil, mot = P.achar_par([a], [b], SINAL, c)
+    assert bil and bil["tipo"] == "handicap" and bil["janela"] == 7.0, mot
+    assert bil["pernas"][0]["time"] == "Mandante" and bil["pernas"][1]["linha"] == 1.5     # seleção original
+    assert P.achar_par([dict(a, odd=1.74)], [b], SINAL, c)[0] is None                       # odd < 1,75
+    assert P.achar_par([a], [dict(b, time_idx=0, time="Mandante")], SINAL, c)[0] is None    # mesmo time
+    assert P.achar_par([a], [dict(b, periodo="t1")], SINAL, c)[0] is None                   # período diferente
+    assert P.achar_par([a], [dict(b, ot="reg")], SINAL, c)[0] is None                       # regra de OT diferente
+    assert P.achar_par([a], [b], SINAL, dict(c, handicap_ativo=False))[0] is None           # desligado
+    # tabela de custo vale para o handicap
+    assert P.achar_par([dict(a, odd=1.76)], [dict(b, odd=1.76)], SINAL, dict(c, custo_por_janela=[[1, 11, 1.0]]))[0] is None
+
+
+def test_hcp_escadinha_ancora_ilha_destruir_e_identico(cfg):
+    c = dict(cfg, perda_max_por_jogo_brl=100.0, max_repeticoes_mesma_perna=4)
+    cart = [_h(0, 2.5, par=1), _h(1, 1.5, par=1)]              # lucro nas margens −2..+1
+    assert P.janela_hcp(cart) == (-2, 1)
+    esc = P.avaliar_reentrada_hcp(cart, [_h(0, 4.5), _h(1, -0.5)], c)          # escadinha: amplia para baixo
+    assert esc["ok"] and esc["tipo"] == "escadinha" and esc["novos"], esc["motivo"]
+    anc = P.avaliar_reentrada_hcp(cart, [_h(0, 2.5), _h(1, 3.5)], c)           # âncora: repete Mandante +2,5
+    assert anc["ok"] and anc["tipo"] == "âncora", anc["motivo"]
+    ilha = P.avaliar_reentrada_hcp(cart, [_h(0, -4.5), _h(1, 6.5)], c)         # lucro em 5..6, buraco em 2..4
+    assert not ilha["ok"] and "ilha" in ilha["motivo"]
+    ident = P.avaliar_reentrada_hcp(cart, [_h(0, 2.5), _h(1, 1.5)], c)
+    assert not ident["ok"] and "idêntico" in ident["motivo"]
+    mesmo_time = P.avaliar_reentrada_hcp(cart, [_h(0, 3.5), _h(0, -1.5)], c)
+    assert not mesmo_time["ok"] and "DOIS times" in mesmo_time["motivo"]
+
+
+def test_hcp_nao_destroi_margem_lucrativa(cfg):
+    c = dict(cfg, perda_max_por_jogo_brl=1000.0)
+    cart = [_h(0, 2.5, stake=10, par=1), _h(1, 1.5, stake=10, par=1)]
+    # par grande e caro que deixa a margem 0 negativa (aposta pesada perdedora nela)
+    ruim = P.avaliar_reentrada_hcp(cart, [_h(0, 10.5, odd=1.80, stake=200), _h(1, -0.5, odd=1.80, stake=200)], c)
+    assert not ruim["ok"] and ("prejuízo" in ruim["motivo"] or "ilha" in ruim["motivo"]), ruim["motivo"]
+
+
+def test_hcp_perda_maxima_e_limite_global_totais_mais_handicap(cfg):
+    c = dict(cfg, perda_max_por_jogo_brl=100.0, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    tot = [{"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 150.5, "odd": 1.85, "stake": 30, "par": 1},
+           {"tipo": "total", "periodo": "jogo", "lado": "abaixo", "linha": 151.5, "odd": 1.85, "stake": 30, "par": 1}]
+    hcp = [_h(0, 5.5, par=2), _h(1, 1.5, par=2)]
+    assert P.pior_global(tot + hcp) == round(P.pior_do_mercado(tot) + P.pior_do_mercado(hcp), 2)
+    bil = {"tipo": "handicap", "janela": 7.0, "pernas": [_h(0, 6.5, stake=31, casa=P.CASA_1W), _h(1, 2.5, stake=31, casa=P.CASA_PS)]}
+    assert P.validar_par_vivo(bil, 1.90, 1.90, c, None, tot)[0]                          # global ok
+    pesada = [dict(p, stake=900) for p in tot]                                            # totais já perdem muito
+    ok, mot, _, _ = P.validar_par_vivo(bil, 1.90, 1.90, c, None, pesada)
+    assert not ok and "GLOBAL" in mot
+
+
+def test_hcp_painel_resumo(cfg):
+    pr = [_h(0, 5.5, par=1), _h(1, 1.5, par=1), {"tipo": "total", "periodo": "jogo", "lado": "acima", "linha": 150.5,
+                                                    "odd": 1.85, "stake": 30, "par": 2}]
+    r = P.resumo_handicap(pr)
+    assert len(r) == 1 and r[0]["pares"] == 1 and r[0]["margens"] == "-5–1" and r[0]["melhor"] > 0 > r[0]["pior"]
+
+
+def test_hcp_totais_continuam_iguais(cfg):
+    """O handicap não mexe na lógica dos totais: o mesmo par de totais continua sendo achado igual."""
+    a = oferta("1awin", "total", "jogo", "abaixo", 214.5, 2.10)
+    b = oferta("ps3838", "total", "jogo", "acima", 211.5, 1.80)
+    b1, _ = P.achar_par([a], [b], SINAL, dict(cfg, handicap_ativo=False))
+    b2, _ = P.achar_par([a], [b], SINAL, dict(cfg, handicap_ativo=True))
+    assert b1 and b2 and (b1["janela"], b1["custo"], b1["tipo"]) == (b2["janela"], b2["custo"], b2["tipo"])

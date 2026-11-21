@@ -181,7 +181,9 @@ DEFAULTS = {
     "monitor_intervalo_s": 10,
     "modo_teste": True,
     "auto_aprovar": False,       # legado da era do painel
-    "so_totais": True,           # restrição temporária 13/11 23:26 (false/null religa handicap)
+    "so_totais": True,           # (totais sempre ligados)
+    "handicap_ativo": True,      # 24/11 (operador): handicap como mercado PRÓPRIO, ao lado dos totais
+    "handicap_periodos": ["jogo", "t1", "q1", "q2", "q3"],           # restrição temporária 13/11 23:26 (false/null religa handicap)
     "totais_periodos": ["jogo", "q1", "q2", "q3"],  # operador 23/11: jogo inteiro + quartos de novo (4º quarto: sempre proibido)
     "url_grok": "",
     "url_1awin": "https://1wcwlx.life",
@@ -707,12 +709,11 @@ def _janela_total(a, b):
 
 
 def _janela_handicap(a, b):
-    """Linhas de times diferentes, cada uma na perspectiva do próprio time.
-    Janela = L1 + L2 COM SINAL. Mesmo sinal = leitura suspeita (None)."""
-    l1, l2 = a["linha"], b["linha"]
-    if (l1 > 0 and l2 > 0) or (l1 < 0 and l2 < 0) or l1 == 0 or l2 == 0:
-        return None
-    return round(l1 + l2, 3)
+    """Linhas de times diferentes, cada uma na perspectiva do próprio time. Janela = L1 + L2 (número de margens em que as
+    duas ganham). 24/11: Mandante +5,5 e Visitante +1,5 é janela 7 (as duas ganham de −5 a +1) — dois positivos é meio
+    válido. Soma ≤ 0 = não há margem em que as duas ganham (None)."""
+    jan = round(a["linha"] + b["linha"], 3)
+    return jan if jan > 0 else None
 
 
 def descricao_oferta(o):
@@ -776,7 +777,10 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
                 continue
             if o["tipo"] == "total" and o.get("periodo") not in permitidos:
                 continue
-            if o["tipo"] == "handicap" and so_totais:
+            # 24/11: HANDICAP é mercado próprio (liga com 'handicap_ativo'; os totais não mudam)
+            if o["tipo"] == "handicap" and not (cfg.get("handicap_ativo", True) or not so_totais):
+                continue
+            if o["tipo"] == "handicap" and o.get("periodo") not in set(cfg.get("handicap_periodos") or PERIODOS_TODOS):
                 continue
             out.append(o)
         return out
@@ -813,7 +817,7 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
     e1 = e1_ok
     for a in e1:
         for b in e2:
-            if a["tipo"] != b["tipo"] or a["periodo"] != b["periodo"]:
+            if a["tipo"] != b["tipo"] or a["periodo"] != b["periodo"] or a.get("ot", "inc") != b.get("ot", "inc"):
                 continue
             if a["tipo"] == "total":
                 if a["lado"] == b["lado"]:
@@ -828,6 +832,9 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
                     continue
                 jan = _janela_handicap(a, b)
                 if jan is None:
+                    continue   # soma ≤ 0: não existe margem em que as duas ganham (não é meio)
+                if a["linha"] > 0 and b["linha"] > 0 and jan > float(cfg.get("handicap_janela_max_dois_positivos", 10)):
+                    # 14/11 (Kasentina: A +7 e B +7,5): as casas não discordam 14 pontos — é sinal lido errado
                     suspeitos += 1
                     continue
                 if jan > TETO_JANELA_HANDICAP:
@@ -863,9 +870,15 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
     # reentrada (parceiro 17/11): 'duplo duplo' primeiro (mais totais com 4+ greens), depois a maior janela, depois o custo
     validos = [x for x in candidatos if x[0]]
     restricao = ""
+    hcp_on = cfg.get("handicap_ativo", True) or not so_totais
     if so_totais:
-        restricao = " [restrição ativa: só totais %s; handicap desligado]" % "/".join(
-            p for p in PERIODOS_TODOS if p in permitidos)
+        restricao = " [totais %s; handicap %s]" % ("/".join(p for p in PERIODOS_TODOS if p in permitidos),
+                                                  "/".join(p for p in PERIODOS_TODOS if p in set(cfg.get("handicap_periodos")
+                                                                                                 or PERIODOS_TODOS))
+                                                  if hcp_on else "desligado")
+        if not hcp_on:
+            restricao = " [restrição ativa: só totais %s; handicap desligado]" % "/".join(
+                p for p in PERIODOS_TODOS if p in permitidos)
     if validos:
         if preferir and any(isinstance(x[5], tuple) for x in validos):
             validos.sort(key=lambda x: (x[5] if isinstance(x[5], tuple) else (), x[1], -x[2]["custo"]), reverse=True)
@@ -916,6 +929,8 @@ def descricao_par(a, b):
             lado = "Over" if o["lado"] == "acima" else "Under"
         else:
             lado = o.get("time") or "Handicap"
+            return "%s %s %s%s @%s" % (casa, lado, "+" if o["linha"] > 0 else "", _br(o["linha"], 1).replace(",0", ""),
+                                       _br(o["odd"], 3).rstrip("0").rstrip(","))
         return "%s %s %s @%s" % (casa, lado, _br(o["linha"], 1).replace(",0", ""), _br(o["odd"], 3).rstrip("0").rstrip(","))
     return "%s + %s" % (um(a, "1aWin"), um(b, "PS"))
 
@@ -1271,10 +1286,216 @@ def nota_reentrada(av, custo=0.0, odd_min_par=0.0):
             round(odd_min_par or 0.0, 3))
 
 
+# ---------------------------------------------------------------- HANDICAP (operador 24/11) — lógica PRÓPRIA, separada dos totais
+# Referência fixa: o time da CASA (time_idx 0, o mandante). Toda linha vira a perspectiva dele só PARA O CÁLCULO; a seleção
+# original (time, linha, _mid/_aid) é preservada para o clique. Margem M = pontos do mandante − pontos do visitante.
+MARGENS_HCP = range(-60, 61)
+
+
+def linha_ref_hcp(p):
+    """Mandante −3,5 -> −3,5. Visitante +3,5 -> equivale a Mandante −3,5 (para o cálculo)."""
+    return p["linha"] if p.get("time_idx", 0) == 0 else -p["linha"]
+
+
+def corte_hcp(p):
+    """Margem em que a aposta empata. Mandante h: ganha se M + h > 0 (M > −h). Visitante h: ganha se M < h."""
+    return -p["linha"] if p.get("time_idx", 0) == 0 else p["linha"]
+
+
+def pagamento_hcp(p, m):
+    """Quanto a perna devolve se a margem final do mandante for m. Linha inteira empatada = devolve a stake."""
+    v = (m + p["linha"]) if p.get("time_idx", 0) == 0 else (-m + p["linha"])
+    if abs(v) < 1e-9:
+        return p["stake"]
+    return p["stake"] * p["odd"] if v > 0 else 0.0
+
+
+def liquido_por_margem(pernas, ms=MARGENS_HCP):
+    gasto = sum(p["stake"] for p in pernas)
+    return {m: sum(pagamento_hcp(p, m) for p in pernas) - gasto for m in ms}
+
+
+def mercado_de(p):
+    """Carteira = evento + MERCADO + PERÍODO + regra de prorrogação (total do jogo ≠ handicap do jogo ≠ handicap do 1º T)."""
+    return (p.get("tipo", "total"), p.get("periodo", "jogo"), p.get("ot", "inc"))
+
+
+def janela_hcp(pernas, ms=MARGENS_HCP):
+    """Faixa CONTÍNUA de margens com saldo > 0 entre o menor e o maior corte (como a janela dos totais). (ini, fim) | None"""
+    if not pernas:
+        return None
+    liq = liquido_por_margem(pernas, ms)
+    cortes = [corte_hcp(p) for p in pernas]
+    lo, hi = min(cortes) - 1, max(cortes) + 1
+    corridas, atual = [], []
+    for m in ms:
+        if lo - 1e-9 <= m <= hi + 1e-9 and liq[m] > 0.005:
+            if atual and m == atual[-1] + 1:
+                atual.append(m)
+            else:
+                if atual:
+                    corridas.append(atual)
+                atual = [m]
+        elif atual:
+            corridas.append(atual)
+            atual = []
+    if atual:
+        corridas.append(atual)
+    if not corridas:
+        return None
+    melhor = max(corridas, key=len)
+    return (melhor[0], melhor[-1])
+
+
+def _nome_perna_hcp(p):
+    return "%s %s%s" % (p.get("time") or ("mandante" if p.get("time_idx", 0) == 0 else "visitante"),
+                        "+" if p["linha"] > 0 else "", _fmt_linha(p["linha"]))
+
+
+def _mesma_perna_hcp(p, q):
+    """Mesma perna = mesmo TIME + mesma LINHA + mesmo mercado (período e regra de OT)."""
+    return (p.get("time_idx") == q.get("time_idx") and abs(p["linha"] - q["linha"]) < 1e-9
+            and p.get("periodo", "jogo") == q.get("periodo", "jogo") and p.get("ot", "inc") == q.get("ot", "inc"))
+
+
+def avaliar_reentrada_hcp(carteira, novas, cfg):
+    """Regras do HANDICAP (filtro), espelho das regras dos totais mas no espaço das MARGENS (−60..+60):
+    times opostos; nunca par idêntico; uma perna pode repetir (âncora) até max_repeticoes_mesma_perna; não destrói margem
+    que dava lucro; a faixa lucrativa continua contínua (sem ilha); cria margem nova OU melhora a faixa existente; pior
+    caso da carteira dentro da perda máxima. Mesmas chaves de resultado de avaliar_reentrada (nota_reentrada serve)."""
+    r = {"ok": False, "motivo": "", "tipo": None, "janela_antiga": None, "janela_nova": None, "novos": [],
+         "piorados": [], "pior_antes": None, "pior_depois": None, "melhor_depois": None, "saldos": [], "mercado": "handicap",
+         "investido_antes": round(sum(p["stake"] for p in carteira), 2),
+         "investido_depois": round(sum(p["stake"] for p in list(carteira) + list(novas)), 2)}
+    if len(novas) != 2 or novas[0].get("time_idx") == novas[1].get("time_idx"):
+        r["motivo"] = "o par de handicap precisa ter os DOIS times (lados opostos)"
+        return r
+    if any(mercado_de(p) != mercado_de(novas[0]) for p in list(carteira) + list(novas)):
+        r["motivo"] = "mistura de mercados (período ou regra de prorrogação diferentes)"
+        return r
+    grupos = {}
+    for p in carteira:
+        grupos.setdefault(p.get("par", id(p)), []).append(p)
+    if any(all(any(_mesma_perna_hcp(n, q) for q in g) for n in novas) for g in grupos.values()):
+        r["motivo"] = "par idêntico já utilizado (%s + %s)" % (_nome_perna_hcp(novas[0]), _nome_perna_hcp(novas[1]))
+        return r
+    max_rep = int(cfg.get("max_repeticoes_mesma_perna", 4))
+    usos = {}
+    for p in novas:
+        n = sum(1 for q in carteira if _mesma_perna_hcp(p, q))
+        usos[_nome_perna_hcp(p)] = n + 1
+        if n >= max_rep:
+            r["motivo"] = "%s já usado %d vezes (máximo %d)" % (_nome_perna_hcp(p), n, max_rep)
+            return r
+    r["ancora"] = [k for k, v in usos.items() if v > 1]
+    r["tipo"] = "âncora" if r["ancora"] else "escadinha"
+    todas = list(carteira) + list(novas)
+    ms = MARGENS_HCP
+    antes, depois = liquido_por_margem(carteira, ms), liquido_por_margem(todas, ms)
+    r["saldos"] = [(m, round(antes[m], 2), round(depois[m], 2)) for m in ms]
+    r["pior_antes"], r["pior_depois"] = round(min(antes.values()), 2), round(min(depois.values()), 2)
+    r["melhor_depois"] = round(max(depois.values()), 2)
+    ja = janela_hcp(carteira, ms)
+    r["janela_antiga"] = ja
+    if ja:
+        r["piorados"] = [m for m in range(ja[0], ja[1] + 1) if depois[m] <= 0.005]
+        if r["piorados"]:
+            r["motivo"] = "transforma a margem %s de lucro em prejuízo" % _txt_totais(r["piorados"])
+            return r
+    cortes = [corte_hcp(p) for p in todas]
+    lo_t, hi_t = min(cortes) - 1, max(cortes) + 1
+    r["saldos"] = [t for t in r["saldos"] if lo_t - 3 <= t[0] <= hi_t + 3]   # painel: só a faixa útil das margens
+    pos = {m for m in ms if lo_t - 1e-9 <= m <= hi_t + 1e-9 and depois[m] > 0.005}
+    if ja:
+        ini, fim = ja
+        while ini - 1 in pos:
+            ini -= 1
+        while fim + 1 in pos:
+            fim += 1
+        jn = (ini, fim)
+    else:
+        jn = janela_hcp(todas, ms)
+    r["janela_nova"] = jn
+    r["novos"] = [m for m in range(jn[0], jn[1] + 1) if not (ja and ja[0] <= m <= ja[1])] if jn else []
+    melhora = False
+    if ja and jn:
+        melhora = min(depois[m] for m in range(ja[0], ja[1] + 1)) > min(antes[m] for m in range(ja[0], ja[1] + 1)) + 0.005
+    ilha = sorted(m for m in pos if not (jn and jn[0] <= m <= jn[1]))
+    if ilha:
+        r["motivo"] = "cria ilha separada da faixa lucrativa (margem %s)" % _txt_totais(ilha)
+        return r
+    if not r["novos"] and not melhora:
+        r["motivo"] = "não cria margem lucrativa nova nem melhora a faixa existente"
+        return r
+    lim = float(cfg.get("perda_max_por_jogo_brl", 100.0))
+    if r["pior_depois"] < -lim - 1e-9:
+        r["motivo"] = "pior caso ultrapassa −R$ %s (ficaria %s)" % (_br(lim), _br(r["pior_depois"]))
+        return r
+    r["capital"] = round(sum(p["stake"] for p in novas), 2)
+    r["lucro_min_janela"] = round(min(depois[m] for m in range(jn[0], jn[1] + 1)), 2) if jn else None
+    r["ok"] = True
+    r["motivo"] = "amplia/melhora a faixa de margens %s → %s (%s%s)" % (
+        ("%d..%d" % ja) if ja else "—", ("%d..%d" % jn) if jn else "—", r["tipo"],
+        (": repete " + ", ".join(r["ancora"])) if r["ancora"] else "")
+    return r
+
+
+def pior_do_mercado(pernas):
+    """Pior caso de UMA carteira (um mercado)."""
+    if not pernas:
+        return 0.0
+    if pernas[0].get("tipo", "total") == "handicap":
+        return min(liquido_por_margem(pernas).values())
+    return min(liquido_por_placar(pernas, faixa_carteira(pernas)).values())
+
+
+def pior_global(pernas):
+    """LIMITE GLOBAL do jogo (operador 24/11): soma do pior caso de CADA carteira (totais e handicaps, todos os períodos).
+    Conservador: supõe que todos os mercados dão o pior ao mesmo tempo."""
+    grupos = {}
+    for p in pernas:
+        grupos.setdefault(mercado_de(p), []).append(p)
+    return round(sum(pior_do_mercado(g) for g in grupos.values()), 2)
+
+
+def linha_principal_hcp(ofertas, periodo="jogo"):
+    """Linha principal do HANDICAP na PS (perspectiva do mandante): a linha em que as odds dos dois times ficam mais
+    próximas (o portão da reentrada de handicap usa ela, como os totais usam a linha principal de totais)."""
+    casa = {round(o["linha"], 2): o["odd"] for o in ofertas or [] if o.get("tipo") == "handicap"
+            and o.get("periodo") == periodo and o.get("time_idx") == 0}
+    fora = {round(-o["linha"], 2): o["odd"] for o in ofertas or [] if o.get("tipo") == "handicap"
+            and o.get("periodo") == periodo and o.get("time_idx") == 1}
+    comuns = [l for l in casa if l in fora]
+    if not comuns:
+        return None
+    return min(comuns, key=lambda l: abs(casa[l] - fora[l]))
+
+
+def _chave_par(pernas):
+    return tuple((p.get("lado") or "t%s" % p.get("time_idx"), round(p["linha"], 2)) for p in pernas)
+
+
+def resumo_handicap(pernas):
+    """Painel 'Handicap': carteiras de handicap do jogo (por período/OT): margens lucrativas, melhor/pior saldo."""
+    grupos = {}
+    for p in pernas:
+        if p.get("tipo") == "handicap":
+            grupos.setdefault(mercado_de(p), []).append(p)
+    out = []
+    for (tp, per, ot), g in sorted(grupos.items(), key=lambda kv: kv[0][1]):
+        liq = liquido_por_margem(g)
+        lucro = sorted(m for m, v in liq.items() if v > 0.005)
+        out.append({"periodo": NOME_PERIODO.get(per, per), "ot": ot, "pares": len({p.get("par") for p in g}),
+                    "margens": _txt_totais(lucro) if lucro else "—", "melhor": round(max(liq.values()), 2),
+                    "pior": round(min(liq.values()), 2), "janela": janela_hcp(g)})
+    return out
+
+
 def pernas_aceitas(bil):
     """As pernas como a CASA aceitou: odd do recibo (odd_aceita) > odd viva no cupom > odd lida; stake digitada."""
     return [{"casa": p["casa"], "tipo": p["tipo"], "periodo": p["periodo"], "lado": p.get("lado"), "linha": p["linha"],
-             "odd": p.get("odd_aceita") or p.get("odd_viva") or p["odd"], "stake": p["stake"], "par": bil.get("id")}
+             "odd": p.get("odd_aceita") or p.get("odd_viva") or p["odd"], "stake": p["stake"], "par": bil.get("id"),
+             "time": p.get("time"), "time_idx": p.get("time_idx"), "ot": p.get("ot", "inc")}
             for p in bil["pernas"]]
 
 
@@ -1284,7 +1505,7 @@ def _hms_ms(t):
     return datetime.fromtimestamp(t).strftime("%H:%M:%S.") + "%03d" % int((t % 1) * 1000)
 
 
-def validar_par_vivo(bil, odd1, odd2, cfg, carteira=None):
+def validar_par_vivo(bil, odd1, odd2, cfg, carteira=None, outras=None):
     """BARREIRA FINAL: o par refeito SÓ com as odds que os cupons mostram agora e as stakes já digitadas.
     Reaplica odd mínima, tabela de custo da janela, janela lucrativa contínua, perda máxima e (com carteira) todas as
     regras de reentrada. Devolve (ok, motivo, custo_vivo, pior)."""
@@ -1302,9 +1523,29 @@ def validar_par_vivo(bil, odd1, odd2, cfg, carteira=None):
     teto = custo_max_para(bil["janela"], cfg)
     if custo > teto + 1e-9:
         return False, "custo vivo %s%% > limite %s%% (janela %s)" % (_br(custo), _br(teto), _br(bil["janela"], 1)), custo, None
+    novas = [dict(p1, odd=odd1), dict(p2, odd=odd2)]
+    lim = float(cfg.get("perda_max_por_jogo_brl", 100.0))
+    if outras is not None:
+        # 24/11: LIMITE GLOBAL do jogo — totais + handicaps juntos (soma do pior caso de cada carteira)
+        pg = pior_global(list(outras) + list(carteira or []) + novas)
+        if pg < -lim - 1e-9:
+            return False, "perda máxima GLOBAL do jogo (totais + handicap) passaria de −R$ %s (ficaria %s)" % (
+                _br(lim), _br(pg)), custo, pg
+    if bil.get("tipo", "total") == "handicap":
+        if novas[0].get("time_idx") == novas[1].get("time_idx"):
+            return False, "handicap precisa dos dois times (lados opostos)", custo, None
+        if carteira:
+            av = avaliar_reentrada_hcp(carteira, novas, cfg)
+            return (True, "", custo, av["pior_depois"]) if av["ok"] else (False, av["motivo"], custo, av.get("pior_depois"))
+        liq = liquido_por_margem(novas)
+        pior = round(min(liq.values()), 2)
+        if pior < -lim - 1e-9:
+            return False, "pior caso ultrapassa −R$ %s (ficaria %s)" % (_br(lim), _br(pior)), custo, pior
+        if not janela_hcp(novas):
+            return False, "sem faixa lucrativa de margens com as odds vivas", custo, pior
+        return True, "", custo, pior
     if bil.get("tipo", "total") != "total":
         return True, "", custo, None
-    novas = [dict(p1, odd=odd1), dict(p2, odd=odd2)]
     if carteira:
         av = avaliar_reentrada(carteira, novas, cfg)
         if not av["ok"]:
@@ -1913,6 +2154,14 @@ def ofertas_de_enumeracao(itens, casa, times, quarto=None, aba=""):
         if not (_coexiste(o["linha"], o["_src"], usar_abs=True) and _coexiste(odd, o["_src"])):
             continue
         o.update({"odd": odd, "_mid": it["mid"], "casa": casa, "secao": " / ".join(heads[:3]), "aba": aba})
+        # regra de prorrogação (24/11): mercado do jogo é 'com OT' salvo quando a casa diz 'tempo regulamentar'
+        hx = _sem_acento(" ".join(heads)).lower()
+        if o["periodo"] != "jogo":
+            o["ot"] = "-"
+        elif re.search(r"tempo regulamentar|regular time|regulation|sem prorrog|excl(uding|\.)? ot", hx):
+            o["ot"] = "reg"
+        else:
+            o["ot"] = "inc"
         chave = (o["tipo"], o["periodo"], o.get("lado"), o.get("time_idx"), o["linha"])
         if chave in vistos:
             continue
@@ -4402,6 +4651,7 @@ class Estado:
         self.calculadora = None    # raio-x da última rodada sadia
         self.monitor = ""          # texto de status do monitoramento
         self.reentrada = None      # última avaliação de reentrada (escadinha) para o painel
+        self.handicap = None       # 24/11: painel 'Handicap' (carteiras de handicap + exposição global do jogo)
         self.protecao = None       # jogo protegido (par confirmado), fila de sinais e último motivo de liberação
         self._seq = max([b.get("id", 0) for b in self.bilhetes] + [0])
         self._trava_gravar = threading.Lock()
@@ -4483,6 +4733,7 @@ class Estado:
                 "calculadora": calc,
                 "monitor": self.monitor,
                 "reentrada": json.loads(json.dumps(self.reentrada, default=str)) if self.reentrada else None,
+                "handicap": json.loads(json.dumps(self.handicap, default=str)) if self.handicap else None,
                 "protecao": dict(self.protecao) if self.protecao else None,
                 "posicoes": [_pos_painel(p) for p in self.posicoes[-20:]][::-1],
                 "log": _LOG_MEM[-80:],
@@ -4814,15 +5065,18 @@ class Operador:
         carteira_local = []  # as pernas desses bilhetes (quando não há posição aberta para o jogo)
         janela_padrao = {}   # período -> janela da 1ª entrada aceita (padrão das reentradas)
 
-        def carteira(periodo):
-            """Todas as apostas aceitas deste jogo/período: as entradas deste monitoramento (SEMPRE) + as avulsas
-            da posição. 17/11 15:48: com a Cobertura desligada a posição parou de receber as reentradas e o mesmo
-            par (186/195.5) entrou DUAS vezes — a lista local é a fonte, a posição só soma as avulsas."""
-            base = [p for p in carteira_local if p.get("periodo") == periodo]
-            pos = self._posicao_aberta(times, periodo)
+        def carteira(periodo, tipo="total", ot=None):
+            """Todas as apostas aceitas deste jogo NESTE MERCADO (tipo + período + regra de OT): as entradas deste
+            monitoramento (SEMPRE) + as avulsas da posição (só totais). 24/11: total e handicap são carteiras SEPARADAS.
+            17/11 15:48: a lista local é a fonte, a posição só soma as avulsas."""
+            base = [p for p in carteira_local if p.get("periodo") == periodo and p.get("tipo", "total") == tipo
+                    and (ot is None or p.get("ot", "inc") == ot)]
+            pos = self._posicao_aberta(times, periodo) if tipo == "total" else None
             if pos:  # junta sem duplicar (a mesma aposta pode estar nas duas listas)
                 ja = {(p["casa"], p["lado"], round(p["linha"], 2), round(p["stake"], 2)) for p in base}
                 for p in pos["pernas"]:
+                    if p.get("tipo", "total") != "total":
+                        continue
                     k = (p["casa"], p["lado"], round(p["linha"], 2), round(p["stake"], 2))
                     if k not in ja:
                         base.append(dict(p))
@@ -4831,18 +5085,39 @@ class Operador:
 
         geladeira = {}  # chave da oferta -> até quando fica de fora (falhou agora há pouco)
         ultima = [None, None]  # (quando, linha principal da PS) da última entrada aceita — 'esperar a linha andar'
+        ultima_h = [None, None]  # 24/11: idem para o HANDICAP (portão próprio)
         avals = []             # avaliações de reentrada da rodada (painel)
         cand_ant = [None]      # candidato da leitura anterior (precisa aparecer em 2 leituras seguidas)
         incompleta = [False]   # uma perna entrou e a outra não: sem novas reentradas neste jogo
         solta = [None, None]  # [perna da 1aWin sem par, bilhete] — 'sempre buscar pares para cobrir' (18/11)
         indisp_ps = [0]  # quantas vezes a PS disse 'mínima maior que a máxima' neste jogo
 
-        def pares_periodo(per):
-            return len({p.get("par") for p in carteira_local if p.get("periodo", "jogo") == per})
+        def pares_periodo(per, tipo="total"):
+            return len({p.get("par") for p in carteira_local if p.get("periodo", "jogo") == per
+                        and p.get("tipo", "total") == tipo})
 
         def txt_pares():
-            pers = sorted({p.get("periodo", "jogo") for p in carteira_local}, key=lambda x: (x != "jogo", x))
-            return " · ".join("%s %d" % (NOME_PERIODO.get(x, x), pares_periodo(x)) for x in pers)
+            ms = sorted({(p.get("tipo", "total"), p.get("periodo", "jogo")) for p in carteira_local},
+                        key=lambda x: (x[0] != "total", x[1] != "jogo", x[1]))
+            return " · ".join("%s%s %d" % ("Handicap " if t == "handicap" else "", NOME_PERIODO.get(x, x), pares_periodo(x, t))
+                              for t, x in ms)
+
+        def todas_do_jogo():
+            """Todas as apostas aceitas do jogo, em TODOS os mercados (limite global)."""
+            pos_l = []
+            for per in {p.get("periodo") for p in carteira_local} | {"jogo"}:
+                pos_l += [p for p in carteira(per) if p not in carteira_local]
+            return list(carteira_local) + pos_l
+
+        def publicar_hcp(classe=None):
+            """Painel 'Handicap' (24/11): carteiras de handicap do jogo + exposição TOTAL (totais + handicap)."""
+            todas = todas_do_jogo()
+            ant = self.estado.handicap if (self.estado.handicap or {}).get("jogo") == sinal["jogo"] else {}
+            with _TRAVA:
+                self.estado.handicap = {"jogo": sinal["jogo"], "carteiras": resumo_handicap(todas),
+                                        "exposicao": pior_global(todas) if todas else 0.0,
+                                        "limite": float(self.cfg.get("perda_max_por_jogo_brl", 100.0)),
+                                        "ultima_classificacao": classe or ant.get("ultima_classificacao")}
 
         def excluir(a, b, jan):
             """Regras obrigatórias (além da odd mínima e da tabela de custo, que o achar_par já aplica).
@@ -4855,37 +5130,45 @@ class Operador:
                     return "linha da %s falhou há pouco (geladeira)" % NOME_CASA[casa_n]
             maxe = int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4))
             # 24/11 (operador): o limite de 4 pares vale POR MERCADO (total do jogo, cada quarto), não somando tudo
-            n_per = pares_periodo(a.get("periodo", "jogo"))
+            n_per = pares_periodo(a.get("periodo", "jogo"), a["tipo"])
             if n_per >= maxe:
-                return "o mercado %s já tem %d de %d pares confirmados" % (
-                    NOME_PERIODO.get(a.get("periodo"), a.get("periodo")), n_per, maxe)
+                return "o mercado %s%s já tem %d de %d pares confirmados" % (
+                    "Handicap " if a["tipo"] == "handicap" else "", NOME_PERIODO.get(a.get("periodo"), a.get("periodo")),
+                    n_per, maxe)
             falta = self._tent.cooldown(assinatura_par(times, a, b), agora_s)
             if falta:
                 return "o mesmo par falhou há pouco — cooldown de mais %ds (não repito o mesmo par na hora)" % int(falta + 0.99)
             if not entradas:
                 return None
-            if a["tipo"] != "total":
-                return "reentrada só em totais"
-            cart = carteira(a["periodo"])
-            if not cart:
-                return None
             c = _calcular(a, b, self.cfg)
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
+            # 24/11: LIMITE GLOBAL do jogo — totais + handicaps juntos não passam da perda máxima
+            lim = float(self.cfg.get("perda_max_por_jogo_brl", 100.0))
+            pg = pior_global(todas_do_jogo() + novas)
+            if pg < -lim - 1e-9:
+                return "perda máxima GLOBAL do jogo (totais + handicap) passaria de −R$ %s (ficaria %s)" % (_br(lim), _br(pg))
+            cart = carteira(a["periodo"], a["tipo"], a.get("ot", "inc") if a["tipo"] == "handicap" else None)
+            if not cart:
+                return None
             # 21/11: âncora e escadinha passam pelas MESMAS regras; o rótulo só explica (nenhum tipo tem prioridade)
-            av = avaliar_reentrada(cart, novas, self.cfg)
-            avals.append({"pernas": [{"casa": x["casa"], "lado": x["lado"], "linha": x["linha"], "odd": x["odd"],
-                                      "stake": x["stake"]} for x in novas], "custo": c["custo"], **av})
+            # 24/11: o handicap tem as regras PRÓPRIAS (margens), separadas dos totais
+            av = avaliar_reentrada_hcp(cart, novas, self.cfg) if a["tipo"] == "handicap" else \
+                avaliar_reentrada(cart, novas, self.cfg)
+            avals.append({"pernas": [{"casa": x["casa"], "lado": x.get("lado"), "linha": x["linha"], "odd": x["odd"],
+                                      "stake": x["stake"], "time": x.get("time"), "time_idx": x.get("time_idx"),
+                                      "tipo": x["tipo"]} for x in novas],
+                          "custo": c["custo"], **av})
             return None if av["ok"] else av["motivo"]
 
         def preferir(a, b, c):
             """Escolha entre candidatos JÁ APROVADOS pela qualidade da carteira (ordem do operador 21/11)."""
-            if a["tipo"] != "total":
-                return ()
-            cart = carteira(a["periodo"])
+            cart = carteira(a["periodo"], a["tipo"], a.get("ot", "inc") if a["tipo"] == "handicap" else None)
             if not cart:
                 return ()
             novas = [dict(a, casa=CASA_1W, stake=c["stake_1w"]), dict(b, casa=CASA_PS, stake=c["stake_ps"])]
-            return nota_reentrada(avaliar_reentrada(cart, novas, self.cfg), c["custo"], min(a["odd"], b["odd"]))
+            av = avaliar_reentrada_hcp(cart, novas, self.cfg) if a["tipo"] == "handicap" else \
+                avaliar_reentrada(cart, novas, self.cfg)
+            return nota_reentrada(av, c["custo"], min(a["odd"], b["odd"]))
 
         log("▶ %s: %s (mercado da dica: %s)" % ("SINAL" if origem == "sinal" else origem.upper(), sinal["jogo"], sinal.get("mercado") or "—"))
         # 24/11 (operador): 'limpar as posições, tá mostrando jogo antepassado' — jogo novo assumiu: as posições ABERTAS de
@@ -4959,6 +5242,7 @@ class Operador:
                               "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas), "linha_ultima": ultima[1]}
             self._prot["por_periodo"] = txt_pares()
             self._publicar_protecao()
+        publicar_hcp()
         if entradas and origem not in ("retomada", "perna_solta"):
             log("↻ %s: %d par(es) já confirmado(s) neste jogo entram na carteira — reentrada segue as regras "
                 "(escadinha/âncora, sem ilha, sem par repetido)" % (sinal["jogo"], len(entradas)))
@@ -5159,16 +5443,22 @@ class Operador:
                                             excluir=excluir, preferir=preferir if entradas else None)
                     if entradas and self.cfg.get("reentrada_livre", True):
                         # especificação 19/11: espera mínima + movimento mínimo da linha + 2 leituras seguidas
-                        ml = linha_principal(lt[CASA_PS]["ofertas"], "jogo")
-                        livre, por_que = portao_reentrada(ultima[0], ultima[1], time.time(), ml, self.cfg)
+                        e_hcp = bool(bil and bil["tipo"] == "handicap")
+                        if e_hcp:
+                            # 24/11: o handicap tem o PRÓPRIO portão (espera + movimento da linha principal de handicap)
+                            ml = linha_principal_hcp(lt[CASA_PS]["ofertas"], bil["periodo"])
+                            livre, por_que = portao_reentrada(ultima_h[0], ultima_h[1], time.time(), ml, self.cfg)
+                        else:
+                            ml = linha_principal(lt[CASA_PS]["ofertas"], "jogo")
+                            livre, por_que = portao_reentrada(ultima[0], ultima[1], time.time(), ml, self.cfg)
                         chave = None
                         if bil:
-                            chave = tuple((p["lado"], round(p["linha"], 2)) for p in bil["pernas"])
-                        escolhido = next((v for v in avals if v["ok"] and chave and
-                                          tuple((x["lado"], round(x["linha"], 2)) for x in v["pernas"]) == chave), None)
+                            chave = _chave_par(bil["pernas"])
+                        escolhido = next((v for v in avals if v["ok"] and chave and _chave_par(v["pernas"]) == chave), None)
                         self.estado.reentrada = {"jogo": sinal["jogo"], "hora": agora(), "linha_ps": ml,
-                                                 "linha_ultima": ultima[1], "portao": por_que or "liberado",
-                                                 "janela": janela_continua(carteira(bil["periodo"] if bil else "jogo")),
+                                                 "linha_ultima": ultima_h[1] if e_hcp else ultima[1], "portao": por_que or "liberado",
+                                                 "janela": (janela_hcp(carteira(bil["periodo"], "handicap")) if e_hcp else
+                                                            janela_continua(carteira(bil["periodo"] if bil else "jogo"))),
                                                  "candidatos": sorted(avals, key=lambda v: (not v["ok"], -len(v["novos"])))[:6],
                                                  "escolhido": escolhido}
                         if bil:
@@ -5205,7 +5495,10 @@ class Operador:
                             bil["pernas"][1]["odd"], _br(bil["janela"], 1), _br(bil["custo"])))
                         self.estado.registrar_bilhete(bil, origem)
                         self.estado.atualizar(bil, status="executando")
-                        cart_antes = carteira(bil["periodo"])  # antes: a posição ganha as pernas novas ao confirmar
+                        cart_antes = carteira(bil["periodo"], bil["tipo"],
+                                              bil["pernas"][0].get("ot", "inc") if bil["tipo"] == "handicap" else None)
+                        # 24/11: as OUTRAS carteiras do jogo (totais/handicaps de outros períodos) entram no limite global
+                        outras = [p for p in todas_do_jogo() if p not in cart_antes]
                         cfg_sub = cfg_par
 
                         def substituir(nome_f, b0, _cfg=cfg_sub):
@@ -5228,7 +5521,8 @@ class Operador:
                         bil["_reentrada"] = bool(entradas)
                         ass0 = assinatura_par(times, bil["pernas"][0], bil["pernas"][1])
                         self._tent.registrar(sinal["jogo"])
-                        st = self.executar_bilhete(bil, substituir=substituir, carteira=cart_antes if entradas else None)
+                        st = self.executar_bilhete(bil, substituir=substituir, carteira=cart_antes if entradas else None,
+                                                   outras=outras)
                         if st == "falhou":
                             # 22/11: o par que falhou (e a troca, se houve) fica em cooldown — sem ciclo infinito no mesmo par
                             self._tent.falhou(ass0)
@@ -5244,10 +5538,16 @@ class Operador:
                                     sinal["jogo"], NOME_PERIODO.get(bil["periodo"], bil["periodo"]), len(cart_antes) + 2,
                                     _txt_totais(av["cobertura"]), _txt_totais(av["tres_ou_mais"]), _br(av["pior"]),
                                     (" | ⚠ esta entrada AUMENTOU a perda em %s" % _txt_totais(av["piorou_em"])) if av["piorou_em"] else ""))
+                            classe_hcp = None
+                            if bil["tipo"] == "handicap" and cart_antes:
+                                classe_hcp = avaliar_reentrada_hcp(cart_antes, novas, self.cfg).get("tipo")
+                            elif bil["tipo"] == "handicap":
+                                classe_hcp = "1ª entrada"
                             for x in novas:
                                 x["par"] = bil.get("id")
                             carteira_local.extend(novas)
                             entradas.append(bil.get("id"))
+                            publicar_hcp(classe_hcp)
                             self._prot = {"jogo": sinal["jogo"], "pares": len(entradas),
                                           "max": int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 4)),
                                           "ultima": time.time(), "sinal": sinal, "bilhetes": list(entradas),
@@ -5255,7 +5555,10 @@ class Operador:
                             self._motivo_lib = ""
                             self._publicar_protecao()
                             cand_ant[0] = None
-                            ultima[0], ultima[1] = time.time(), linha_principal(lt[CASA_PS]["ofertas"], "jogo")
+                            if bil["tipo"] == "handicap":
+                                ultima_h[0], ultima_h[1] = time.time(), linha_principal_hcp(lt[CASA_PS]["ofertas"], bil["periodo"])
+                            else:
+                                ultima[0], ultima[1] = time.time(), linha_principal(lt[CASA_PS]["ofertas"], "jogo")
                             janela_padrao.setdefault(bil["periodo"], bil["janela"])
                             maxe = int(self.cfg.get("max_pares_por_jogo") or self.cfg.get("max_entradas_por_jogo", 1))
                             # 18/11: 'e assim por diante até bater 4 linhas'. 24/11: 4 pares POR MERCADO; o jogo encerra quando o
@@ -5484,10 +5787,11 @@ class Operador:
         log("ESTADO: %s → %s%s" % (ex.get("estado") or "INÍCIO", novo, extra))
         ex["estado"] = novo
 
-    def executar_bilhete(self, bil, substituir=None, carteira=None):
+    def executar_bilhete(self, bil, substituir=None, carteira=None, outras=None):
         """substituir(casa_que_falhou, bil) -> bilhete novo | None: troca de perna (âncora ou escadinha, sem
         prioridade entre os tipos) quando a casa tira a linha antes dos disparos — o par novo passa por TODAS as regras e
         a barreira final é refeita do zero. carteira = apostas já aceitas neste jogo/período (regras de reentrada)."""
+        self._outras_atual = list(outras) if outras is not None else None   # limite GLOBAL do jogo (totais + handicap)
         with _TRAVA_CLIQUES:
             ex = {"estado": None, "subs": 0, "reinicios": 0, "t0": time.time()}
             st = None
@@ -5625,7 +5929,7 @@ class Operador:
                     return {"ok": False, "instavel": True,
                             "motivo": "os dados mudaram de novo durante a barreira (odds %s × %s -> %s × %s; %d ms entre as leituras)" % (
                                 anterior[0], anterior[1], o1, o2, dt)}
-            ok, mot, custo, pior = validar_par_vivo(bil, o1, o2, self.cfg, carteira)
+            ok, mot, custo, pior = validar_par_vivo(bil, o1, o2, self.cfg, carteira, getattr(self, "_outras_atual", None))
             if not ok:
                 return {"ok": False, "motivo": mot, "custo": custo}
             with _TRAVA:
@@ -5995,7 +6299,7 @@ class Operador:
             if L.get("stake") is None or abs(L["stake"] - esperado) > 0.011:
                 motivo = "stake alterada (digitada %s, o cupom mostra %s)" % (_fmt(esperado), L.get("stake"))
             else:
-                ok, mot, custo, pior = validar_par_vivo(bil, o1, L["odd"], self.cfg, carteira)
+                ok, mot, custo, pior = validar_par_vivo(bil, o1, L["odd"], self.cfg, carteira, getattr(self, "_outras_atual", None))
                 if not ok:
                     motivo = mot
                 else:
@@ -6675,6 +6979,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0}
 <div class="card" id="calc"><h2>🧮 Calculadora do motor</h2><div class="mut">aguardando a primeira rodada sadia…</div></div>
 <div class="card"><h2>📥 Sinais de backlog (só montam com clique)</h2><div id="backlog" class="mut">—</div></div>
 <div class="card full"><h2>🪜 Escadinha — candidatos de reentrada</h2><div id="reent" class="mut">—</div></div>
+<div class="card full"><h2>🏀 Handicap</h2><div id="hcp" class="mut">—</div></div>
 <div class="card full"><h2>📌 Posições (monitoramento pós-entrada)</h2><div id="posmodo"></div><div id="pos" class="mut">—</div></div>
 <div class="card full"><h2>🎫 Bilhetes</h2><div id="bil"></div></div>
 <div class="card"><h2>🛰️ Sinais recebidos</h2><div id="sinais"></div></div>
@@ -6745,10 +7050,15 @@ async function tick(){try{const d=await (await fetch('/api/estado')).json();
   if(!re)document.getElementById('reent').innerHTML='Sem reentrada em avaliação (aparece depois do 1º par aceito num jogo).';
   else{let h='<div><b>'+esc(re.jogo)+'</b> · '+esc(re.hora)+' · janela atual: <b class="ok">'+J(re.janela)+'</b> · linha da PS: '+(re.linha_ps??'?')+' (na última entrada: '+(re.linha_ultima??'?')+') · espera: <b class="'+(re.portao=='liberado'?'ok':'am')+'">'+esc(re.portao)+'</b></div>';
    h+='<table style="font-size:12px;margin-top:4px"><tr><th></th><th>Tipo</th><th>Par</th><th>Custo</th><th>Janela atual → simulada</th><th>Novos</th><th>Pior antes → depois</th><th>Capital do par</th><th>Concentração</th><th>Motivo</th></tr>'+
-   (re.candidatos||[]).map(c=>'<tr><td>'+(c.ok?'✅':'✖')+'</td><td>'+esc(c.tipo||'—')+'</td><td>'+c.pernas.map(x=>(x.casa=='1awin'?'1aWin':'PS')+' '+(x.lado=='acima'?'Over':'Under')+' '+x.linha+' @'+x.odd+' '+R(x.stake)).join('<br>')+'</td><td>'+P(c.custo)+'%</td><td>'+J(c.janela_antiga)+' → '+J(c.janela_nova)+'</td><td>'+((c.novos||[]).join(', ')||'—')+'</td><td>'+(c.pior_antes!=null?R(c.pior_antes)+' → '+R(c.pior_depois):'—')+'</td><td>'+(c.capital!=null?R(c.capital):'—')+'</td><td>'+(c.concentracao?Object.entries(c.concentracao).filter(([k,v])=>v>1).map(([k,v])=>esc(k)+' ×'+v).join('<br>')||'nenhuma repetida':'—')+'</td><td>'+esc(c.motivo||'')+'</td></tr>').join('')+'</table>';
+   (re.candidatos||[]).map(c=>'<tr><td>'+(c.ok?'✅':'✖')+'</td><td>'+esc(c.tipo||'—')+'</td><td>'+c.pernas.map(x=>(x.casa=='1awin'?'1aWin':'PS')+' '+(x.tipo=='handicap'?esc(x.time||'time')+' '+(x.linha>0?'+':'')+x.linha:(x.lado=='acima'?'Over':'Under')+' '+x.linha)+' @'+x.odd+' '+R(x.stake)).join('<br>')+'</td><td>'+P(c.custo)+'%</td><td>'+J(c.janela_antiga)+' → '+J(c.janela_nova)+'</td><td>'+((c.novos||[]).join(', ')||'—')+'</td><td>'+(c.pior_antes!=null?R(c.pior_antes)+' → '+R(c.pior_depois):'—')+'</td><td>'+(c.capital!=null?R(c.capital):'—')+'</td><td>'+(c.concentracao?Object.entries(c.concentracao).filter(([k,v])=>v>1).map(([k,v])=>esc(k)+' ×'+v).join('<br>')||'nenhuma repetida':'—')+'</td><td>'+esc(c.motivo||'')+'</td></tr>').join('')+'</table>';
    const e=re.escolhido||(re.candidatos||[]).find(c=>c.saldos&&c.saldos.length);
    if(e&&e.saldos&&e.saldos.length)h+='<details><summary class="mut">saldo por total final (antes → depois) do '+(re.escolhido?'escolhido':'1º candidato')+'</summary><table style="font-size:12px">'+e.saldos.map(t=>'<tr><td>'+t[0]+'</td><td class="'+(t[1]>0?'ok':'no')+'">'+R(t[1])+'</td><td>→</td><td class="'+(t[2]>0?'ok':'no')+'">'+R(t[2])+'</td></tr>').join('')+'</table></details>';
    document.getElementById('reent').innerHTML=h;}}
+ {const hp=d.handicap;
+  if(!hp)document.getElementById('hcp').innerHTML='Nenhum par de handicap neste jogo ainda (o handicap é procurado junto com os totais).';
+  else document.getElementById('hcp').innerHTML='<div><b>'+esc(hp.jogo)+'</b> · exposição TOTAL do jogo (totais + handicap, pior caso somado): <b class="'+(hp.exposicao<0?'no':'ok')+'">'+R(hp.exposicao)+'</b> · perda máxima permitida: '+R(-hp.limite)+(hp.ultima_classificacao?' · última reentrada de handicap: <b>'+esc(hp.ultima_classificacao)+'</b>':'')+'</div>'+
+   ((hp.carteiras||[]).length?'<table style="font-size:12px;margin-top:4px"><tr><th>Mercado</th><th>Pares confirmados</th><th>Margens lucrativas (mandante − visitante)</th><th>Melhor saldo</th><th>Pior saldo</th></tr>'+
+   hp.carteiras.map(c=>'<tr><td>Handicap '+esc(c.periodo)+(c.ot==='inc'?' (com OT)':c.ot==='reg'?' (sem OT)':'')+'</td><td>'+c.pares+'</td><td class="ok">'+esc(c.margens)+'</td><td class="ok">'+R(c.melhor)+'</td><td class="no">'+R(c.pior)+'</td></tr>').join('')+'</table>':'<div class="mut">sem pares de handicap confirmados</div>');}
  document.getElementById('sinais').innerHTML=d.sinais.map(s=>'<div>'+s.hora+' '+esc(s.jogo)+' <span class="mut">'+esc(s.mercado)+' ('+s.origem+')</span></div>').join('')||'—';
  document.getElementById('res').innerHTML=d.resultados.map(r=>'<div>'+esc(r.quando)+' '+esc(r.jogo)+' — <b>'+esc(r.desfecho)+'</b></div>').join('')||'—';
  const lg=document.getElementById('log');const fim=lg.scrollTop+lg.clientHeight>=lg.scrollHeight-20;lg.textContent=d.log.join('\n');if(fim)lg.scrollTop=lg.scrollHeight;
