@@ -323,7 +323,9 @@ def test_sinal_fresco_ponta_a_ponta(casas, cfgc):
     v.processar(conversa)
     assert esperar(lambda: est.bilhetes and est.bilhetes[-1]["status"] == "testado", 90), (est.bilhetes, P._LOG_MEM[-15:])
     assert est.calculadora and est.calculadora["valido"]
-    assert "encerrado" in est.monitor
+    # sem fim por tempo (pedido do operador): depois do 1º par segue monitorando até 4 pares / mercado fechar
+    assert "encerrado" in est.monitor or "monitorando Phoenix x Charlotte" in est.monitor, est.monitor
+    op.pausar() if hasattr(op, "pausar") else None
 
 
 def test_monitor_estaciona_com_casa_limitada(casas, cfgc, monkeypatch):
