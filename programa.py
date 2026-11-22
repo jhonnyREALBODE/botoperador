@@ -4885,6 +4885,9 @@ class Operador:
         except Exception:
             self.pausado = False
         self.estado.pausado = self.pausado
+        if self.pausado:
+            # log 21/11 23:05–00:38: abriu 3x ainda PAUSADO (do clique de 22:55) e o log não dizia nada
+            log("⏸ ATENÇÃO: o robô abriu PAUSADO (você pausou antes de fechar) — clique '▶ Ligar robô' no painel para apostar")
 
     def _posicao_aberta(self, times, periodo):
         for p in self.estado.posicoes:
