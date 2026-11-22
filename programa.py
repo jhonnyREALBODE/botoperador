@@ -184,6 +184,7 @@ DEFAULTS = {
     "auto_aprovar": False,       # legado da era do painel
     "so_totais": True,           # (totais sempre ligados)
     "handicap_ativo": True,      # 24/11 (operador): handicap como mercado PRÓPRIO, ao lado dos totais
+    "handicap_odd_max": 4.0,     # odd de handicap acima disso = leitura errada de outro mercado (ignora)
     "handicap_periodos": ["jogo", "t1", "q1", "q2", "q3"],           # restrição temporária 13/11 23:26 (false/null religa handicap)
     "totais_periodos": ["jogo", "q1", "q2", "q3"],  # operador 23/11: jogo inteiro + quartos de novo (4º quarto: sempre proibido)
     "url_grok": "",
@@ -801,6 +802,9 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
             if o["tipo"] == "handicap" and not (cfg.get("handicap_ativo", True) or not so_totais):
                 continue
             if o["tipo"] == "handicap" and o.get("periodo") not in set(cfg.get("handicap_periodos") or PERIODOS_TODOS):
+                continue
+            # log 21/11: "1aWin Minnesota +16 @15" — odd de handicap absurda = outro mercado lido errado; ignora
+            if o["tipo"] == "handicap" and o.get("odd", 0) > float(cfg.get("handicap_odd_max", 4.0)):
                 continue
             out.append(o)
         return out
@@ -6553,7 +6557,11 @@ class Operador:
             nova, mot = self._candidato_orfa(bil, falta, acc, carteira, tentadas)
             if not nova:
                 mot = "; ".join(x for x in (motivo, mot) if x)
-                log("PERNA_ORFA: sem proteção segura — %s" % mot)
+                # log 21/11 21:56–22:15: repetia a cada 5s (456 linhas) — só loga se o motivo mudou ou a cada 60s
+                _ult = getattr(self, "_ult_sem_prot", None)
+                if not _ult or _ult[0] != mot or time.time() - _ult[1] >= 60:
+                    log("PERNA_ORFA: sem proteção segura — %s" % mot)
+                    self._ult_sem_prot = (mot, time.time())
                 return "recusada", mot
             tentadas.add((nova["lado"], round(nova["linha"], 2)))
             log("PERNA_ORFA: tentativa %d/%d — protejo %s @%s (aceita, stake R$ %s) com %s @%s na %s (%s)" % (
