@@ -1065,6 +1065,7 @@ def test_limites_do_operador_100_por_jogo_e_ate_6_euros(cfg):
     """16/11: perda máxima R$ 100 por jogo; avulsa até €6 na PS ou o equivalente na 1aWin (R$ 37,20)."""
     c = P.carregar_config("/nao/existe.json", avisar=False)
     assert c["perda_max_por_jogo_brl"] == 100.0 and c["pos_perda_max_total_brl"] == 100.0 and c["perna_ps_eur_max"] == 6.0
+    c["perna_ps_eur"] = 5.0   # cenário escrito com €5 por perna (padrão subiu para €9,70 em 23/11)
     E = c["perna_ps_eur"] * c["cambio_brl_eur"]
     pos = {"id": 1, "periodo": "jogo", "pernas": [
         dict(_p("acima", 150.5, 1.90, 33.45), casa="1awin", origem="entrada"),

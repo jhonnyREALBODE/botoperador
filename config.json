@@ -1,7 +1,7 @@
 {
   "janela_min": 1.0,
   "custo_max": 4.0,
-  "perna_ps_eur": 5.0,
+  "perna_ps_eur": 9.7,
   "total_operacao": 600.0,
   "cambio_brl_eur": 6.20,
   "monitor_intervalo_s": 10,

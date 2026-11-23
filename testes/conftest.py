@@ -39,6 +39,7 @@ def cfg(tmp_path):
     c["odd_min"] = None  # idem (odds baixas nos dados falsos); a odd mínima tem teste próprio
     c["tempo_max_preparacao_seg"] = 15.0  # navegador de teste é lento; o prazo de 2 s tem teste próprio
     c["handicap_janela_min"] = 0   # testes antigos de handicap usam janela 1
+    c["perna_ps_eur"] = 5.0   # testes escritos com €5 por perna (o padrão subiu para €9,70 em 23/11)
     c["handicap_ativo"] = False   # testes antigos são de TOTAIS; o handicap (24/11) tem testes próprios
     # os testes foram escritos com a tabela 3/4,8/4,99/8 e custo_max 5 (a tabela padrão D tem teste próprio)
     c["custo_por_janela"], c["custo_max"] = [[1, 2, 3.0], [2, 3, 4.8], [3, 7, 4.99], [7, 11, 8.0]], 5.0
@@ -61,6 +62,7 @@ def casas(site, tmp_path_factory):
     cfg["odd_min"] = None
     cfg["tempo_max_preparacao_seg"] = 15.0  # navegador de teste (headless) é lento; o prazo tem teste próprio
     cfg["handicap_janela_min"] = 0
+    cfg["perna_ps_eur"] = 5.0
     cfg["handicap_ativo"] = False   # idem (os testes de handicap ligam explicitamente)
     cfg["custo_por_janela"], cfg["custo_max"] = [[1, 2, 3.0], [2, 3, 4.8], [3, 7, 4.99], [7, 11, 8.0]], 5.0
     cps = P.Casa(P.CASA_PS, cfg, base_url=site, perfil=str(d / "ps"), headless=True).iniciar()

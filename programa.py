@@ -176,7 +176,7 @@ DEFAULTS = {
     "pos_cooldown_s": 20,
     "pos_stake_min_1w_brl": 5.0,
     "pos_duracao_max_min": 240,       # 24/11: jogo com intervalos dura mais (carteira do jogo vale por até 4 h)
-    "perna_ps_eur": 5.0,         # 0 = volta ao total fixo
+    "perna_ps_eur": 9.7,         # 23/11 (operador): R$ 60 por perna (€9,70 × 6,20); 0 = volta ao total fixo
     "total_operacao": 600.0,
     "cambio_brl_eur": 6.20,
     "monitor_intervalo_s": 10,
@@ -1912,7 +1912,7 @@ def avaliar_cobertura(pos, ofertas_por_casa, modelo, cfg):
             if cfg.get("odd_min") and o.get("odd", 0) < float(cfg["odd_min"]) - 1e-9:
                 continue  # odd mínima (operador 17/11)
             # stake: PS = perna mínima (€5); 1aWin = a maior da grade que cabe no limite de perda da carteira
-            eur_max = float(cfg.get("perna_ps_eur_max") or cfg["perna_ps_eur"])
+            eur_max = max(float(cfg.get("perna_ps_eur_max") or 0), float(cfg["perna_ps_eur"]))  # 23/11: stake subiu p/ €9,70
             if casa == CASA_PS:  # €6, €5,5 ... até a perna mínima (€5)
                 grade, e = [], eur_max
                 while e >= cfg["perna_ps_eur"] - 1e-9:
