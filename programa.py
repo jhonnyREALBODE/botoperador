@@ -915,10 +915,12 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
             # 24/11 (operador): largura de janela de HANDICAP e de TOTAL são grandezas diferentes — entre mercados a
             # escolha é financeira: menor perda externa, menor custo, maior lucro mínimo da faixa, melhor retorno sobre a
             # exposição; a largura só desempata no fim. (Reentrada: o 'preferir' já devolve a chave financeira da carteira.)
+            # 23/11 (operador): "seguir melhor a janela que escolhemos" — MAIOR janela primeiro (dentro da tabela de
+            # custo), e só entre janelas iguais vale a escolha financeira (menor custo / pior caso)
             def chave(x):
                 if isinstance(x[5], tuple) and x[5]:
-                    return x[5]
-                return chave_financeira_par(x[3], x[4], x[2], x[1])
+                    return x[5]   # reentrada: a chave da carteira já começa pela largura da faixa de lucro
+                return (round(x[1], 2),) + tuple(chave_financeira_par(x[3], x[4], x[2], x[1]))
             validos.sort(key=chave, reverse=True)
         elif preferir and any(isinstance(x[5], tuple) for x in validos):
             validos.sort(key=lambda x: (x[5] if isinstance(x[5], tuple) else (), x[1], -x[2]["custo"]), reverse=True)
@@ -1549,14 +1551,15 @@ def chave_financeira_par(a, b, c, jan):
 
 
 def chave_financeira_carteira(av, custo):
-    """Idem para REENTRADA (carteira inteira): pior caso da carteira depois, −custo, lucro mínimo da faixa, retorno sobre o
-    investido, e por último a largura da faixa nova."""
+    """Idem para REENTRADA (carteira inteira): largura da faixa de lucro depois (23/11: primeiro), pior caso da carteira
+    depois, −custo, lucro mínimo da faixa, retorno sobre o investido."""
     jn = av.get("janela_nova")
     larg = (jn[1] - jn[0] + 1) if jn else 0
     lm = av.get("lucro_min_janela") or 0.0
     inv = av.get("investido_depois") or 0.0
-    return (round(av.get("pior_depois") or -1e9, 2), -round(custo or 0.0, 3), round(lm, 2),
-            round(lm / inv, 4) if inv else 0.0, larg)
+    # 23/11 (operador): a largura da faixa de lucro da carteira vem PRIMEIRO; o financeiro desempata
+    return (larg, round(av.get("pior_depois") or -1e9, 2), -round(custo or 0.0, 3), round(lm, 2),
+            round(lm / inv, 4) if inv else 0.0)
 
 
 def resumo_handicap(pernas):

@@ -2605,19 +2605,22 @@ def test_hcp_carteira_de_totais_aberta_e_handicap_acrescentado(cfg):
     assert av["janela_antiga"] == P.janela_continua(tot)
 
 
-def test_hcp_escolha_entre_mercados_e_financeira_nao_pela_largura(cfg):
-    """Handicap de janela 7 caro x total de janela 1 barato: vence o total (menor perda externa/custo); a largura só
-    desempata no fim."""
+def test_hcp_escolha_entre_mercados_maior_janela_primeiro(cfg):
+    """23/11 (operador): segue a JANELA — a maior janela aprovada pela tabela vence; entre janelas iguais, o financeiro
+    (menor custo / pior caso) desempata, não importa o mercado."""
     c = dict(cfg, handicap_ativo=True, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
     ha = oferta("1awin", "handicap", "jogo", None, 5.5, 1.76, "Phoenix Suns", 0)
     hb = oferta("ps3838", "handicap", "jogo", None, 1.5, 1.76, "Charlotte Hornets", 1)
     ta = oferta("1awin", "total", "jogo", "abaixo", 151.5, 2.05)
     tb = oferta("ps3838", "total", "jogo", "acima", 150.5, 2.05)
     bil, mot = P.achar_par([ha, ta], [hb, tb], SINAL, c)
-    assert bil and bil["tipo"] == "total", (bil, mot)
-    # handicap barato ganha do total caro (não importa o mercado)
-    bil2, _ = P.achar_par([dict(ha, odd=2.05), dict(ta, odd=1.76)], [dict(hb, odd=2.05), dict(tb, odd=1.76)], SINAL, c)
+    assert bil and bil["tipo"] == "handicap", (bil, mot)            # janela 7 > janela 1
+    # mesma janela (1): o mais barato vence, não importa o mercado
+    hb1 = dict(hb, linha=-4.5)
+    bil2, _ = P.achar_par([dict(ha, odd=2.05), dict(ta, odd=1.76)], [dict(hb1, odd=2.05), dict(tb, odd=1.76)], SINAL, c)
     assert bil2 and bil2["tipo"] == "handicap"
+    bil3, _ = P.achar_par([dict(ha, odd=1.76), dict(ta, odd=2.05)], [dict(hb1, odd=1.76), dict(tb, odd=2.05)], SINAL, c)
+    assert bil3 and bil3["tipo"] == "total"
 
 
 def test_hcp_desligado_nao_muda_nada_nos_totais(cfg):
