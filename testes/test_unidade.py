@@ -2797,3 +2797,19 @@ def test_sem_par_novo_nos_ultimos_5_minutos(cfg, monkeypatch):
         threading.Timer(0.4, cancel.set).start()
         op._monitorar(dict(SINAL), cancel, "sinal")
         assert (len(chamadas) > 0) == bool(esperado), (fim, len(chamadas))
+
+
+def test_hcp_janela_minima_propria(cfg):
+    """23/11 (operador): handicap de janela 1 não entra quando handicap_janela_min=2; janela 2 entra; total segue igual."""
+    c = dict(cfg, handicap_ativo=True, handicap_janela_min=2.0, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    ha = oferta("1awin", "handicap", "jogo", None, 5.5, 2.05, "Phoenix Suns", 0)
+    hb1 = oferta("ps3838", "handicap", "jogo", None, -4.5, 2.05, "Charlotte Hornets", 1)
+    bil, mot = P.achar_par([ha], [hb1], SINAL, c)
+    assert bil is None and "handicap com janela abaixo do mínimo" in mot, mot
+    hb2 = dict(hb1, linha=-3.5)
+    bil, mot = P.achar_par([ha], [hb2], SINAL, c)
+    assert bil and bil["tipo"] == "handicap", mot
+    ta = oferta("1awin", "total", "jogo", "abaixo", 151.5, 2.05)
+    tb = oferta("ps3838", "total", "jogo", "acima", 150.5, 2.05)
+    bil, mot = P.achar_par([ta], [tb], SINAL, c)
+    assert bil and bil["tipo"] == "total", mot

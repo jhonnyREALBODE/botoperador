@@ -184,6 +184,7 @@ DEFAULTS = {
     "auto_aprovar": False,       # legado da era do painel
     "so_totais": True,           # (totais sempre ligados)
     "handicap_ativo": True,      # 24/11 (operador): handicap como mercado PRÓPRIO, ao lado dos totais
+    "handicap_janela_min": 2.0,  # 23/11 (operador): handicap só com janela de 2 pontos ou mais (janela 1 bate pouco)
     "handicap_odd_max": 4.0,     # odd de handicap acima disso = leitura errada de outro mercado (ignora)
     "handicap_periodos": ["jogo", "t1", "q1", "q2", "q3"],           # restrição temporária 13/11 23:26 (false/null religa handicap)
     "totais_periodos": ["jogo", "q1", "q2", "q3"],  # operador 23/11: jogo inteiro + quartos de novo (4º quarto: sempre proibido)
@@ -880,6 +881,11 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
             lim = custo_max_para(jan, cfg)
             if jan < cfg["janela_min"] - 1e-9:
                 recusados.append((jan, c, a, b, "janela abaixo do mínimo (%s)" % _br(cfg["janela_min"], 1)))
+                continue
+            # 23/11 (operador): handicap com janela 1 é difícil de bater — exige janela maior
+            jmin_h = float(cfg.get("handicap_janela_min") or 0)
+            if a["tipo"] == "handicap" and jan < jmin_h - 1e-9:
+                recusados.append((jan, c, a, b, "handicap com janela abaixo do mínimo (%s)" % _br(jmin_h, 1)))
                 continue
             if c["custo"] > lim + 1e-9:
                 recusados.append((jan, c, a, b, "custo %s%% acima do limite de %s%% para janela %s" % (
