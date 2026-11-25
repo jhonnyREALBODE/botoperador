@@ -2831,3 +2831,23 @@ def test_prioridade_total_de_quarto(cfg):
     assert bil and bil["periodo"] == "q2", mot
     bil, _ = P.achar_par([ja, qa], [jb, qb], SINAL, dict(c, prioridade_quartos=False))
     assert bil and bil["periodo"] == "jogo"
+
+
+def test_botao_total_do_jogo_liga_desliga_e_lembra(cfg):
+    """25/11 (operador): botão no painel liga/desliga o total do JOGO; quartos seguem; fica gravado para a próxima vez."""
+    c = dict(cfg, totais_periodos=["q1", "q2", "q3"])
+    est = P.Estado(c)
+    op = P.Operador(c, est, {})
+    assert est.foto_json()["total_jogo"] is False
+    op.total_jogo(True)
+    assert c["totais_periodos"] == ["jogo", "q1", "q2", "q3"] and est.foto_json()["total_jogo"] is True
+    c2 = dict(cfg, totais_periodos=["q1", "q2", "q3"])
+    P.Operador(c2, P.Estado(c2), {})
+    assert "jogo" in c2["totais_periodos"]          # lembrou ao abrir de novo
+    op.total_jogo(False)
+    assert c["totais_periodos"] == ["q1", "q2", "q3"]
+
+
+def test_handicap_desligado_por_padrao(tmp_path):
+    c = P.carregar_config(str(tmp_path / "nada.json"), avisar=False)
+    assert c["handicap_ativo"] is False
