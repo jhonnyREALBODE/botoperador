@@ -184,6 +184,7 @@ DEFAULTS = {
     "auto_aprovar": False,       # legado da era do painel
     "so_totais": True,           # (totais sempre ligados)
     "handicap_ativo": True,      # 24/11 (operador): handicap como mercado PRÓPRIO, ao lado dos totais
+    "prioridade_quartos": True,  # 25/11 (operador): total de quarto (q1/q2/q3) vem antes de total do jogo e handicap
     "handicap_janela_min": 2.0,  # 23/11 (operador): handicap só com janela de 2 pontos ou mais (janela 1 bate pouco)
     "handicap_odd_max": 4.0,     # odd de handicap acima disso = leitura errada de outro mercado (ignora)
     "handicap_periodos": ["jogo", "t1", "q1", "q2", "q3"],           # restrição temporária 13/11 23:26 (false/null religa handicap)
@@ -932,6 +933,10 @@ def achar_par(esc_1w, esc_ps, sinal, cfg, raiox=None, excluir=None, preferir=Non
             validos.sort(key=lambda x: (x[5] if isinstance(x[5], tuple) else (), x[1], -x[2]["custo"]), reverse=True)
         else:
             validos.sort(key=lambda x: (-x[5], -x[1], x[2]["custo"]))
+        if cfg.get("prioridade_quartos", True):
+            # 25/11 (operador): PRIORIDADE para totais (over/under) de QUARTO — se há um par válido de total de quarto,
+            # ele vem antes de total do jogo e de handicap; entre eles vale a ordem acima (sort estável)
+            validos.sort(key=lambda x: not (x[3]["tipo"] == "total" and x[3].get("periodo") in ("q1", "q2", "q3")))
         _, jan, c, a, b, _ = validos[0]
         bil = _montar_bilhete(sinal, a, b, jan, c)
         if raiox is not None:

@@ -2814,3 +2814,16 @@ def test_hcp_janela_minima_propria(cfg):
     tb = oferta("ps3838", "total", "jogo", "acima", 150.5, 2.05)
     bil, mot = P.achar_par([ta], [tb], SINAL, c)
     assert bil and bil["tipo"] == "total", mot
+
+
+def test_prioridade_total_de_quarto(cfg):
+    """25/11 (operador): par válido de total de QUARTO vence total do jogo (mesmo com janela maior) e handicap."""
+    c = dict(cfg, handicap_ativo=True, handicap_janela_min=0, odd_min=1.75, custo_por_janela=None, custo_max=50.0)
+    ja = oferta("1awin", "total", "jogo", "abaixo", 153.5, 2.05)
+    jb = oferta("ps3838", "total", "jogo", "acima", 150.5, 2.05)     # janela 3 no jogo
+    qa = oferta("1awin", "total", "q2", "abaixo", 45.5, 1.95)
+    qb = oferta("ps3838", "total", "q2", "acima", 44.5, 1.95)        # janela 1 no 2º quarto
+    bil, mot = P.achar_par([ja, qa], [jb, qb], SINAL, c)
+    assert bil and bil["periodo"] == "q2", mot
+    bil, _ = P.achar_par([ja, qa], [jb, qb], SINAL, dict(c, prioridade_quartos=False))
+    assert bil and bil["periodo"] == "jogo"
