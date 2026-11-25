@@ -188,7 +188,7 @@ DEFAULTS = {
     "handicap_janela_min": 2.0,  # 23/11 (operador): handicap só com janela de 2 pontos ou mais (janela 1 bate pouco)
     "handicap_odd_max": 4.0,     # odd de handicap acima disso = leitura errada de outro mercado (ignora)
     "handicap_periodos": ["jogo", "t1", "q1", "q2", "q3"],           # restrição temporária 13/11 23:26 (false/null religa handicap)
-    "totais_periodos": ["jogo", "q1", "q2", "q3"],  # operador 23/11: jogo inteiro + quartos de novo (4º quarto: sempre proibido)
+    "totais_periodos": ["q1", "q2", "q3"],  # 25/11 (operador): por enquanto SÓ totais de quarto (sem total do jogo; 4º quarto: sempre proibido)
     "url_grok": "",
     "url_1awin": "https://1wcwlx.life",
     "url_ps3838": "https://www.ps3838.com",

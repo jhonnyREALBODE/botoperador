@@ -935,9 +935,13 @@ def test_tabela_carteira_resultado_por_total():
 
 
 def test_padrao_jogo_inteiro_e_quartos_sem_o_4o(tmp_path):
-    """Operador 23/11: totais do jogo inteiro E dos quartos (16/11 era só o jogo). O 4º quarto continua proibido."""
+    """Operador 25/11: por enquanto SÓ totais dos quartos (sem total do jogo). O 4º quarto continua proibido."""
     c = P.carregar_config(str(tmp_path / "nada.json"), avisar=False)
-    assert c["totais_periodos"] == ["jogo", "q1", "q2", "q3"]
+    assert c["totais_periodos"] == ["q1", "q2", "q3"]
+    ja = oferta("1awin", "total", "jogo", "abaixo", 154.5, 2.10)
+    jb = oferta("ps3838", "total", "jogo", "acima", 153.5, 2.10)
+    bil, _ = P.achar_par([ja], [jb], SINAL, dict(c, handicap_ativo=False))
+    assert bil is None   # total do jogo desligado
     a = oferta("1awin", "total", "q2", "abaixo", 54.5, 2.10)
     b = oferta("ps3838", "total", "q2", "acima", 53.5, 2.10)
     bil, mot = P.achar_par([a], [b], SINAL, c)
