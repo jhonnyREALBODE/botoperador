@@ -184,6 +184,7 @@ DEFAULTS = {
     "auto_aprovar": False,       # legado da era do painel
     "so_totais": True,           # (totais sempre ligados)
     "handicap_ativo": False,     # 25/11 (operador): handicap DESLIGADO por enquanto (true religa; mercado próprio)
+    "total_jogo_ativo": None,    # 25/11 (operador): total do JOGO (true liga, false desliga; vazio = segue totais_periodos, que hoje NÃO tem o jogo)
     "prioridade_quartos": True,  # 25/11 (operador): total de quarto (q1/q2/q3) vem antes de total do jogo e handicap
     "handicap_janela_min": 2.0,  # 23/11 (operador): handicap só com janela de 2 pontos ou mais (janela 1 bate pouco)
     "handicap_odd_max": 4.0,     # odd de handicap acima disso = leitura errada de outro mercado (ignora)
@@ -228,6 +229,11 @@ def carregar_config(caminho=None, avisar=True):
     cfg["so_totais"] = bool(cfg.get("so_totais"))
     tp = cfg.get("totais_periodos")
     cfg["totais_periodos"] = list(PERIODOS_TODOS) if not tp else [str(p).lower() for p in tp if str(p).lower() != "q4"]
+    # 25/11 (operador): total do JOGO liga/desliga igual ao handicap ("total_jogo_ativo": true/false no config.json)
+    if cfg.get("total_jogo_ativo") is True and "jogo" not in cfg["totais_periodos"]:
+        cfg["totais_periodos"].insert(0, "jogo")
+    elif cfg.get("total_jogo_ativo") is False:
+        cfg["totais_periodos"] = [p for p in cfg["totais_periodos"] if p != "jogo"]
     if avisar:
         log("PARÂMETROS EFETIVOS: janela_min=%s custo_max=%s%% perna_ps=€%s total_fixo=R$%s câmbio=%s "
             "monitor=%ss modo_teste=%s so_totais=%s periodos=%s" % (
@@ -4822,7 +4828,6 @@ class Estado:
             return {
                 "modo": "TESTE" if self.cfg["modo_teste"] else "REAL",
                 "pausado": bool(getattr(self, "pausado", False)),
-                "total_jogo": "jogo" in (self.cfg.get("totais_periodos") or []),
                 "params": {k: self.cfg.get(k) for k in ("janela_min", "custo_max", "perna_ps_eur", "cambio_brl_eur",
                                                         "so_totais", "totais_periodos", "monitor_intervalo_s",
                                                         "pos_monitorar", "pos_modo", "avulsas_permitidas",
@@ -4900,12 +4905,6 @@ class Operador:
         except Exception:
             self.pausado = False
         self.estado.pausado = self.pausado
-        try:
-            tj = (_ler_json(ARQ_PREFS, {}) or {}).get("total_jogo")
-            if tj is not None:
-                self._aplicar_total_jogo(bool(tj))
-        except Exception:
-            pass
         if self.pausado:
             # log 21/11 23:05–00:38: abriu 3x ainda PAUSADO (do clique de 22:55) e o log não dizia nada
             log("⏸ ATENÇÃO: o robô abriu PAUSADO (você pausou antes de fechar) — clique '▶ Ligar robô' no painel para apostar")
@@ -4933,31 +4932,6 @@ class Operador:
             "▶ robô LIGADO pelo painel")
         if not self.pausado and not (self._atual and self._atual[0].is_alive() and not self._atual[1].is_set()):
             self._puxar_fila()
-        return True
-
-    def _aplicar_total_jogo(self, ligar):
-        tp = self.cfg.get("totais_periodos")
-        if not isinstance(tp, list):
-            tp = list(tp or [])
-            self.cfg["totais_periodos"] = tp
-        if ligar and "jogo" not in tp:
-            tp.insert(0, "jogo")
-        if not ligar:
-            while "jogo" in tp:
-                tp.remove("jogo")
-
-    def total_jogo(self, ligar=True):
-        """25/11 (operador): botão no painel para LIGAR/DESLIGAR o total over/under do JOGO inteiro (os quartos seguem).
-        Vale na hora (próxima rodada) e fica gravado para a próxima vez que abrir."""
-        self._aplicar_total_jogo(bool(ligar))
-        try:
-            prefs = _ler_json(ARQ_PREFS, {}) or {}
-            prefs["total_jogo"] = bool(ligar)
-            _gravar_json(ARQ_PREFS, prefs)
-        except Exception:
-            pass
-        log("🏀 total do JOGO %s pelo painel (totais agora: %s)" % ("LIGADO" if ligar else "DESLIGADO",
-                                                                  "/".join(self.cfg["totais_periodos"]) or "nenhum"))
         return True
 
     def novo_sinal(self, sinal, origem="sinal"):
@@ -7231,7 +7205,7 @@ pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0}
 .ver{font-size:18px;font-weight:800;margin:8px 0}a{color:#7fb2ff}
 </style></head><body>
 <header><h1>🤖 Bot Operador de Middles</h1><span id="modo" class="tag teste">TESTE</span>
-<span id="params" class="mut"></span><button onclick="calibrar()">🧪 Calibrar agora</button> <button onclick="post('/api/limpar')">🧹 Limpar painel</button> <button id="btnliga" onclick="ligaDesliga()">⏸ Pausar robô</button> <button id="btntj" onclick="post(window._tj?'/api/total_jogo/desligar':'/api/total_jogo/ligar')">Total do jogo</button> <button onclick="if(confirm('Desligar o programa? (fecha os navegadores do robô e para tudo)'))post('/api/desligar').then(()=>{document.body.innerHTML='<h2 style=&quot;padding:30px&quot;>Programa desligado. Para ligar de novo: 2-INICIAR.bat</h2>'})">⏻ Desligar programa</button></header>
+<span id="params" class="mut"></span><button onclick="calibrar()">🧪 Calibrar agora</button> <button onclick="post('/api/limpar')">🧹 Limpar painel</button> <button id="btnliga" onclick="ligaDesliga()">⏸ Pausar robô</button> <button onclick="if(confirm('Desligar o programa? (fecha os navegadores do robô e para tudo)'))post('/api/desligar').then(()=>{document.body.innerHTML='<h2 style=&quot;padding:30px&quot;>Programa desligado. Para ligar de novo: 2-INICIAR.bat</h2>'})">⏻ Desligar programa</button></header>
 <main>
 <div class="card full" id="mon"></div>
 <div class="card" id="calc"><h2>🧮 Calculadora do motor</h2><div class="mut">aguardando a primeira rodada sadia…</div></div>
@@ -7248,7 +7222,6 @@ pre{white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto;margin:0}
 const R=v=>'R$ '+Number(v).toFixed(2).replace('.',',');const P=(v,c=2)=>Number(v).toFixed(c).replace('.',',');
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function post(u){await fetch(u,{method:'POST'});tick()}
-function _botTJ(d){const b=document.getElementById('btntj');if(!b)return;window._tj=!!d.total_jogo;b.textContent=d.total_jogo?'🏀 Total do jogo: LIGADO':'🏀 Total do jogo: DESLIGADO';b.style.background=d.total_jogo?'#1a7f37':'';}
 function ligaDesliga(){post(window._pausado?'/api/ligar':'/api/pausar');}
 function calibrar(){post('/api/calibrar')}
 function calc(c){if(!c)return '<h2>🧮 Calculadora do motor</h2><div class="mut">aguardando a primeira rodada sadia…</div>';
@@ -7263,7 +7236,7 @@ function calc(c){if(!c)return '<h2>🧮 Calculadora do motor</h2><div class="mut
  return h}
 async function tick(){try{const d=await (await fetch('/api/estado')).json();
  const m=document.getElementById('modo');m.textContent=d.modo;m.className='tag '+(d.modo=='REAL'?'real':'teste');
- _botTJ(d);{const bl=document.getElementById('btnliga');window._pausado=!!d.pausado;bl.textContent=d.pausado?'▶ Ligar robô':'⏸ Pausar robô';bl.style.background=d.pausado?'#1a7f37':'';}
+ {const bl=document.getElementById('btnliga');window._pausado=!!d.pausado;bl.textContent=d.pausado?'▶ Ligar robô':'⏸ Pausar robô';bl.style.background=d.pausado?'#1a7f37':'';}
  const pa=d.params;document.getElementById('params').textContent='janela ≥ '+P(pa.janela_min,1)+' · custo ≤ '+P(pa.custo_max,1)+'% · PS €'+P(pa.perna_ps_eur)+' · câmbio '+P(pa.cambio_brl_eur)+(pa.so_totais?' · só totais '+pa.totais_periodos.join('/'):'');
  {const pr=d.protecao;let ph='';
   if(pr&&pr.jogo){const seg=pr.ultima?Math.max(0,Math.round(Date.now()/1000-pr.ultima)):0;
@@ -7406,9 +7379,6 @@ def criar_painel(estado, operador, porta):
             if m4 and operador:
                 ok = operador.resolver(m4.group(1))
                 return self._env(200, '{"ok":%s}' % ("true" if ok else "false"))
-            if p in ("/api/total_jogo/ligar", "/api/total_jogo/desligar") and operador:
-                operador.total_jogo(p.endswith("/ligar"))
-                return self._env(200, '{"ok":true}')
             if p in ("/api/pausar", "/api/ligar") and operador:
                 operador.pausar(p == "/api/pausar")
                 return self._env(200, '{"ok":true}')
